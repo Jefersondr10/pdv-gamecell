@@ -31,9 +31,9 @@ export function FlowFrame({
   }, [currentStep, description, title]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-3 py-3 sm:px-6 sm:py-5 lg:px-10">
+    <div className="flow-shell flex h-full min-h-0 flex-col overflow-hidden px-3 py-2 sm:px-6 sm:py-4 lg:px-10">
       <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col">
-        <header className="flow-header shrink-0 pb-3">
+        <header className="flow-header shrink-0 pb-2 sm:pb-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="eyebrow">{eyebrow}</p>
@@ -55,8 +55,10 @@ export function FlowFrame({
 
           <ol
             aria-label="Progresso do fluxo"
-            className="mt-3 grid gap-1.5"
-            style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}
+            className="flow-progress mt-2 grid gap-1.5 sm:mt-3"
+            style={{
+              gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))`,
+            }}
           >
             {steps.map((step, index) => {
               const complete = index < currentStep;

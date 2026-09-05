@@ -7,6 +7,8 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   PackageCheck,
   RotateCcw,
   Smartphone,
@@ -62,6 +64,9 @@ type EntryWizardProps = {
 };
 
 const ENTRY_STEPS = ['Produto', 'Seriais', 'Fotos', 'Revisão'] as const;
+
+const ENTRY_STAGE_CARD_CLASS =
+  'flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
 
 const PRODUCTS_BY_CODE: Record<string, Product> = {
   '00195950638011': {
@@ -365,8 +370,8 @@ function ProductConfirmation({
   onUseLocalTest: () => void;
 }) {
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-start overflow-y-auto p-5 text-center overscroll-contain sm:justify-center sm:p-8">
+    <Card className={ENTRY_STAGE_CARD_CLASS}>
+      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-4 text-center sm:p-6">
         <span
           className={`grid size-16 place-items-center rounded-2xl ${product ? 'bg-success/10 text-success' : 'bg-amber-500/10 text-amber-700'}`}
         >
@@ -403,19 +408,26 @@ function ProductConfirmation({
         )}
       </CardContent>
 
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button
           className="h-12 rounded-xl"
           onClick={onRescan}
           variant="outline"
         >
-          <ArrowLeft /> Ler novamente
+          <ArrowLeft />
+          <span className="sm:hidden">Reler</span>
+          <span className="hidden sm:inline">Ler novamente</span>
         </Button>
         <Button
           className="h-12 rounded-xl"
           onClick={product ? onConfirm : onUseLocalTest}
         >
-          {product ? 'Confirmar produto' : 'Continuar como TESTE LOCAL'}{' '}
+          <span className="sm:hidden">
+            {product ? 'Confirmar' : 'Usar teste'}
+          </span>
+          <span className="hidden sm:inline">
+            {product ? 'Confirmar produto' : 'Continuar como TESTE LOCAL'}
+          </span>{' '}
           <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
@@ -453,7 +465,7 @@ function SerialStage({
         title="2. Bipar somente o SN"
       />
 
-      <Card className="flex min-h-0 flex-col overflow-hidden">
+      <Card className="flex min-h-0 flex-col gap-0 overflow-hidden py-0">
         <CardHeader className="hidden shrink-0 border-b p-4 md:flex">
           <div>
             <p className="eyebrow">{product.name}</p>
@@ -462,14 +474,14 @@ function SerialStage({
           <Badge variant="secondary">{serials.length}</Badge>
         </CardHeader>
 
-        <CardContent className="hidden min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 overscroll-contain md:flex">
+        <CardContent className="hidden min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3 md:flex">
           {serials.length === 0 ? (
             <div className="grid min-h-32 flex-1 place-items-center rounded-2xl border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground">
               O primeiro SN aparecerá aqui depois do bip.
             </div>
           ) : (
             serials
-              .slice()
+              .slice(-4)
               .reverse()
               .map((serial, index) => (
                 <div
@@ -496,7 +508,7 @@ function SerialStage({
           )}
         </CardContent>
 
-        <div className="shrink-0 border-t p-3">
+        <div className="shrink-0 border-t p-2.5 sm:p-3">
           <div className="mb-2 flex min-w-0 items-center justify-between gap-3 md:hidden">
             <div className="min-w-0">
               <p className="text-sm font-bold">
@@ -558,26 +570,26 @@ function PhotoStage({
   onNext: () => void;
 }) {
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-start overflow-y-auto p-4 text-center overscroll-contain sm:justify-center sm:p-8">
+    <Card className={ENTRY_STAGE_CARD_CLASS}>
+      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3 text-center sm:p-6">
         <div className="mb-4 flex flex-wrap justify-center gap-2">
           <Badge variant="secondary">{product.name}</Badge>
           <Badge variant="outline">
             {serialCount} {serialCount === 1 ? 'aparelho' : 'aparelhos'}
           </Badge>
         </div>
-        <label className="flex w-full max-w-xl cursor-pointer flex-col items-center rounded-3xl border-2 border-dashed bg-muted/30 p-6 transition hover:bg-muted/55 sm:p-10">
-          <span className="grid size-16 place-items-center rounded-2xl bg-card text-primary shadow-sm">
-            <Camera className="size-7" />
+        <label className="flow-upload-panel flex w-full max-w-xl cursor-pointer flex-col items-center rounded-2xl border-2 border-dashed bg-muted/30 p-4 transition hover:bg-muted/55 sm:rounded-3xl sm:p-6">
+          <span className="flow-stage-icon grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
+            <Camera className="size-6" />
           </span>
-          <span className="mt-4 text-base font-bold">
+          <span className="mt-2 text-base font-bold sm:mt-3">
             Fotografar recebimento
           </span>
-          <span className="mt-1 text-sm text-muted-foreground">
+          <span className="flow-stage-support mt-1 text-sm text-muted-foreground">
             Selecione uma ou mais fotos da entrada.
           </span>
           {photoCount > 0 && (
-            <span className="mt-4 inline-flex items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success">
+            <span className="mt-2 inline-flex items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success sm:mt-3">
               <Check className="size-4" /> {photoCount}{' '}
               {photoCount === 1 ? 'foto pronta' : 'fotos prontas'}
             </span>
@@ -595,7 +607,7 @@ function PhotoStage({
           />
         </label>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
@@ -624,20 +636,29 @@ function EntryReview({
   onBack: () => void;
   onConfirm: () => void;
 }) {
+  const pageSize = 4;
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(serials.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const visibleSerials = serials.slice(
+    safePage * pageSize,
+    safePage * pageSize + pageSize,
+  );
+
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
-        <div className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-amber-500/10 px-4 py-2 text-center text-xs font-bold text-amber-900">
+    <Card className={ENTRY_STAGE_CARD_CLASS}>
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-5">
+        <div className="mb-2 flex items-center justify-center gap-2 rounded-xl bg-amber-500/10 px-3 py-1.5 text-center text-xs font-bold text-amber-900 sm:mb-3">
           <Badge className="bg-amber-600 text-white hover:bg-amber-600">
             TESTE LOCAL
           </Badge>
           Não é estoque real
         </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <section className="rounded-2xl border bg-background p-4">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3">
+          <section className="rounded-xl border bg-background p-3 sm:rounded-2xl sm:p-4">
             <p className="eyebrow">Produto</p>
             <div className="mt-3 flex items-center gap-3">
-              <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
+              <span className="hidden size-12 shrink-0 place-items-center rounded-xl bg-secondary text-primary sm:grid">
                 <Smartphone className="size-6" />
               </span>
               <div className="min-w-0">
@@ -651,7 +672,7 @@ function EntryReview({
               </div>
             </div>
           </section>
-          <section className="rounded-2xl border bg-background p-4">
+          <section className="rounded-xl border bg-background p-3 sm:rounded-2xl sm:p-4">
             <p className="eyebrow">Resumo</p>
             <dl className="mt-3 space-y-2 text-sm">
               <div className="flex justify-between gap-4">
@@ -670,19 +691,19 @@ function EntryReview({
           </section>
         </div>
 
-        <section className="mt-4 rounded-2xl border bg-background p-4">
+        <section className="mt-2 rounded-xl border bg-background p-3 sm:mt-3 sm:rounded-2xl sm:p-4">
           <div className="flex items-center justify-between gap-3">
             <p className="font-bold">Números de série</p>
             <Badge variant="secondary">{serials.length}</Badge>
           </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {serials.map((serial, index) => (
+          <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {visibleSerials.map((serial, index) => (
               <div
                 className="flex items-center gap-2 rounded-xl bg-muted/55 px-3 py-2.5"
                 key={serial.normalized}
               >
                 <span className="text-xs font-bold text-muted-foreground">
-                  {index + 1}
+                  {safePage * pageSize + index + 1}
                 </span>
                 <span className="truncate font-mono text-sm font-semibold">
                   {serial.normalized}
@@ -690,10 +711,42 @@ function EntryReview({
               </div>
             ))}
           </div>
+          {pageCount > 1 && (
+            <div
+              aria-live="polite"
+              className="mt-2 flex items-center justify-center gap-3"
+            >
+              <Button
+                aria-label="SNs anteriores"
+                className="size-9"
+                disabled={safePage === 0}
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+                size="icon"
+                variant="ghost"
+              >
+                <ChevronLeft />
+              </Button>
+              <span className="text-xs font-semibold text-muted-foreground">
+                {safePage + 1} de {pageCount}
+              </span>
+              <Button
+                aria-label="Próximos SNs"
+                className="size-9"
+                disabled={safePage >= pageCount - 1}
+                onClick={() =>
+                  setPage((current) => Math.min(pageCount - 1, current + 1))
+                }
+                size="icon"
+                variant="ghost"
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+          )}
         </section>
       </CardContent>
 
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
@@ -719,8 +772,8 @@ function CompletionStage({
   onReset: () => void;
 }) {
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="grid min-h-0 flex-1 place-items-center overflow-y-auto p-6 text-center overscroll-contain sm:p-10">
+    <Card className={ENTRY_STAGE_CARD_CLASS}>
+      <CardContent className="grid min-h-0 flex-1 place-items-center overflow-hidden p-4 text-center sm:p-7">
         <div className="max-w-lg">
           <span className="mx-auto grid size-20 place-items-center rounded-full bg-success/10 text-success">
             <CheckCircle2 className="size-10" />

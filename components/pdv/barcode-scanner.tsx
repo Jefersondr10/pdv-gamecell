@@ -126,7 +126,7 @@ export function BarcodeScanner({
             <h2 className="text-base font-bold tracking-tight sm:text-lg">
               {title}
             </h2>
-            <Badge className="bg-white/10 text-white ring-1 ring-white/10 hover:bg-white/10">
+            <Badge className="scanner-mode-badge bg-white/10 text-white ring-1 ring-white/10 hover:bg-white/10">
               {mode === 'product' ? 'UPC · EAN · JAN' : 'Somente SN'}
             </Badge>
           </div>
@@ -189,7 +189,7 @@ export function BarcodeScanner({
               role="alert"
             >
               <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-              <span>{error || notice}</span>
+              <span className="line-clamp-2">{error || notice}</span>
             </div>
           )}
 

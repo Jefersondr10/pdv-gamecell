@@ -8,6 +8,8 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleUserRound,
   FileCheck2,
   Paperclip,
@@ -19,6 +21,7 @@ import {
   Trash2,
   UserRound,
   WalletCards,
+  X,
 } from 'lucide-react';
 
 import { BarcodeScanner } from '@/components/pdv/barcode-scanner';
@@ -48,7 +51,7 @@ type SaleItem = {
   serial: ScanCandidate;
   product: string;
   detail: string;
-  photoCount: number;
+  photos: File[];
   priceCents: number;
 };
 
@@ -68,6 +71,24 @@ type SalePayment = {
   amount: string;
 };
 
+export type CompletedSalePayload = {
+  customer: string;
+  items: Array<{
+    serial: string;
+    product: string;
+    detail: string;
+    photos: File[];
+    priceCents: number;
+  }>;
+  payments: Array<{
+    method: 'Pix' | 'Dinheiro';
+    bank: string;
+    amountCents: number;
+  }>;
+  receipts: File[];
+  totalCents: number;
+};
+
 const SALE_STEPS = [
   'Cliente',
   'SN',
@@ -78,6 +99,9 @@ const SALE_STEPS = [
   'Comprovante',
   'Revisão',
 ] as const;
+
+const STAGE_CARD_CLASS =
+  'flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
 
 const CUSTOMER_DIRECTORY = [
   'Rafael Martins',
@@ -103,16 +127,24 @@ const STEP_INDEX: Record<SaleStep, number> = {
 export function SellWizard({
   stagedSerial = '',
   productsBySerial = {},
+  onComplete,
+  unavailableSerials,
 }: {
   stagedSerial?: string;
   productsBySerial?: SaleProductLookup;
+  onComplete?: (sale: CompletedSalePayload) => void;
+  unavailableSerials?: ReadonlySet<string>;
 }) {
   const initialSerial = stagedSerial
     ? normalizeCandidate(stagedSerial, 'manual_code_128', 'apple_serial')
     : null;
-  const initialProduct = initialSerial
-    ? productsBySerial[initialSerial.normalizedValue]
-    : null;
+  const initialUnavailable = initialSerial
+    ? unavailableSerials?.has(initialSerial.normalizedValue)
+    : false;
+  const initialProduct =
+    initialSerial && !initialUnavailable
+      ? productsBySerial[initialSerial.normalizedValue]
+      : null;
   const [step, setStep] = useState<SaleStep>('customer');
   const [customer, setCustomer] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
@@ -122,20 +154,23 @@ export function SellWizard({
   const [pendingProduct, setPendingProduct] = useState<SaleProduct | null>(
     initialProduct,
   );
-  const [photoCount, setPhotoCount] = useState(0);
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [price, setPrice] = useState('9.999,00');
   const [items, setItems] = useState<SaleItem[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
-  const [receiptNames, setReceiptNames] = useState<string[]>([]);
+  const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
   const [serialWarning, setSerialWarning] = useState(
-    initialSerial && !initialProduct
-      ? `O SN ${initialSerial.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`
-      : '',
+    initialSerial && initialUnavailable
+      ? `O SN ${initialSerial.normalizedValue} já foi vendido e não está disponível. Cancele a venda anterior para liberá-lo.`
+      : initialSerial && !initialProduct
+        ? `O SN ${initialSerial.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`
+        : '',
   );
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Pesquise o cliente para começar.',
   );
   const itemsRef = useRef<SaleItem[]>([]);
+  const completionSentRef = useRef(false);
 
   const total = useMemo(
     () => items.reduce((sum, item) => sum + item.priceCents, 0),
@@ -176,20 +211,21 @@ export function SellWizard({
     setCustomerQuery('');
     setPendingSerial(null);
     setPendingProduct(null);
-    setPhotoCount(0);
+    setPhotoFiles([]);
     setPrice('9.999,00');
     setItems([]);
     itemsRef.current = [];
     setPayments([]);
-    setReceiptNames([]);
+    setReceiptFiles([]);
     setSerialWarning('');
+    completionSentRef.current = false;
     setAnnouncement('Nova venda. Pesquise o cliente para começar.');
   };
 
   const clearCheckout = () => {
-    const hadCheckout = payments.length > 0 || receiptNames.length > 0;
+    const hadCheckout = payments.length > 0 || receiptFiles.length > 0;
     setPayments([]);
-    setReceiptNames([]);
+    setReceiptFiles([]);
     return hadCheckout;
   };
 
@@ -206,6 +242,16 @@ export function SellWizard({
       navigator.vibrate?.([120, 80, 120]);
       return;
     }
+    if (unavailableSerials?.has(candidate.normalizedValue)) {
+      const warning = `O SN ${candidate.normalizedValue} já foi vendido e não está disponível. Cancele a venda anterior para liberá-lo.`;
+      setPendingSerial(null);
+      setPendingProduct(null);
+      setPhotoFiles([]);
+      setSerialWarning(warning);
+      navigator.vibrate?.([120, 80, 120]);
+      return;
+    }
+    setPhotoFiles([]);
     const product = productsBySerial[candidate.normalizedValue];
     if (!product) {
       const warning = `O SN ${candidate.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`;
@@ -242,7 +288,7 @@ export function SellWizard({
         serial: pendingSerial,
         product: pendingProduct.product,
         detail: pendingProduct.detail,
-        photoCount,
+        photos: photoFiles,
         priceCents,
       },
     ];
@@ -251,7 +297,7 @@ export function SellWizard({
     const checkoutReset = clearCheckout();
     setPendingSerial(null);
     setPendingProduct(null);
-    setPhotoCount(0);
+    setPhotoFiles([]);
     setPrice('9.999,00');
     setSerialWarning('');
     setStep('items');
@@ -289,7 +335,7 @@ export function SellWizard({
   const scanAnotherItem = () => {
     setPendingSerial(null);
     setPendingProduct(null);
-    setPhotoCount(0);
+    setPhotoFiles([]);
     setPrice('9.999,00');
     setSerialWarning('');
     setStep('serial');
@@ -298,6 +344,8 @@ export function SellWizard({
 
   const addPayment = (method: PaymentMethod) => {
     const suggestedAmount = Math.max(remaining, 0);
+    const receiptInvalidated = receiptFiles.length > 0;
+    if (receiptInvalidated) setReceiptFiles([]);
     setPayments((current) => [
       ...current,
       {
@@ -308,25 +356,40 @@ export function SellWizard({
       },
     ]);
     setAnnouncement(
-      `${method === 'pix' ? 'Pix' : 'Dinheiro'} adicionado aos pagamentos.`,
+      receiptInvalidated
+        ? `${method === 'pix' ? 'Pix' : 'Dinheiro'} adicionado. O comprovante anterior foi removido porque o pagamento mudou.`
+        : `${method === 'pix' ? 'Pix' : 'Dinheiro'} adicionado aos pagamentos.`,
     );
   };
 
   const updatePayment = (id: string, patch: Partial<SalePayment>) => {
+    const receiptInvalidated = receiptFiles.length > 0;
+    if (receiptInvalidated) setReceiptFiles([]);
     setPayments((current) =>
       current.map((payment) =>
         payment.id === id ? { ...payment, ...patch } : payment,
       ),
     );
+    if (receiptInvalidated) {
+      setAnnouncement(
+        'O comprovante anterior foi removido porque o pagamento mudou.',
+      );
+    }
   };
 
   const removePayment = (id: string) => {
+    const receiptInvalidated = receiptFiles.length > 0;
+    if (receiptInvalidated) setReceiptFiles([]);
     setPayments((current) => current.filter((payment) => payment.id !== id));
-    setAnnouncement('Pagamento removido.');
+    setAnnouncement(
+      receiptInvalidated
+        ? 'Pagamento removido. O comprovante anterior também foi removido.'
+        : 'Pagamento removido.',
+    );
   };
 
   const goToReview = (skippedReceipt: boolean) => {
-    if (skippedReceipt) setReceiptNames([]);
+    if (skippedReceipt) setReceiptFiles([]);
     setStep('review');
     setAnnouncement(
       skippedReceipt
@@ -376,6 +439,7 @@ export function SellWizard({
           onRescan={() => {
             setPendingSerial(null);
             setPendingProduct(null);
+            setPhotoFiles([]);
             setSerialWarning('');
             setAnnouncement('Faça uma nova leitura do SN.');
           }}
@@ -388,17 +452,17 @@ export function SellWizard({
         <SalePhotoStage
           candidate={pendingSerial}
           onBack={() => setStep('serial')}
-          onFiles={(count) => {
-            setPhotoCount(count);
+          onFiles={(files) => {
+            setPhotoFiles(files);
             setAnnouncement(
-              `${count} ${count === 1 ? 'foto vinculada' : 'fotos vinculadas'} ao aparelho.`,
+              `${files.length} ${files.length === 1 ? 'foto vinculada' : 'fotos vinculadas'} ao aparelho.`,
             );
           }}
           onNext={() => {
             setStep('price');
             setAnnouncement('Etapa 4. Informe o preço do aparelho.');
           }}
-          photoCount={photoCount}
+          photoFiles={photoFiles}
         />
       )}
 
@@ -456,14 +520,12 @@ export function SellWizard({
 
       {step === 'receipt' && (
         <ReceiptStage
-          fileNames={receiptNames}
+          files={receiptFiles}
           onBack={() => setStep('payments')}
-          onFiles={(fileNames) => {
-            setReceiptNames((current) =>
-              Array.from(new Set([...current, ...fileNames])),
-            );
+          onFiles={(files) => {
+            setReceiptFiles((current) => mergeUniqueFiles(current, files));
             setAnnouncement(
-              `${fileNames.length} ${fileNames.length === 1 ? 'comprovante anexado' : 'comprovantes anexados'}.`,
+              `${files.length} ${files.length === 1 ? 'comprovante anexado' : 'comprovantes anexados'}.`,
             );
           }}
           onNext={() => goToReview(false)}
@@ -481,6 +543,26 @@ export function SellWizard({
           }}
           onBack={() => setStep('receipt')}
           onConfirm={() => {
+            if (!completionSentRef.current) {
+              completionSentRef.current = true;
+              onComplete?.({
+                customer,
+                items: items.map((item) => ({
+                  serial: item.serial.normalizedValue,
+                  product: item.product,
+                  detail: item.detail,
+                  photos: item.photos,
+                  priceCents: item.priceCents,
+                })),
+                payments: payments.map((payment) => ({
+                  method: payment.method === 'pix' ? 'Pix' : 'Dinheiro',
+                  bank: payment.bank,
+                  amountCents: parseMoney(payment.amount),
+                })),
+                receipts: receiptFiles,
+                totalCents: total,
+              });
+            }
             setStep('done');
             setAnnouncement(
               `Venda concluída no valor de ${formatMoney(total)}.`,
@@ -488,7 +570,7 @@ export function SellWizard({
           }}
           paid={paid}
           payments={payments}
-          receiptCount={receiptNames.length}
+          receiptCount={receiptFiles.length}
           total={total}
         />
       )}
@@ -515,17 +597,18 @@ function CustomerStage({
 }) {
   const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR');
   const canSearch = normalizedQuery.length >= 2;
-  const matches = canSearch
+  const allMatches = canSearch
     ? CUSTOMER_DIRECTORY.filter((name) =>
         name.toLocaleLowerCase('pt-BR').includes(normalizedQuery),
       )
     : [];
+  const matches = allMatches.slice(0, 4);
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
+    <Card className={STAGE_CARD_CLASS}>
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-5">
         <div className="mx-auto max-w-2xl">
-          <div className="flex items-center gap-3">
-            <span className="grid size-12 place-items-center rounded-2xl bg-secondary text-primary">
+          <div className="flow-stage-intro flex items-center gap-3">
+            <span className="grid size-11 place-items-center rounded-2xl bg-secondary text-primary">
               <CircleUserRound className="size-6" />
             </span>
             <div>
@@ -537,35 +620,35 @@ function CustomerStage({
             </div>
           </div>
 
-          <div className="relative mt-5">
+          <div className="relative mt-3 sm:mt-5">
             <Search className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" />
             <Input
               aria-label="Pesquisar cliente"
               aria-describedby="customer-search-help"
-              className="h-14 rounded-2xl pl-12 text-base"
+              className="h-12 rounded-2xl pl-12 text-base sm:h-14"
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder="Nome do cliente"
               value={query}
             />
           </div>
-          <p
-            className="mt-2 text-sm text-muted-foreground"
-            id="customer-search-help"
-          >
+          <p className="sr-only" id="customer-search-help">
             A lista aparece somente depois da pesquisa.
           </p>
 
-          {canSearch && (
-            <div className="mt-4 space-y-2" aria-label="Clientes encontrados">
+          {canSearch && !customer && (
+            <div
+              className="mt-3 grid grid-cols-2 gap-2 sm:mt-4"
+              aria-label="Clientes encontrados"
+            >
               {matches.map((name) => (
                 <Button
                   aria-pressed={customer === name}
-                  className="h-14 w-full justify-start rounded-2xl px-4"
+                  className="h-11 min-w-0 justify-start rounded-xl px-3 text-sm sm:h-12"
                   key={name}
                   onClick={() => onSelect(name)}
                   variant={customer === name ? 'secondary' : 'outline'}
                 >
-                  <UserRound />
+                  <UserRound className="hidden size-4 sm:block" />
                   <span className="truncate">{name}</span>
                   {customer === name && (
                     <Check className="ml-auto text-success" />
@@ -574,21 +657,26 @@ function CustomerStage({
               ))}
 
               {matches.length === 0 && (
-                <div className="rounded-2xl border border-dashed bg-muted/25 px-4 py-5 text-center text-sm text-muted-foreground">
+                <div className="col-span-2 rounded-xl border border-dashed bg-muted/25 px-4 py-3 text-center text-sm text-muted-foreground">
                   Nenhum cliente cadastrado foi encontrado.
                 </div>
+              )}
+              {allMatches.length > matches.length && (
+                <p className="col-span-2 text-center text-xs text-muted-foreground">
+                  Mais resultados disponíveis. Digite mais letras para refinar.
+                </p>
               )}
             </div>
           )}
 
           {customer && (
-            <div className="mt-4 flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm font-semibold text-success">
+            <div className="mt-3 flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm font-semibold text-success sm:mt-4">
               <Check className="size-4" /> {customer} selecionado
             </div>
           )}
         </div>
       </CardContent>
-      <div className="shrink-0 border-t p-3 text-right sm:p-4">
+      <div className="shrink-0 border-t p-2.5 text-right sm:p-3">
         <Button
           className="h-12 w-full rounded-xl sm:w-auto sm:min-w-56"
           disabled={!customer}
@@ -636,25 +724,25 @@ function SaleSerialStage({
   }
 
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="grid min-h-0 flex-1 place-items-center overflow-y-auto p-5 text-center overscroll-contain sm:p-8">
+    <Card className={STAGE_CARD_CLASS}>
+      <CardContent className="grid min-h-0 flex-1 place-items-center overflow-hidden p-4 text-center sm:p-6">
         <div className="max-w-md">
-          <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-success/10 text-success">
-            <Smartphone className="size-8" />
+          <span className="flow-stage-icon mx-auto grid size-14 place-items-center rounded-2xl bg-success/10 text-success">
+            <Smartphone className="size-7" />
           </span>
-          <p className="eyebrow mt-5">Aparelho disponível</p>
+          <p className="eyebrow mt-3 sm:mt-5">Aparelho disponível</p>
           <h2 className="mt-1 text-xl font-bold">
             {product?.product ?? 'Produto não identificado'}
           </h2>
           <p className="text-sm text-muted-foreground">
             {product?.detail ?? 'Confira o estoque antes de continuar'}
           </p>
-          <p className="mx-auto mt-4 w-fit rounded-xl bg-muted px-4 py-2 font-mono text-sm font-bold">
+          <p className="mx-auto mt-3 w-fit rounded-xl bg-muted px-4 py-2 font-mono text-sm font-bold sm:mt-4">
             SN {candidate.normalizedValue}
           </p>
         </div>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button
           className="h-12 rounded-xl"
           onClick={onRescan}
@@ -676,33 +764,35 @@ function SaleSerialStage({
 
 function SalePhotoStage({
   candidate,
-  photoCount,
+  photoFiles,
   onFiles,
   onBack,
   onNext,
 }: {
   candidate: ScanCandidate;
-  photoCount: number;
-  onFiles: (count: number) => void;
+  photoFiles: File[];
+  onFiles: (files: File[]) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-start overflow-y-auto p-4 text-center overscroll-contain sm:justify-center sm:p-8">
+    <Card className={STAGE_CARD_CLASS}>
+      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3 text-center sm:p-6">
         <Badge variant="secondary">SN {candidate.normalizedValue}</Badge>
-        <label className="mt-4 flex w-full max-w-xl cursor-pointer flex-col items-center rounded-3xl border-2 border-dashed bg-muted/30 p-6 transition hover:bg-muted/55 sm:p-10">
-          <span className="grid size-16 place-items-center rounded-2xl bg-card text-primary shadow-sm">
-            <Camera className="size-7" />
+        <label className="flow-upload-panel mt-3 flex w-full max-w-xl cursor-pointer flex-col items-center rounded-2xl border-2 border-dashed bg-muted/30 p-4 transition hover:bg-muted/55 sm:mt-4 sm:rounded-3xl sm:p-6">
+          <span className="flow-stage-icon grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
+            <Camera className="size-6" />
           </span>
-          <span className="mt-4 text-base font-bold">Fotografar aparelho</span>
-          <span className="mt-1 text-sm text-muted-foreground">
+          <span className="mt-2 text-base font-bold sm:mt-3">
+            Fotografar aparelho
+          </span>
+          <span className="flow-stage-support mt-1 text-sm text-muted-foreground">
             A foto ficará vinculada a este SN.
           </span>
-          {photoCount > 0 && (
-            <span className="mt-4 inline-flex items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success">
-              <Check className="size-4" /> {photoCount}{' '}
-              {photoCount === 1 ? 'foto pronta' : 'fotos prontas'}
+          {photoFiles.length > 0 && (
+            <span className="mt-2 inline-flex items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success sm:mt-3">
+              <Check className="size-4" /> {photoFiles.length}{' '}
+              {photoFiles.length === 1 ? 'foto pronta' : 'fotos prontas'}
             </span>
           )}
           <input
@@ -711,20 +801,20 @@ function SalePhotoStage({
             className="sr-only"
             multiple
             onChange={(event) => {
-              const count = event.target.files?.length ?? 0;
-              if (count > 0) onFiles(count);
+              const files = Array.from(event.target.files ?? []);
+              if (files.length > 0) onFiles(files);
             }}
             type="file"
           />
         </label>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
         <Button
           className="h-12 rounded-xl"
-          disabled={photoCount === 0}
+          disabled={photoFiles.length === 0}
           onClick={onNext}
         >
           <span className="sm:hidden">Preço</span>
@@ -753,10 +843,10 @@ function PriceStage({
 }) {
   const valid = parseMoney(value) > 0;
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="grid min-h-0 flex-1 place-items-center overflow-y-auto p-5 overscroll-contain sm:p-8">
+    <Card className={STAGE_CARD_CLASS}>
+      <CardContent className="grid min-h-0 flex-1 place-items-center overflow-hidden p-4 sm:p-6">
         <div className="w-full max-w-lg">
-          <div className="flex items-center gap-3 rounded-2xl border bg-background p-4">
+          <div className="flex items-center gap-3 rounded-xl border bg-background p-3 sm:rounded-2xl sm:p-4">
             <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
               <Smartphone className="size-6" />
             </span>
@@ -771,7 +861,7 @@ function PriceStage({
             </div>
           </div>
           <label
-            className="mt-5 block text-sm font-semibold"
+            className="mt-3 block text-sm font-semibold sm:mt-5"
             htmlFor="sale-price"
           >
             Preço unitário
@@ -781,7 +871,7 @@ function PriceStage({
               R$
             </span>
             <Input
-              className="h-16 pl-12 text-right text-2xl font-extrabold"
+              className="h-14 pl-12 text-right text-2xl font-extrabold sm:h-16"
               id="sale-price"
               inputMode="decimal"
               onChange={(event) => onChange(event.target.value)}
@@ -790,7 +880,7 @@ function PriceStage({
           </div>
         </div>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
@@ -817,15 +907,26 @@ function SaleItemsStage({
   onRemove: (serial: string) => void;
   onNext: () => void;
 }) {
+  const pageSize = 2;
+  const [page, setPage] = useState(() =>
+    Math.max(0, Math.ceil(items.length / pageSize) - 1),
+  );
+  const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const visibleItems = items.slice(
+    safePage * pageSize,
+    safePage * pageSize + pageSize,
+  );
+
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
+    <Card className={STAGE_CARD_CLASS}>
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
         <div className="mx-auto max-w-2xl">
-          <div className="rounded-2xl bg-secondary p-4">
+          <div className="rounded-2xl bg-secondary p-3 sm:p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="font-bold">Aparelhos desta venda</p>
-                <p className="mt-1 text-sm text-muted-foreground">
+                <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
                   Cada SN é um aparelho. O pagamento será do total da venda.
                 </p>
               </div>
@@ -835,18 +936,18 @@ function SaleItemsStage({
             </div>
           </div>
 
-          <ul className="mt-4 space-y-2" aria-label="Aparelhos da venda">
-            {items.map((item) => (
+          <ul className="mt-3 space-y-2" aria-label="Aparelhos da venda">
+            {visibleItems.map((item) => (
               <li
-                className="flex items-center gap-3 rounded-2xl border bg-background p-3"
+                className="flex items-center gap-2 rounded-xl border bg-background p-2 sm:gap-3 sm:p-3"
                 key={item.serial.normalizedValue}
               >
-                <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
+                <span className="hidden size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary sm:grid">
                   <Smartphone className="size-5" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold">{item.product}</p>
-                  <p className="truncate text-xs text-muted-foreground">
+                  <p className="flow-stage-support truncate text-xs text-muted-foreground">
                     {item.detail}
                   </p>
                   <p className="truncate font-mono text-xs text-muted-foreground">
@@ -869,13 +970,44 @@ function SaleItemsStage({
             ))}
           </ul>
 
-          <div className="mt-4 flex items-center justify-between rounded-2xl bg-muted p-4">
+          {pageCount > 1 && (
+            <div
+              aria-live="polite"
+              className="mt-2 flex items-center justify-center gap-3"
+            >
+              <Button
+                aria-label="Aparelhos anteriores"
+                className="size-9"
+                disabled={safePage === 0}
+                onClick={() => setPage(Math.max(0, safePage - 1))}
+                size="icon"
+                variant="ghost"
+              >
+                <ChevronLeft />
+              </Button>
+              <span className="text-xs font-semibold text-muted-foreground">
+                {safePage + 1} de {pageCount}
+              </span>
+              <Button
+                aria-label="Próximos aparelhos"
+                className="size-9"
+                disabled={safePage >= pageCount - 1}
+                onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
+                size="icon"
+                variant="ghost"
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+          )}
+
+          <div className="mt-3 flex items-center justify-between rounded-xl bg-muted p-3 sm:rounded-2xl sm:p-4">
             <span className="font-semibold">Total da venda</span>
             <strong className="text-lg">{formatMoney(total)}</strong>
           </div>
         </div>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button
           className="h-12 rounded-xl"
           onClick={onAddAnother}
@@ -925,14 +1057,20 @@ function PaymentStage({
   onNext: () => void;
 }) {
   const [showTypePicker, setShowTypePicker] = useState(false);
+  const [activePaymentIndex, setActivePaymentIndex] = useState(0);
+  const safePaymentIndex = Math.min(
+    activePaymentIndex,
+    Math.max(0, payments.length - 1),
+  );
+  const activePayment = payments[safePaymentIndex];
 
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
-        <div className="mx-auto max-w-2xl space-y-3">
-          <div className="rounded-2xl bg-secondary px-4 py-3">
+    <Card className={STAGE_CARD_CLASS}>
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
+        <div className="mx-auto max-w-2xl space-y-2">
+          <div className="rounded-xl bg-secondary px-3 py-2.5 sm:rounded-2xl sm:px-4 sm:py-3">
             <p className="font-bold">Pagamento da venda inteira</p>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
               As formas de pagamento cobrem{' '}
               {itemCount === 1
                 ? 'o total do aparelho'
@@ -942,58 +1080,100 @@ function PaymentStage({
           </div>
 
           {payments.length === 0 && (
-            <div className="rounded-2xl border border-dashed bg-muted/25 p-5 text-center">
-              <WalletCards className="mx-auto size-7 text-primary" />
-              <p className="mt-2 font-bold">Nenhum pagamento adicionado</p>
-              <p className="mt-1 text-sm text-muted-foreground">
+            <div className="rounded-xl border border-dashed bg-muted/25 p-3 text-center">
+              <p className="font-bold">Nenhum pagamento adicionado</p>
+              <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
                 Dinheiro só aparecerá se você escolher essa opção.
               </p>
             </div>
           )}
 
-          {payments.map((payment, index) => (
-            <div
-              className="rounded-2xl border bg-background p-4"
-              key={payment.id}
-            >
+          {activePayment && (
+            <div className="rounded-xl border bg-background p-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 font-bold">
-                  {payment.method === 'pix' ? (
+                  {activePayment.method === 'pix' ? (
                     <WalletCards className="size-5 text-primary" />
                   ) : (
                     <Banknote className="size-5 text-primary" />
                   )}
-                  {index + 1}. {payment.method === 'pix' ? 'Pix' : 'Dinheiro'}
+                  {activePayment.method === 'pix' ? 'Pix' : 'Dinheiro'}
+                  {payments.length > 1 && (
+                    <span className="text-xs font-semibold text-muted-foreground">
+                      {safePaymentIndex + 1} de {payments.length}
+                    </span>
+                  )}
                 </div>
-                <Button
-                  aria-label={`Remover pagamento ${index + 1}`}
-                  className="size-11"
-                  onClick={() => onRemove(payment.id)}
-                  size="icon"
-                  variant="ghost"
-                >
-                  <Trash2 />
-                </Button>
+                <div className="flex items-center gap-1">
+                  {payments.length > 1 && (
+                    <>
+                      <Button
+                        aria-label="Pagamento anterior"
+                        className="size-9"
+                        disabled={safePaymentIndex === 0}
+                        onClick={() =>
+                          setActivePaymentIndex((current) =>
+                            Math.max(0, current - 1),
+                          )
+                        }
+                        size="icon"
+                        variant="ghost"
+                      >
+                        <ChevronLeft />
+                      </Button>
+                      <Button
+                        aria-label="Próximo pagamento"
+                        className="size-9"
+                        disabled={safePaymentIndex >= payments.length - 1}
+                        onClick={() =>
+                          setActivePaymentIndex((current) =>
+                            Math.min(payments.length - 1, current + 1),
+                          )
+                        }
+                        size="icon"
+                        variant="ghost"
+                      >
+                        <ChevronRight />
+                      </Button>
+                    </>
+                  )}
+                  <Button
+                    aria-label={`Remover pagamento ${safePaymentIndex + 1}`}
+                    className="size-9"
+                    onClick={() => {
+                      onRemove(activePayment.id);
+                      setActivePaymentIndex((current) =>
+                        Math.max(0, current - 1),
+                      );
+                    }}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
               </div>
 
               <div
-                className={`mt-3 grid gap-3 ${payment.method === 'pix' ? 'sm:grid-cols-2' : ''}`}
+                className={`mt-2 grid gap-2 ${activePayment.method === 'pix' ? 'grid-cols-2' : ''}`}
               >
-                {payment.method === 'pix' && (
+                {activePayment.method === 'pix' && (
                   <div>
                     <label
                       className="text-sm font-semibold"
-                      htmlFor={`bank-${payment.id}`}
+                      htmlFor={`bank-${activePayment.id}`}
                     >
                       Banco
                     </label>
                     <NativeSelect
-                      className="mt-1 h-12 w-full [&_select]:h-12"
-                      id={`bank-${payment.id}`}
+                      className="mt-1 h-11 w-full [&_select]:h-11"
+                      id={`bank-${activePayment.id}`}
                       onChange={(event) =>
-                        onUpdate(payment.id, { bank: event.target.value })
+                        onUpdate(activePayment.id, {
+                          bank: event.target.value,
+                        })
                       }
-                      value={payment.bank}
+                      value={activePayment.bank}
                     >
                       <NativeSelectOption value="nubank">
                         Nubank
@@ -1008,37 +1188,42 @@ function PaymentStage({
                 <div>
                   <label
                     className="text-sm font-semibold"
-                    htmlFor={`amount-${payment.id}`}
+                    htmlFor={`amount-${activePayment.id}`}
                   >
                     Valor
                   </label>
                   <Input
-                    className="mt-1 h-12 text-right text-base font-bold"
-                    id={`amount-${payment.id}`}
+                    className="mt-1 h-11 text-right text-base font-bold"
+                    id={`amount-${activePayment.id}`}
                     inputMode="decimal"
                     onChange={(event) =>
-                      onUpdate(payment.id, { amount: event.target.value })
+                      onUpdate(activePayment.id, {
+                        amount: event.target.value,
+                      })
                     }
-                    value={payment.amount}
+                    value={activePayment.amount}
                   />
                 </div>
               </div>
             </div>
-          ))}
+          )}
 
-          <Button
-            className="h-12 w-full rounded-2xl border-dashed"
-            onClick={() => setShowTypePicker((current) => !current)}
-            variant="outline"
-          >
-            <Plus /> Adicionar pagamento
-          </Button>
+          {!showTypePicker && (
+            <Button
+              className="h-11 w-full rounded-xl border-dashed"
+              onClick={() => setShowTypePicker(true)}
+              variant="outline"
+            >
+              <Plus /> Adicionar pagamento
+            </Button>
+          )}
 
           {showTypePicker && (
-            <div className="grid grid-cols-2 gap-2 rounded-2xl bg-muted p-3">
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 rounded-xl bg-muted p-2">
               <Button
                 className="h-12 rounded-xl"
                 onClick={() => {
+                  setActivePaymentIndex(payments.length);
                   onAdd('pix');
                   setShowTypePicker(false);
                 }}
@@ -1049,6 +1234,7 @@ function PaymentStage({
               <Button
                 className="h-12 rounded-xl"
                 onClick={() => {
+                  setActivePaymentIndex(payments.length);
                   onAdd('cash');
                   setShowTypePicker(false);
                 }}
@@ -1056,19 +1242,28 @@ function PaymentStage({
               >
                 <Banknote /> Dinheiro
               </Button>
+              <Button
+                aria-label="Cancelar novo pagamento"
+                className="size-11"
+                onClick={() => setShowTypePicker(false)}
+                size="icon"
+                variant="ghost"
+              >
+                <X />
+              </Button>
             </div>
           )}
 
-          <div className="rounded-2xl bg-muted p-4">
+          <div className="rounded-xl bg-muted p-3">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Total da venda</span>
               <strong>{formatMoney(total)}</strong>
             </div>
-            <div className="mt-2 flex justify-between text-sm">
+            <div className="mt-1 flex justify-between text-sm">
               <span className="text-muted-foreground">Informado</span>
               <strong>{formatMoney(paid)}</strong>
             </div>
-            <div className="mt-3 flex justify-between border-t pt-3">
+            <div className="mt-2 flex justify-between border-t pt-2">
               <span className="font-bold">
                 {remaining < 0 ? 'Excedente' : 'Restante'}
               </span>
@@ -1083,7 +1278,7 @@ function PaymentStage({
           </div>
         </div>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
@@ -1096,29 +1291,29 @@ function PaymentStage({
 }
 
 function ReceiptStage({
-  fileNames,
+  files,
   onFiles,
   onBack,
   onSkip,
   onNext,
 }: {
-  fileNames: string[];
-  onFiles: (fileNames: string[]) => void;
+  files: File[];
+  onFiles: (files: File[]) => void;
   onBack: () => void;
   onSkip: () => void;
   onNext: () => void;
 }) {
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-start overflow-y-auto p-4 text-center overscroll-contain sm:justify-center sm:p-8">
+    <Card className={STAGE_CARD_CLASS}>
+      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3 text-center sm:p-6">
         <Badge variant="secondary">Comprovante opcional</Badge>
-        <div className="mt-4 grid w-full max-w-xl grid-cols-2 gap-3">
-          <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed bg-muted/30 p-4 transition hover:bg-muted/55 sm:p-6">
+        <div className="mt-3 grid w-full max-w-xl grid-cols-2 gap-2 sm:mt-4 sm:gap-3">
+          <label className="flow-receipt-option flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/30 p-3 transition hover:bg-muted/55 sm:min-h-36 sm:rounded-3xl sm:p-5">
             <span className="grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
               <Camera className="size-6" />
             </span>
-            <span className="mt-3 font-bold">Tirar foto</span>
-            <span className="mt-1 text-xs text-muted-foreground">
+            <span className="mt-2 font-bold">Tirar foto</span>
+            <span className="flow-stage-support mt-1 text-xs text-muted-foreground">
               Abrir a câmera
             </span>
             <input
@@ -1126,22 +1321,20 @@ function ReceiptStage({
               capture="environment"
               className="sr-only"
               onChange={(event) => {
-                const names = Array.from(event.target.files ?? []).map(
-                  (file) => file.name,
-                );
-                if (names.length > 0) onFiles(names);
+                const selectedFiles = Array.from(event.target.files ?? []);
+                if (selectedFiles.length > 0) onFiles(selectedFiles);
                 event.currentTarget.value = '';
               }}
               type="file"
             />
           </label>
 
-          <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed bg-muted/30 p-4 transition hover:bg-muted/55 sm:p-6">
+          <label className="flow-receipt-option flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/30 p-3 transition hover:bg-muted/55 sm:min-h-36 sm:rounded-3xl sm:p-5">
             <span className="grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
               <Paperclip className="size-6" />
             </span>
-            <span className="mt-3 font-bold">Anexar arquivo</span>
-            <span className="mt-1 text-xs text-muted-foreground">
+            <span className="mt-2 font-bold">Anexar arquivo</span>
+            <span className="flow-stage-support mt-1 text-xs text-muted-foreground">
               Foto ou PDF
             </span>
             <input
@@ -1149,10 +1342,8 @@ function ReceiptStage({
               className="sr-only"
               multiple
               onChange={(event) => {
-                const names = Array.from(event.target.files ?? []).map(
-                  (file) => file.name,
-                );
-                if (names.length > 0) onFiles(names);
+                const selectedFiles = Array.from(event.target.files ?? []);
+                if (selectedFiles.length > 0) onFiles(selectedFiles);
                 event.currentTarget.value = '';
               }}
               type="file"
@@ -1160,18 +1351,18 @@ function ReceiptStage({
           </label>
         </div>
 
-        {fileNames.length > 0 && (
-          <div className="mt-4 flex max-w-xl items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success">
+        {files.length > 0 && (
+          <div className="mt-2 flex max-w-xl items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success sm:mt-4">
             <FileCheck2 className="size-4 shrink-0" />
             <span className="truncate">
-              {fileNames.length === 1
-                ? fileNames[0]
-                : `${fileNames.length} comprovantes prontos`}
+              {files.length === 1
+                ? files[0].name
+                : `${files.length} comprovantes prontos`}
             </span>
           </div>
         )}
       </CardContent>
-      <div className="grid shrink-0 grid-cols-[auto_1fr] gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-[auto_1fr] gap-2 border-t p-2.5 sm:p-3">
         <Button
           aria-label="Voltar"
           className="h-12 rounded-xl"
@@ -1180,7 +1371,7 @@ function ReceiptStage({
         >
           <ArrowLeft />
         </Button>
-        {fileNames.length === 0 ? (
+        {files.length === 0 ? (
           <Button className="h-12 rounded-xl" onClick={onSkip}>
             Pular comprovante <ArrowRight />
           </Button>
@@ -1216,7 +1407,7 @@ function SaleReview({
   onConfirm: () => void;
 }) {
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+    <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
         <div className="mx-auto max-w-3xl">
           <div className="grid gap-3 sm:grid-cols-3">
@@ -1252,8 +1443,8 @@ function SaleReview({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{item.product}</p>
                     <p className="truncate font-mono text-xs text-muted-foreground">
-                      SN {item.serial.normalizedValue} · {item.photoCount}{' '}
-                      {item.photoCount === 1 ? 'foto' : 'fotos'}
+                      SN {item.serial.normalizedValue} · {item.photos.length}{' '}
+                      {item.photos.length === 1 ? 'foto' : 'fotos'}
                     </p>
                   </div>
                   <strong className="text-sm">
@@ -1294,7 +1485,7 @@ function SaleReview({
           </div>
         </div>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
@@ -1338,7 +1529,7 @@ function SaleCompletion({
   onReset: () => void;
 }) {
   return (
-    <Card className="grid h-full place-items-center overflow-hidden">
+    <Card className="grid h-full place-items-center gap-0 overflow-hidden py-0">
       <CardContent className="max-w-lg p-6 text-center sm:p-10">
         <span className="mx-auto grid size-20 place-items-center rounded-full bg-success/10 text-success">
           <CheckCircle2 className="size-10" />
@@ -1366,6 +1557,19 @@ function createLocalId(prefix: string) {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function mergeUniqueFiles(current: File[], incoming: File[]) {
+  const byIdentity = new Map(
+    current.map((file) => [
+      `${file.name}:${file.size}:${file.lastModified}`,
+      file,
+    ]),
+  );
+  for (const file of incoming) {
+    byIdentity.set(`${file.name}:${file.size}:${file.lastModified}`, file);
+  }
+  return [...byIdentity.values()];
 }
 
 function parseMoney(value: string) {

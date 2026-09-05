@@ -153,7 +153,10 @@
     radial-gradient(circle at 50% 50%, rgb(35 178 231 / 10%), transparent 48%),
     linear-gradient(rgb(255 255 255 / 3%) 1px, transparent 1px),
     linear-gradient(90deg, rgb(255 255 255 / 3%) 1px, transparent 1px);
-  background-size: auto, 28px 28px, 28px 28px;
+  background-size:
+    auto,
+    28px 28px,
+    28px 28px;
 }
 
 .scan-frame {
@@ -235,11 +238,7 @@
   }
 }
 
-@media (max-height: 700px) {
-  .app-demo-strip {
-    display: none;
-  }
-
+@media (max-width: 639px), (max-height: 850px) {
   .flow-description {
     display: none;
   }
@@ -248,12 +247,103 @@
     padding-bottom: 0.5rem;
   }
 
+  .flow-progress {
+    margin-top: 0.5rem;
+  }
+
+  .scanner-mode-badge {
+    display: none;
+  }
+}
+
+@media (max-height: 700px) {
+  .app-demo-strip {
+    display: none;
+  }
+
   .scanner-description {
     display: none;
   }
 
+  .flow-stage-support,
+  .flow-stage-intro p {
+    display: none;
+  }
+
+  .flow-stage-icon {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .flow-upload-panel {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .flow-receipt-option {
+    min-height: 6.5rem;
+    padding: 0.5rem;
+  }
+
   .scanner-camera {
     min-height: 6.5rem !important;
+  }
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  [data-report-controls],
+  [data-slot='dialog-overlay'] {
+    display: none !important;
+  }
+
+  [data-slot='dialog-content']:has([data-print-report]) {
+    position: static !important;
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+    transform: none !important;
+    box-shadow: none !important;
+  }
+
+  [data-slot='dialog-content']:has([data-print-report]) > div {
+    overflow: visible !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+
+  [data-print-report],
+  [data-print-report] * {
+    visibility: visible;
+  }
+
+  [data-print-report] {
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .report-section,
+  .report-row {
+    break-inside: avoid;
   }
 }
 

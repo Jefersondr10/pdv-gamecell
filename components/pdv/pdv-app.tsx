@@ -1,15 +1,18 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import Image from 'next/image';
 import {
   ArrowDownToLine,
   ArrowRight,
   Building2,
+  Camera,
   CircleUserRound,
-  Download,
   FileText,
   History,
   Package,
+  Paperclip,
+  Printer,
   RotateCcw,
   ScanBarcode,
   Search,
@@ -30,6 +33,7 @@ import {
 } from '@/components/pdv/entry-wizard';
 import {
   SellWizard,
+  type CompletedSalePayload,
   type SaleProductLookup,
 } from '@/components/pdv/sell-wizard';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +47,14 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
@@ -55,6 +67,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import { normalizeCandidate } from '@/lib/scanner';
 
 type View = 'sell' | 'entry' | 'stock' | 'sales' | 'settings';
@@ -62,6 +75,8 @@ type StorageMode = 'browser' | 'session';
 type SaleStatusValue = 'Concluída' | 'Cancelada';
 type SalesGrouping = 'list' | 'model' | 'customer';
 type SalesDayFilter = 'today' | 'yesterday' | 'all' | 'custom';
+type SalesReportLevel = 'simple' | 'detailed' | 'complete';
+type StockReportLevel = 'summary' | 'serials';
 
 type StockRow = {
   id: string;
@@ -70,13 +85,41 @@ type StockRow = {
   available: number;
   received: number;
   codes: string[];
+  serials?: string[];
   testOnly?: boolean;
 };
 
 type SaleModel = {
   name: string;
+  detail?: string;
   quantity: number;
   total: number;
+};
+
+type SaleAttachment = {
+  name: string;
+  mimeType: string;
+  url?: string;
+};
+
+type SaleReportItem = {
+  product: string;
+  detail: string;
+  serial: string;
+  value: number;
+  photos: SaleAttachment[];
+};
+
+type SaleReportPayment = {
+  method: string;
+  bank?: string;
+  amount: number;
+};
+
+type SaleReportData = {
+  items: SaleReportItem[];
+  payments: SaleReportPayment[];
+  receipts: SaleAttachment[];
 };
 
 type SaleRow = {
@@ -90,6 +133,17 @@ type SaleRow = {
   time: string;
   status: SaleStatusValue;
   models: SaleModel[];
+  report?: SaleReportData;
+  testOnly?: boolean;
+  cancellationReason?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
+};
+
+type SaleCancellation = {
+  reason: string;
+  at: string;
+  operator: string;
 };
 
 type SalesGroupRow = {
@@ -99,7 +153,18 @@ type SalesGroupRow = {
   total: number;
 };
 
+type StockReportRow = {
+  scope: 'main' | 'test';
+  model: string;
+  color: string;
+  memory: string;
+  available: number;
+  serials: string[];
+};
+
 const TEST_STOCK_KEY = 'pdv-apple:test-stock:v1';
+const GUIDE_STORAGE_KEY = 'pdv-apple:guide-version';
+const GUIDE_VERSION = '2026.09.05-onboarding-reports-v1';
 const TODAY = getSaoPauloDateKey(0);
 const YESTERDAY = getSaoPauloDateKey(-1);
 
@@ -226,10 +291,18 @@ export function PdvApp() {
   const [viewRun, setViewRun] = useState(0);
   const [stagedSerial, setStagedSerial] = useState('');
   const [testEntries, setTestEntries] = useState<LocalTestEntryRecord[]>([]);
+  const [sessionSales, setSessionSales] = useState<SaleRow[]>([]);
+  const [saleCancellations, setSaleCancellations] = useState<
+    Record<string, SaleCancellation>
+  >({});
   const [testStorageReady, setTestStorageReady] = useState(false);
   const [testStorageMode, setTestStorageMode] =
     useState<StorageMode>('browser');
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [guideRequired, setGuideRequired] = useState(false);
   const testEntriesRef = useRef<LocalTestEntryRecord[]>([]);
+  const testSaleSequenceRef = useRef(1);
+  const attachmentUrlsRef = useRef<string[]>([]);
   const existingTestSerials = useMemo(
     () => testEntries.flatMap((entry) => entry.serials),
     [testEntries],
@@ -246,6 +319,109 @@ export function PdvApp() {
     }
     return lookup;
   }, [testEntries]);
+  const allSales = useMemo(
+    () =>
+      [...sessionSales, ...salesRows].map((sale) => {
+        const cancellation = saleCancellations[sale.number];
+        return cancellation
+          ? {
+              ...sale,
+              status: 'Cancelada' as const,
+              cancellationReason: cancellation.reason,
+              cancelledAt: cancellation.at,
+              cancelledBy: cancellation.operator,
+            }
+          : sale;
+      }),
+    [saleCancellations, sessionSales],
+  );
+  const soldSerials = useMemo(
+    () =>
+      new Set(
+        allSales
+          .filter((sale) => sale.status === 'Concluída')
+          .flatMap(
+            (sale) => sale.report?.items.map((item) => item.serial) ?? [],
+          ),
+      ),
+    [allSales],
+  );
+
+  const openSystemGuide = () => setGuideOpen(true);
+  const changeGuideOpen = (open: boolean) => {
+    if (!open && guideRequired) return;
+    setGuideOpen(open);
+  };
+  const acknowledgeGuide = () => {
+    try {
+      window.localStorage.setItem(GUIDE_STORAGE_KEY, GUIDE_VERSION);
+    } catch {
+      // Sem armazenamento local, a confirmação vale apenas nesta sessão.
+    }
+    setGuideRequired(false);
+    setGuideOpen(false);
+  };
+
+  const registerCompletedSale = (payload: CompletedSalePayload) => {
+    const reportItems: SaleReportItem[] = payload.items.map((item) => ({
+      product: item.product,
+      detail: item.detail,
+      serial: item.serial,
+      value: item.priceCents,
+      photos: item.photos.map((file) =>
+        createSaleAttachment(file, attachmentUrlsRef.current),
+      ),
+    }));
+    const receipts = payload.receipts.map((file) =>
+      createSaleAttachment(file, attachmentUrlsRef.current),
+    );
+    const payments: SaleReportPayment[] = payload.payments.map((payment) => ({
+      method: payment.method,
+      bank: payment.method === 'Pix' ? formatBankName(payment.bank) : undefined,
+      amount: payment.amountCents,
+    }));
+    const now = new Date();
+    const sale: SaleRow = {
+      number: `#TESTE-${String(testSaleSequenceRef.current).padStart(3, '0')}`,
+      customer: payload.customer,
+      seller: 'Jeferson',
+      items: reportItems.length,
+      total: payload.totalCents,
+      payment: payments
+        .map((payment) =>
+          payment.bank ? `${payment.method} · ${payment.bank}` : payment.method,
+        )
+        .join(' + '),
+      date: getSaoPauloDateKey(0),
+      time: new Intl.DateTimeFormat('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: 'America/Sao_Paulo',
+      }).format(now),
+      status: 'Concluída',
+      models: groupCompletedItemsByModel(reportItems),
+      report: { items: reportItems, payments, receipts },
+      testOnly: true,
+    };
+    testSaleSequenceRef.current += 1;
+    setSessionSales((current) => [sale, ...current]);
+  };
+
+  const cancelSale = (saleNumber: string, reason: string) => {
+    setSaleCancellations((current) =>
+      current[saleNumber]
+        ? current
+        : {
+            ...current,
+            [saleNumber]: {
+              reason,
+              at: formatSaoPauloDateTime(new Date()),
+              operator: 'Jeferson',
+            },
+          },
+    );
+  };
 
   const changeView = (view: View) => {
     if (view === 'sell') setStagedSerial('');
@@ -291,6 +467,32 @@ export function PdvApp() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      try {
+        if (window.localStorage.getItem(GUIDE_STORAGE_KEY) === GUIDE_VERSION) {
+          return;
+        }
+      } catch {
+        // O guia continua obrigatório mesmo quando o navegador bloqueia storage.
+      }
+      setGuideRequired(true);
+      setGuideOpen(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      for (const url of attachmentUrlsRef.current) URL.revokeObjectURL(url);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!testStorageReady || testStorageMode !== 'browser') return;
@@ -411,22 +613,27 @@ export function PdvApp() {
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar px-5 py-6 lg:flex lg:flex-col">
         <Brand />
         <MainNavigation activeView={activeView} onChange={changeView} />
-        <OperatorCard />
+        <OperatorCard onOpenGuide={openSystemGuide} />
       </aside>
 
       <section className="mx-auto flex h-dvh min-h-0 max-w-[1500px] flex-col overflow-hidden lg:ml-64">
-        <AppHeader />
-        <div className="app-demo-strip shrink-0 border-b border-amber-500/15 bg-amber-50 px-4 py-1.5 text-center text-xs font-semibold text-amber-900 sm:px-7">
-          Modo de teste · entradas ficam somente{' '}
-          {testStorageMode === 'browser' ? 'neste navegador' : 'nesta sessão'} ·
-          não use dados reais
+        <AppHeader onOpenGuide={openSystemGuide} />
+        <div className="app-demo-strip shrink-0 border-b border-amber-500/15 bg-amber-50 px-4 py-1 text-center text-xs font-semibold text-amber-900 sm:px-7 sm:py-1.5">
+          <span className="sm:hidden">TESTE LOCAL · dados não reais</span>
+          <span className="hidden sm:inline">
+            Modo de teste · entradas ficam somente{' '}
+            {testStorageMode === 'browser' ? 'neste navegador' : 'nesta sessão'}{' '}
+            · não use dados reais
+          </span>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden pb-[calc(4.75rem+env(safe-area-inset-bottom))] lg:pb-0">
           {activeView === 'sell' && (
             <SellWizard
               key={`sell-${viewRun}`}
+              onComplete={registerCompletedSale}
               productsBySerial={saleProductsBySerial}
               stagedSerial={stagedSerial}
+              unavailableSerials={soldSerials}
             />
           )}
           {activeView === 'entry' && (
@@ -442,10 +649,17 @@ export function PdvApp() {
               key={`stock-${viewRun}`}
               storageMode={testStorageMode}
               storageReady={testStorageReady}
+              soldSerials={soldSerials}
               testEntries={testEntries}
             />
           )}
-          {activeView === 'sales' && <SalesView key={`sales-${viewRun}`} />}
+          {activeView === 'sales' && (
+            <SalesView
+              key={`sales-${viewRun}`}
+              onCancelSale={cancelSale}
+              sales={allSales}
+            />
+          )}
           {activeView === 'settings' && (
             <SettingsView key={`settings-${viewRun}`} />
           )}
@@ -453,6 +667,12 @@ export function PdvApp() {
       </section>
 
       <MobileNavigation activeView={activeView} onChange={changeView} />
+      <SystemGuideDialog
+        onAcknowledge={acknowledgeGuide}
+        onOpenChange={changeGuideOpen}
+        open={guideOpen}
+        required={guideRequired}
+      />
     </main>
   );
 }
@@ -461,23 +681,31 @@ function StockView({
   testEntries,
   storageReady,
   storageMode,
+  soldSerials,
 }: {
   testEntries: LocalTestEntryRecord[];
   storageReady: boolean;
   storageMode: StorageMode;
+  soldSerials: ReadonlySet<string>;
 }) {
   const [query, setQuery] = useState('');
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportLevel, setReportLevel] = useState<StockReportLevel>('summary');
   const testRows: StockRow[] = testEntries.map((entry) => {
     const catalogRow = inventoryRows.find((row) =>
       row.codes.some((code) => code.padStart(14, '0') === entry.gtin14),
+    );
+    const availableSerials = entry.serials.filter(
+      (serial) => !soldSerials.has(serial),
     );
     return {
       id: `test:${entry.gtin14}`,
       name: catalogRow?.name ?? entry.productName,
       detail: catalogRow?.detail ?? entry.productDetail,
-      available: entry.serials.length,
+      available: availableSerials.length,
       received: entry.serials.length,
       codes: [entry.displayCode],
+      serials: availableSerials,
       testOnly: true,
     };
   });
@@ -493,8 +721,13 @@ function StockView({
     <PageContainer>
       <PageHeading
         action={
-          <Button className="hidden h-10 rounded-xl sm:flex" variant="outline">
-            <Download /> Exportar
+          <Button
+            className="h-10 rounded-xl px-3 sm:px-4"
+            onClick={() => setReportOpen(true)}
+            variant="outline"
+          >
+            <FileText />
+            <span className="hidden sm:inline">Relatório de estoque</span>
           </Button>
         }
         description="Quantidade por variação e rastreabilidade individual por SN."
@@ -643,15 +876,304 @@ function StockView({
           </div>
         </CardContent>
       </Card>
+      <StockReportDialog
+        level={reportLevel}
+        onLevelChange={setReportLevel}
+        onOpenChange={setReportOpen}
+        open={reportOpen}
+        rows={rows}
+      />
     </PageContainer>
   );
 }
 
-function SalesView() {
+function StockReportDialog({
+  rows,
+  level,
+  open,
+  onOpenChange,
+  onLevelChange,
+}: {
+  rows: StockRow[];
+  level: StockReportLevel;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onLevelChange: (level: StockReportLevel) => void;
+}) {
+  const [includeTest, setIncludeTest] = useState(false);
+  const hasTestRows = rows.some((row) => row.testOnly);
+  const reportRows = useMemo(
+    () => buildStockReportRows(rows, includeTest),
+    [includeTest, rows],
+  );
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[min(90dvh,54rem)] sm:max-w-4xl sm:rounded-2xl">
+        <DialogHeader
+          className="shrink-0 border-b px-4 py-3 pr-12 sm:px-5 sm:py-4"
+          data-report-controls
+        >
+          <DialogTitle className="text-lg font-bold">
+            Relatório de estoque
+          </DialogTitle>
+          <DialogDescription>
+            Consulte as quantidades por variação ou a rastreabilidade por número
+            de série.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div
+          className="grid shrink-0 gap-2 border-b bg-muted/30 p-3 sm:grid-cols-[1fr_auto] sm:items-end sm:p-4"
+          data-report-controls
+        >
+          <fieldset>
+            <legend className="text-sm font-semibold">Tipo de relatório</legend>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <Button
+                aria-pressed={level === 'summary'}
+                className="h-11 rounded-xl"
+                onClick={() => onLevelChange('summary')}
+                type="button"
+                variant={level === 'summary' ? 'default' : 'outline'}
+              >
+                Por modelo, cor e memória
+              </Button>
+              <Button
+                aria-pressed={level === 'serials'}
+                className="h-11 rounded-xl"
+                onClick={() => onLevelChange('serials')}
+                type="button"
+                variant={level === 'serials' ? 'default' : 'outline'}
+              >
+                Detalhado por SN
+              </Button>
+            </div>
+          </fieldset>
+          <Button
+            aria-pressed={includeTest}
+            className="h-11 rounded-xl"
+            disabled={!hasTestRows}
+            onClick={() => setIncludeTest((current) => !current)}
+            type="button"
+            variant={includeTest ? 'secondary' : 'outline'}
+          >
+            {includeTest ? 'Teste local incluído' : 'Incluir teste local'}
+          </Button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto bg-muted/25 p-3 overscroll-contain sm:p-5">
+          <StockReportDocument
+            includeTest={includeTest}
+            level={level}
+            rows={reportRows}
+          />
+        </div>
+
+        <DialogFooter
+          className="mx-0 mb-0 shrink-0 rounded-none border-t bg-background p-3 sm:p-4"
+          data-report-controls
+        >
+          <Button onClick={() => onOpenChange(false)} variant="outline">
+            Fechar
+          </Button>
+          <Button onClick={() => window.print()}>
+            <Printer /> Imprimir / salvar PDF
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function StockReportDocument({
+  rows,
+  level,
+  includeTest,
+}: {
+  rows: StockReportRow[];
+  level: StockReportLevel;
+  includeTest: boolean;
+}) {
+  const mainRows = rows.filter((row) => row.scope === 'main');
+  const testRows = rows.filter((row) => row.scope === 'test');
+  const mainAvailable = mainRows.reduce((sum, row) => sum + row.available, 0);
+  const testAvailable = testRows.reduce((sum, row) => sum + row.available, 0);
+  const modelCount = new Set(mainRows.map((row) => row.model)).size;
+
+  return (
+    <article
+      className="report-document mx-auto max-w-3xl rounded-2xl bg-white p-4 text-slate-950 shadow-sm ring-1 ring-slate-200 sm:p-7"
+      data-print-report
+    >
+      <header className="border-b border-slate-200 pb-4">
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+          PDV Estoque
+        </p>
+        <h2 className="mt-1 text-xl font-extrabold tracking-tight">
+          {level === 'summary'
+            ? 'Estoque por modelo, cor e memória'
+            : 'Estoque detalhado por SN'}
+        </h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Gerado em {formatSaoPauloDateTime(new Date())}
+        </p>
+      </header>
+
+      <dl className="report-section mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <ReportMetric label="Estoque principal" value={String(mainAvailable)} />
+        <ReportMetric label="Modelos" value={String(modelCount)} />
+        <ReportMetric label="Variações" value={String(mainRows.length)} />
+        <ReportMetric
+          label="Teste local"
+          value={includeTest ? String(testAvailable) : 'Não incluído'}
+        />
+      </dl>
+
+      {includeTest && testRows.length > 0 && (
+        <p className="report-section mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+          O TESTE LOCAL aparece em seção separada e não foi somado ao estoque
+          principal.
+        </p>
+      )}
+
+      <div className="report-section mt-5 space-y-5">
+        <StockReportSection
+          level={level}
+          rows={mainRows}
+          title="Estoque principal"
+        />
+        {includeTest && testRows.length > 0 && (
+          <StockReportSection
+            level={level}
+            rows={testRows}
+            title="TESTE LOCAL"
+          />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function StockReportSection({
+  title,
+  rows,
+  level,
+}: {
+  title: string;
+  rows: StockReportRow[];
+  level: StockReportLevel;
+}) {
+  return (
+    <section>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="font-extrabold">{title}</h3>
+        <span className="text-xs font-semibold text-slate-500">
+          {rows.length} {rows.length === 1 ? 'variação' : 'variações'}
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="mt-2 rounded-lg bg-slate-50 px-3 py-3 text-sm text-slate-600">
+          Nenhuma unidade disponível neste escopo.
+        </p>
+      ) : (
+        <div className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200">
+          {rows.map((row) => {
+            const missingSerials = Math.max(
+              row.available - row.serials.length,
+              0,
+            );
+            return (
+              <div
+                className="report-row p-3"
+                key={`${row.scope}-${row.model}-${row.color}-${row.memory}`}
+              >
+                <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-center">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Modelo
+                    </p>
+                    <p className="font-bold">{row.model}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Cor
+                    </p>
+                    <p className="font-semibold">{row.color}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Memória
+                    </p>
+                    <p className="font-semibold">{row.memory}</p>
+                  </div>
+                  <div className="sm:text-right">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Disponível
+                    </p>
+                    <p className="text-lg font-extrabold">{row.available}</p>
+                  </div>
+                </div>
+
+                {level === 'serials' && (
+                  <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Números de série disponíveis
+                    </p>
+                    {row.serials.length > 0 && (
+                      <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                        {row.serials.map((serial) => (
+                          <p
+                            className="break-all rounded-md bg-white px-2 py-1.5 font-mono text-sm font-semibold ring-1 ring-slate-200"
+                            key={serial}
+                          >
+                            {serial}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {missingSerials > 0 && (
+                      <p className="mt-2 text-sm text-slate-600">
+                        {missingSerials}{' '}
+                        {missingSerials === 1 ? 'SN não está' : 'SNs não estão'}{' '}
+                        disponível nos dados desta demonstração.
+                      </p>
+                    )}
+                    {row.available === 0 && (
+                      <p className="mt-2 text-sm text-slate-600">
+                        Nenhum SN disponível nesta variação.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SalesView({
+  sales,
+  onCancelSale,
+}: {
+  sales: SaleRow[];
+  onCancelSale: (saleNumber: string, reason: string) => void;
+}) {
   const [dayFilter, setDayFilter] = useState<SalesDayFilter>('today');
   const [customDay, setCustomDay] = useState(TODAY);
   const [grouping, setGrouping] = useState<SalesGrouping>('list');
   const [query, setQuery] = useState('');
+  const [reportOpen, setReportOpen] = useState(false);
+  const [cancelSaleNumber, setCancelSaleNumber] = useState('');
+  const [reportSaleNumber, setReportSaleNumber] = useState(
+    sales.find((sale) => sale.status === 'Concluída')?.number ??
+      sales[0]?.number ??
+      '',
+  );
+  const [reportLevel, setReportLevel] = useState<SalesReportLevel>('simple');
 
   const filteredSales = useMemo(() => {
     const selectedDay =
@@ -664,14 +1186,14 @@ function SalesView() {
             : null;
     const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR');
 
-    return salesRows.filter((sale) => {
+    return sales.filter((sale) => {
       if (selectedDay && sale.date !== selectedDay) return false;
       if (!normalizedQuery) return true;
       return `${sale.number} ${sale.customer} ${sale.seller} ${sale.payment} ${sale.models.map((model) => model.name).join(' ')}`
         .toLocaleLowerCase('pt-BR')
         .includes(normalizedQuery);
     });
-  }, [customDay, dayFilter, query]);
+  }, [customDay, dayFilter, query, sales]);
 
   const completedSales = filteredSales.filter(
     (sale) => sale.status === 'Concluída',
@@ -695,13 +1217,32 @@ function SalesView() {
   );
   const isEmpty =
     grouping === 'list' ? filteredSales.length === 0 : groupedRows.length === 0;
+  const reportSale =
+    sales.find((sale) => sale.number === reportSaleNumber) ?? sales[0];
+  const saleToCancel = sales.find((sale) => sale.number === cancelSaleNumber);
+  const openReport = (sale: SaleRow) => {
+    setReportSaleNumber(sale.number);
+    setReportOpen(true);
+  };
 
   return (
     <PageContainer>
       <PageHeading
         action={
-          <Button className="hidden h-10 rounded-xl sm:flex" variant="outline">
-            <FileText /> Relatório
+          <Button
+            aria-label="Gerar relatório por venda"
+            className="h-10 rounded-xl px-3 sm:px-4"
+            disabled={filteredSales.length === 0}
+            onClick={() => {
+              const firstSale =
+                filteredSales.find((sale) => sale.status === 'Concluída') ??
+                filteredSales[0];
+              if (firstSale) openReport(firstSale);
+            }}
+            variant="outline"
+          >
+            <FileText />
+            <span className="hidden sm:inline">Relatório por venda</span>
           </Button>
         }
         description="Itens, pagamentos, responsáveis, cancelamentos e devoluções."
@@ -823,6 +1364,7 @@ function SalesView() {
                           <TableCell className="pr-5">
                             <Button
                               aria-label={`Abrir ${sale.number}`}
+                              onClick={() => openReport(sale)}
                               size="icon-sm"
                               variant="ghost"
                             >
@@ -839,6 +1381,7 @@ function SalesView() {
                     <button
                       className="w-full px-4 py-3 text-left"
                       key={sale.number}
+                      onClick={() => openReport(sale)}
                       type="button"
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -904,7 +1447,637 @@ function SalesView() {
           </div>
         </CardContent>
       </Card>
+
+      <SaleReportDialog
+        level={reportLevel}
+        onLevelChange={setReportLevel}
+        onOpenChange={setReportOpen}
+        onRequestCancel={(saleNumber) => {
+          setReportOpen(false);
+          setCancelSaleNumber(saleNumber);
+        }}
+        onSaleChange={setReportSaleNumber}
+        open={reportOpen}
+        sale={reportSale}
+        sales={sales}
+      />
+      <CancelSaleDialog
+        onConfirm={(reason) => {
+          if (!saleToCancel) return;
+          onCancelSale(saleToCancel.number, reason);
+          setCancelSaleNumber('');
+        }}
+        onOpenChange={(open) => {
+          if (!open) setCancelSaleNumber('');
+        }}
+        open={Boolean(saleToCancel)}
+        sale={saleToCancel}
+      />
     </PageContainer>
+  );
+}
+
+function CancelSaleDialog({
+  sale,
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  sale: SaleRow | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  const normalizedReason = reason.trim();
+  const valid = normalizedReason.length >= 5;
+  const close = () => {
+    setReason('');
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) close();
+      }}
+      open={open}
+    >
+      <DialogContent className="flex max-h-[calc(100dvh-1.5rem)] max-w-[calc(100%-1.5rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+        <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12 sm:px-5">
+          <DialogTitle className="text-lg font-bold">
+            Cancelar venda
+          </DialogTitle>
+          <DialogDescription>
+            A venda continuará no histórico como cancelada e deixará de contar
+            nos totais vendidos.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 overflow-y-auto p-4 overscroll-contain sm:p-5">
+          {sale && (
+            <div className="grid grid-cols-2 gap-2 rounded-xl bg-muted p-3 text-sm">
+              <div className="col-span-2">
+                <p className="text-xs font-semibold text-muted-foreground">
+                  Venda e cliente
+                </p>
+                <p className="font-bold">
+                  {sale.number} · {sale.customer}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">
+                  Aparelhos
+                </p>
+                <p className="font-bold">{sale.items}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground">
+                  Valor original
+                </p>
+                <p className="font-bold">{formatMoney(sale.total)}</p>
+              </div>
+            </div>
+          )}
+
+          <label
+            className="mt-4 block text-sm font-semibold"
+            htmlFor="sale-cancellation-reason"
+          >
+            Motivo do cancelamento
+          </label>
+          <Textarea
+            aria-describedby="sale-cancellation-help"
+            aria-invalid={reason.length > 0 && !valid}
+            className="mt-1 max-h-32 min-h-24 field-sizing-fixed"
+            id="sale-cancellation-reason"
+            maxLength={300}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Explique o motivo em pelo menos 5 caracteres"
+            rows={4}
+            value={reason}
+          />
+          <div
+            className="mt-1 flex items-start justify-between gap-3 text-xs text-muted-foreground"
+            id="sale-cancellation-help"
+          >
+            <span>
+              {reason.length > 0 && !valid
+                ? 'Informe um motivo mais completo.'
+                : 'O motivo ficará registrado para auditoria.'}
+            </span>
+            <span>{reason.length}/300</span>
+          </div>
+
+          <p className="mt-4 rounded-xl bg-amber-500/10 px-3 py-2 text-sm leading-6 text-amber-950">
+            No teste local, SNs vinculados voltam a ficar disponíveis. O
+            cancelamento no sistema não estorna Pix ou dinheiro automaticamente.
+          </p>
+        </div>
+
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+          <Button className="h-12 rounded-xl" onClick={close} variant="outline">
+            Voltar
+          </Button>
+          <Button
+            className="h-12 rounded-xl"
+            disabled={!sale || sale.status !== 'Concluída' || !valid}
+            onClick={() => {
+              if (!sale || sale.status !== 'Concluída' || !valid) return;
+              onConfirm(normalizedReason);
+              setReason('');
+            }}
+            variant="destructive"
+          >
+            <span className="sm:hidden">Cancelar venda</span>
+            <span className="hidden sm:inline">Confirmar cancelamento</span>
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SaleReportDialog({
+  sale,
+  sales,
+  level,
+  open,
+  onOpenChange,
+  onSaleChange,
+  onLevelChange,
+  onRequestCancel,
+}: {
+  sale: SaleRow | undefined;
+  sales: SaleRow[];
+  level: SalesReportLevel;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaleChange: (saleNumber: string) => void;
+  onLevelChange: (level: SalesReportLevel) => void;
+  onRequestCancel: (saleNumber: string) => void;
+}) {
+  const levelOptions: Array<{
+    value: SalesReportLevel;
+    label: string;
+    detail: string;
+  }> = [
+    {
+      value: 'simple',
+      label: 'Simplificado',
+      detail: 'Cliente, produtos e valores',
+    },
+    {
+      value: 'detailed',
+      label: 'Detalhado',
+      detail: 'Inclui SNs e pagamentos',
+    },
+    {
+      value: 'complete',
+      label: 'Completo',
+      detail: 'Inclui fotos e comprovantes',
+    },
+  ];
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[min(90dvh,54rem)] sm:max-w-4xl sm:rounded-2xl">
+        <DialogHeader
+          className="shrink-0 border-b px-4 py-3 pr-12 sm:px-5 sm:py-4"
+          data-report-controls
+        >
+          <DialogTitle className="text-lg font-bold">
+            Relatório por venda
+          </DialogTitle>
+          <DialogDescription>
+            Escolha a venda e o nível de informação antes de imprimir ou salvar
+            em PDF.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div
+          className="grid shrink-0 gap-2 border-b bg-muted/30 p-3 sm:grid-cols-[15rem_1fr] sm:p-4"
+          data-report-controls
+        >
+          <div>
+            <label className="text-sm font-semibold" htmlFor="report-sale">
+              Venda
+            </label>
+            <NativeSelect
+              className="mt-1 h-11 w-full [&_select]:h-11"
+              id="report-sale"
+              onChange={(event) => onSaleChange(event.target.value)}
+              value={sale?.number ?? ''}
+            >
+              {sales.map((option) => (
+                <NativeSelectOption key={option.number} value={option.number}>
+                  {option.number} · {option.customer}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+
+          <fieldset>
+            <legend className="text-sm font-semibold">Tipo de relatório</legend>
+            <div className="mt-1 grid grid-cols-3 gap-2">
+              {levelOptions.map((option) => (
+                <Button
+                  aria-pressed={level === option.value}
+                  className="h-auto min-w-0 flex-col items-start gap-0 rounded-xl px-2 py-2 text-left sm:px-3"
+                  key={option.value}
+                  onClick={() => onLevelChange(option.value)}
+                  type="button"
+                  variant={level === option.value ? 'default' : 'outline'}
+                >
+                  <span className="w-full truncate text-xs font-bold sm:text-sm">
+                    {option.label}
+                  </span>
+                  <span className="hidden w-full truncate text-xs font-normal opacity-75 md:block">
+                    {option.detail}
+                  </span>
+                </Button>
+              ))}
+            </div>
+          </fieldset>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto bg-muted/25 p-3 overscroll-contain sm:p-5">
+          {sale ? (
+            <SaleReportDocument level={level} sale={sale} />
+          ) : (
+            <div className="grid h-full place-items-center text-sm text-muted-foreground">
+              Nenhuma venda disponível para o relatório.
+            </div>
+          )}
+        </div>
+
+        <div
+          className="grid shrink-0 grid-cols-2 gap-2 border-t bg-background p-3 sm:flex sm:justify-end sm:p-4"
+          data-report-controls
+        >
+          {sale?.status === 'Concluída' && (
+            <Button
+              className="col-span-2 sm:mr-auto"
+              onClick={() => onRequestCancel(sale.number)}
+              variant="destructive"
+            >
+              Cancelar venda
+            </Button>
+          )}
+          <Button onClick={() => onOpenChange(false)} variant="outline">
+            Fechar
+          </Button>
+          <Button disabled={!sale} onClick={() => window.print()}>
+            <Printer /> Imprimir / salvar PDF
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SaleReportDocument({
+  sale,
+  level,
+}: {
+  sale: SaleRow;
+  level: SalesReportLevel;
+}) {
+  const reportTitle =
+    level === 'simple'
+      ? 'Relatório simplificado'
+      : level === 'detailed'
+        ? 'Relatório detalhado'
+        : 'Relatório completo';
+  const soldAmount = sale.status === 'Concluída' ? sale.total : 0;
+  const reportItems = sale.report?.items ?? [];
+  const reportPayments = sale.report?.payments ?? [];
+  const receipts = sale.report?.receipts ?? [];
+  const photos = reportItems.flatMap((item) =>
+    item.photos.map((photo) => ({
+      ...photo,
+      product: item.product,
+      serial: item.serial,
+    })),
+  );
+
+  return (
+    <article
+      className="report-document mx-auto max-w-3xl rounded-2xl bg-white p-4 text-slate-950 shadow-sm ring-1 ring-slate-200 sm:p-7"
+      data-print-report
+    >
+      <header className="border-b border-slate-200 pb-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+              PDV Estoque
+            </p>
+            <h2 className="mt-1 text-xl font-extrabold tracking-tight">
+              {reportTitle}
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Venda {sale.number} · {formatSalesDay(sale.date)}, {sale.time}
+            </p>
+          </div>
+          <span className="rounded-full border border-slate-300 px-3 py-1 text-xs font-bold">
+            {sale.status}
+          </span>
+        </div>
+        {sale.testOnly && (
+          <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900">
+            VENDA DE TESTE · dados mantidos somente nesta sessão
+          </p>
+        )}
+      </header>
+
+      <section className="report-section mt-4">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+          Cliente
+        </p>
+        <p className="mt-1 text-base font-bold">{sale.customer}</p>
+      </section>
+
+      <dl className="report-section mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <ReportMetric
+          label="Montante vendido"
+          value={formatMoney(soldAmount)}
+        />
+        <ReportMetric label="Total de aparelhos" value={String(sale.items)} />
+        <ReportMetric
+          className="col-span-2 sm:col-span-1"
+          label="Modelos diferentes"
+          value={String(sale.models.length)}
+        />
+      </dl>
+
+      {sale.status === 'Cancelada' && (
+        <div className="report-section mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+          <p className="font-semibold">
+            Esta venda foi cancelada e, por isso, não entra no montante vendido.
+            Valor original: {formatMoney(sale.total)}.
+          </p>
+          {sale.cancellationReason && (
+            <p className="mt-1">
+              Motivo: <strong>{sale.cancellationReason}</strong>
+              {sale.cancelledBy ? ` · Operador: ${sale.cancelledBy}` : ''}
+              {sale.cancelledAt ? ` · ${sale.cancelledAt}` : ''}
+            </p>
+          )}
+        </div>
+      )}
+
+      <section className="report-section mt-5">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-extrabold">Produtos e valores</h3>
+          <span className="text-xs font-semibold text-slate-500">
+            Quantidade por modelo
+          </span>
+        </div>
+        <div className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200">
+          {sale.models.map((model) => {
+            const serials = reportItems
+              .filter(
+                (item) =>
+                  item.product === model.name &&
+                  (!model.detail || item.detail === model.detail),
+              )
+              .map((item) => item.serial);
+            return (
+              <div
+                className="report-row p-3"
+                key={`${model.name}-${model.detail ?? ''}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-bold">{model.name}</p>
+                    {model.detail && (
+                      <p className="text-sm text-slate-600">{model.detail}</p>
+                    )}
+                    <p className="text-sm text-slate-600">
+                      {model.quantity}{' '}
+                      {model.quantity === 1 ? 'aparelho' : 'aparelhos'}
+                    </p>
+                  </div>
+                  <strong className="shrink-0">
+                    {formatMoney(model.total)}
+                  </strong>
+                </div>
+                {level !== 'simple' && (
+                  <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                      Números de série
+                    </p>
+                    {serials.length > 0 ? (
+                      <p className="mt-1 break-words font-mono text-sm font-semibold">
+                        {serials.join(' · ')}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-sm text-slate-600">
+                        SNs não registrados nesta venda demonstrativa.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {level !== 'simple' && reportItems.length > 0 && (
+        <section className="report-section mt-5">
+          <h3 className="font-extrabold">Itens detalhados</h3>
+          <div className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200">
+            {reportItems.map((item) => (
+              <div
+                className="report-row grid gap-2 p-3 sm:grid-cols-[1fr_auto] sm:items-center"
+                key={item.serial}
+              >
+                <div className="min-w-0">
+                  <p className="font-bold">{item.product}</p>
+                  <p className="text-sm text-slate-600">{item.detail}</p>
+                  <p className="mt-1 break-all font-mono text-sm font-semibold">
+                    SN {item.serial}
+                  </p>
+                </div>
+                <strong>{formatMoney(item.value)}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {level !== 'simple' && (
+        <section className="report-section mt-5">
+          <h3 className="font-extrabold">Formas de pagamento</h3>
+          {reportPayments.length > 0 ? (
+            <div className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200">
+              {reportPayments.map((payment, index) => (
+                <div
+                  className="report-row flex items-center justify-between gap-3 p-3"
+                  key={`${payment.method}-${index}`}
+                >
+                  <p className="font-semibold">
+                    {payment.method}
+                    {payment.bank ? ` · ${payment.bank}` : ''}
+                  </p>
+                  <strong>{formatMoney(payment.amount)}</strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              {sale.payment} · valores separados não registrados nesta venda
+              demonstrativa.
+            </p>
+          )}
+        </section>
+      )}
+
+      {level === 'complete' && (
+        <>
+          <section className="report-section mt-5">
+            <h3 className="font-extrabold">Dados da operação</h3>
+            <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
+              <ReportDetail label="Vendedor" value={sale.seller} />
+              <ReportDetail label="Situação" value={sale.status} />
+              <ReportDetail label="Data" value={formatSalesDay(sale.date)} />
+              <ReportDetail label="Horário" value={sale.time} />
+            </dl>
+          </section>
+
+          <section className="report-section mt-5">
+            <h3 className="font-extrabold">Fotos dos aparelhos</h3>
+            {photos.length > 0 ? (
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {photos.map((photo, index) => (
+                  <figure
+                    className="report-row overflow-hidden rounded-xl border border-slate-200"
+                    key={`${photo.name}-${index}`}
+                  >
+                    {photo.url && photo.mimeType.startsWith('image/') ? (
+                      <div className="relative aspect-[4/3] w-full">
+                        <Image
+                          alt={`${photo.product}, SN ${photo.serial}`}
+                          className="object-cover"
+                          fill
+                          sizes="(max-width: 640px) 50vw, 240px"
+                          src={photo.url}
+                          unoptimized
+                        />
+                      </div>
+                    ) : (
+                      <div className="grid aspect-[4/3] place-items-center bg-slate-100 text-slate-500">
+                        <Camera />
+                      </div>
+                    )}
+                    <figcaption className="p-2 text-xs">
+                      <span className="block truncate font-bold">
+                        {photo.product} · SN {photo.serial}
+                      </span>
+                      <span className="block truncate text-slate-500">
+                        {photo.name}
+                      </span>
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                Nenhuma foto disponível nesta venda demonstrativa.
+              </p>
+            )}
+          </section>
+
+          <section className="report-section mt-5">
+            <h3 className="font-extrabold">Comprovantes anexados</h3>
+            {receipts.length > 0 ? (
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {receipts.map((receipt, index) =>
+                  receipt.url && receipt.mimeType.startsWith('image/') ? (
+                    <figure
+                      className="report-row overflow-hidden rounded-xl border border-slate-200"
+                      key={`${receipt.name}-${index}`}
+                    >
+                      <div className="relative aspect-[16/10] w-full">
+                        <Image
+                          alt={`Comprovante ${receipt.name}`}
+                          className="object-contain"
+                          fill
+                          sizes="(max-width: 640px) 100vw, 360px"
+                          src={receipt.url}
+                          unoptimized
+                        />
+                      </div>
+                      <figcaption className="truncate p-2 text-xs font-semibold">
+                        {receipt.name}
+                      </figcaption>
+                    </figure>
+                  ) : (
+                    <div
+                      className="report-row rounded-xl border border-slate-200 p-3"
+                      key={`${receipt.name}-${index}`}
+                    >
+                      {receipt.url ? (
+                        <a
+                          className="flex items-center gap-3 font-semibold underline-offset-4 hover:underline"
+                          href={receipt.url}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          <Paperclip className="size-5 shrink-0" />
+                          <span className="truncate">{receipt.name}</span>
+                        </a>
+                      ) : (
+                        <p className="font-semibold">{receipt.name}</p>
+                      )}
+                      <p className="mt-1 text-xs text-slate-500">
+                        Arquivo disponível somente durante esta sessão; o PDF do
+                        relatório registra o nome do anexo.
+                      </p>
+                    </div>
+                  ),
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                Nenhum comprovante anexado a esta venda.
+              </p>
+            )}
+          </section>
+        </>
+      )}
+    </article>
+  );
+}
+
+function ReportMetric({
+  label,
+  value,
+  className = '',
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-xl bg-slate-100 p-3 ${className}`}>
+      <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </dt>
+      <dd className="mt-1 text-lg font-extrabold tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
+function ReportDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-3">
+      <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </dt>
+      <dd className="mt-1 font-semibold">{value}</dd>
+    </div>
   );
 }
 
@@ -926,13 +2099,16 @@ function groupSalesByModel(sales: SaleRow[]): SalesGroupRow[] {
   for (const sale of sales) {
     if (sale.status !== 'Concluída') continue;
     for (const model of sale.models) {
-      const current = grouped.get(model.name) ?? {
-        label: model.name,
+      const label = model.detail
+        ? `${model.name} · ${model.detail}`
+        : model.name;
+      const current = grouped.get(label) ?? {
+        label,
         sales: 0,
         items: 0,
         total: 0,
       };
-      grouped.set(model.name, {
+      grouped.set(label, {
         ...current,
         sales: current.sales + 1,
         items: current.items + model.quantity,
@@ -963,11 +2139,176 @@ function groupSalesByCustomer(sales: SaleRow[]): SalesGroupRow[] {
   return [...grouped.values()].sort((left, right) => right.total - left.total);
 }
 
+function buildStockReportRows(rows: StockRow[], includeTest: boolean) {
+  const grouped = new Map<string, StockReportRow>();
+  for (const row of rows) {
+    if (row.testOnly && !includeTest) continue;
+    const scope: StockReportRow['scope'] = row.testOnly ? 'test' : 'main';
+    const [color, memory] = splitStockDetail(row.detail);
+    const key = `${scope}\u0000${row.name}\u0000${color}\u0000${memory}`;
+    const current = grouped.get(key) ?? {
+      scope,
+      model: row.name,
+      color,
+      memory,
+      available: 0,
+      serials: [],
+    };
+    grouped.set(key, {
+      ...current,
+      available: current.available + row.available,
+      serials: Array.from(
+        new Set([...current.serials, ...(row.serials ?? [])]),
+      ),
+    });
+  }
+  return [...grouped.values()].sort((left, right) => {
+    if (left.scope !== right.scope) return left.scope === 'main' ? -1 : 1;
+    return `${left.model} ${left.color} ${left.memory}`.localeCompare(
+      `${right.model} ${right.color} ${right.memory}`,
+      'pt-BR',
+    );
+  });
+}
+
+function splitStockDetail(detail: string): [string, string] {
+  const parts = detail
+    .split('·')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return ['Não informada', 'Não informada'];
+  const [color, ...memoryParts] = parts;
+  return [color || 'Não informada', memoryParts.join(' · ') || 'Não informada'];
+}
+
 function formatSalesDay(date: string) {
   if (date === TODAY) return 'Hoje';
   if (date === YESTERDAY) return 'Ontem';
   const [year, month, day] = date.split('-');
   return year && month && day ? `${day}/${month}/${year}` : date;
+}
+
+function SystemGuideDialog({
+  open,
+  required,
+  onOpenChange,
+  onAcknowledge,
+}: {
+  open: boolean;
+  required: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAcknowledge: () => void;
+}) {
+  const steps = [
+    {
+      icon: Smartphone,
+      title: '1. Cadastre o produto',
+      description:
+        'Crie cada variação com modelo, cor e capacidade. Depois, vincule a ela um ou mais códigos UPC, EAN ou JAN.',
+    },
+    {
+      icon: Package,
+      title: '2. Dê entrada no estoque',
+      description:
+        'Entre em Entrada, bipe o UPC/EAN, confirme a variação, bipe cada SN uma única vez, tire as fotos e revise.',
+    },
+    {
+      icon: ShoppingBag,
+      title: '3. Faça a venda',
+      description:
+        'Pesquise o cliente pelo nome, bipe o SN, fotografe o aparelho e informe o preço. Para a mesma venda, escolha Bipar outro SN.',
+    },
+    {
+      icon: WalletCards,
+      title: '4. Registre o pagamento',
+      description:
+        'Adicione Pix ou dinheiro somente quando necessário. Um pagamento pode cobrir vários aparelhos, e o comprovante é opcional.',
+    },
+    {
+      icon: FileText,
+      title: '5. Consulte vendas e relatórios',
+      description:
+        'Filtre vendas por dia, agrupe por modelo ou cliente e gere relatórios de venda ou de estoque por variação e SN.',
+    },
+    {
+      icon: RotateCcw,
+      title: '6. Cancele sem apagar o histórico',
+      description:
+        'Abra o relatório da venda, escolha Cancelar venda e registre o motivo. O SN local volta a ficar disponível, mas o pagamento não é estornado automaticamente.',
+    },
+  ];
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent
+        className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[min(90dvh,50rem)] sm:max-w-3xl sm:rounded-2xl"
+        showCloseButton={!required}
+      >
+        <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12 sm:px-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Central de ajuda</Badge>
+            {required && (
+              <Badge className="bg-primary text-primary-foreground">
+                Leitura obrigatória
+              </Badge>
+            )}
+          </div>
+          <DialogTitle className="text-xl font-extrabold tracking-tight">
+            Como usar o sistema
+          </DialogTitle>
+          <DialogDescription>
+            {required
+              ? 'Este é seu primeiro acesso ou o sistema recebeu uma atualização. Leia as orientações para continuar.'
+              : 'Consulte novamente o fluxo recomendado e as novidades desta versão.'}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
+          <div className="mb-4 rounded-2xl border border-sky/30 bg-sky/10 p-4">
+            <p className="font-bold text-primary">Novidades desta versão</p>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              Etapas mais compactas, venda com vários aparelhos, comprovante por
+              foto ou arquivo, relatórios de venda e estoque e cancelamento com
+              motivo registrado.
+            </p>
+          </div>
+
+          <ol className="grid gap-3 sm:grid-cols-2">
+            {steps.map(({ icon: Icon, title, description }) => (
+              <li className="rounded-2xl border bg-card p-4" key={title}>
+                <span className="grid size-10 place-items-center rounded-xl bg-secondary text-primary">
+                  <Icon className="size-5" />
+                </span>
+                <h3 className="mt-3 font-bold">{title}</h3>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  {description}
+                </p>
+              </li>
+            ))}
+          </ol>
+
+          <div className="mt-4 rounded-2xl bg-amber-500/10 p-4 text-sm text-amber-950">
+            <p className="font-bold">Importante sobre este ambiente</p>
+            <p className="mt-1 leading-6">
+              Os dados marcados como TESTE LOCAL não são estoque nem vendas
+              reais. Fotos, comprovantes e vendas de teste permanecem somente
+              nesta sessão até a conexão com o banco e o armazenamento
+              definitivo.
+            </p>
+          </div>
+        </div>
+
+        <DialogFooter className="mx-0 mb-0 shrink-0 rounded-none border-t bg-background p-3 sm:p-4">
+          <Button
+            className="h-12 min-w-40 rounded-xl"
+            onClick={required ? onAcknowledge : () => onOpenChange(false)}
+          >
+            {required ? 'Li e entendi' : 'Fechar'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function SettingsView() {
@@ -1144,7 +2485,7 @@ function MobileNavigation({
   );
 }
 
-function AppHeader() {
+function AppHeader({ onOpenGuide }: { onOpenGuide: () => void }) {
   return (
     <header className="relative z-20 flex h-16 shrink-0 items-center justify-between border-b bg-background/92 px-4 backdrop-blur-xl sm:px-7 lg:h-[4.5rem] lg:px-10">
       <div className="lg:hidden">
@@ -1153,17 +2494,33 @@ function AppHeader() {
       <p className="hidden text-sm font-medium capitalize text-muted-foreground lg:block">
         {formatLongCurrentDate()}
       </p>
-      <Badge className="h-7 gap-1.5 bg-success/12 px-3 text-success ring-1 ring-success/15 hover:bg-success/12">
-        <span className="size-1.5 rounded-full bg-success" />
-        Online
-      </Badge>
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        <Button
+          aria-label="Abrir perfil, ajuda e novidades"
+          className="h-9 rounded-full px-2 sm:px-3 lg:hidden"
+          onClick={onOpenGuide}
+          variant="ghost"
+        >
+          <CircleUserRound />
+          <span className="hidden min-[390px]:inline">Jeferson</span>
+        </Button>
+        <Badge className="h-7 gap-1.5 bg-success/12 px-2.5 text-success ring-1 ring-success/15 hover:bg-success/12 sm:px-3">
+          <span className="size-1.5 rounded-full bg-success" />
+          Online
+        </Badge>
+      </div>
     </header>
   );
 }
 
-function OperatorCard() {
+function OperatorCard({ onOpenGuide }: { onOpenGuide: () => void }) {
   return (
-    <div className="mt-auto rounded-2xl border bg-card p-4">
+    <button
+      aria-label="Abrir perfil, ajuda e novidades"
+      className="mt-auto w-full rounded-2xl border bg-card p-4 text-left transition hover:border-primary/25 hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={onOpenGuide}
+      type="button"
+    >
       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
         Operador
       </p>
@@ -1173,10 +2530,12 @@ function OperatorCard() {
         </span>
         <div className="min-w-0">
           <p className="truncate font-semibold">Jeferson</p>
-          <p className="text-xs text-muted-foreground">Administrador</p>
+          <p className="text-xs text-muted-foreground">
+            Administrador · Ajuda e novidades
+          </p>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -1339,6 +2698,49 @@ function SaleStatus({ status }: { status: SaleStatusValue }) {
       Concluída
     </Badge>
   );
+}
+
+function createSaleAttachment(file: File, urlBucket: string[]): SaleAttachment {
+  let url: string | undefined;
+  try {
+    url = URL.createObjectURL(file);
+    urlBucket.push(url);
+  } catch {
+    // O nome e o tipo continuam disponíveis se a prévia local falhar.
+  }
+  return {
+    name: file.name || 'arquivo anexado',
+    mimeType: file.type || 'application/octet-stream',
+    url,
+  };
+}
+
+function formatBankName(bank: string) {
+  const names: Record<string, string> = {
+    nubank: 'Nubank',
+    itau: 'Itaú',
+    inter: 'Inter',
+  };
+  return names[bank] ?? bank;
+}
+
+function groupCompletedItemsByModel(items: SaleReportItem[]): SaleModel[] {
+  const grouped = new Map<string, SaleModel>();
+  for (const item of items) {
+    const key = `${item.product}\u0000${item.detail}`;
+    const current = grouped.get(key) ?? {
+      name: item.product,
+      detail: item.detail,
+      quantity: 0,
+      total: 0,
+    };
+    grouped.set(key, {
+      ...current,
+      quantity: current.quantity + 1,
+      total: current.total + item.value,
+    });
+  }
+  return [...grouped.values()];
 }
 
 function parseStoredTestEntries(value: string) {
@@ -1531,6 +2933,18 @@ function formatLongCurrentDate() {
     day: 'numeric',
     month: 'long',
   }).format(new Date());
+}
+
+function formatSaoPauloDateTime(date: Date) {
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
 }
 
 function formatMoney(cents: number) {
