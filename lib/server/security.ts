@@ -1,10 +1,8 @@
 import { requiredSecret } from '@/lib/server/runtime';
 
 const encoder = new TextEncoder();
-// Cloudflare Workers limits a single Web Crypto PBKDF2 operation to 100,000
-// iterations. A deployment-only pepper and strict login throttling provide the
-// additional protection around this platform-compatible work factor.
-const PASSWORD_ITERATIONS = 100_000;
+export const PASSWORD_ITERATIONS = 600_000;
+const PBKDF2_OPERATION_LIMIT = 100_000;
 const RECOVERY_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 export function randomToken(bytes = 32) {
@@ -40,24 +38,42 @@ export async function hashPassword(
   iterations = PASSWORD_ITERATIONS,
 ) {
   const pepper = requiredSecret('PASSWORD_PEPPER_V1');
-  const material = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(`${password}\u0000${pepper}`),
-    'PBKDF2',
-    false,
-    ['deriveBits'],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: fromBase64Url(salt),
-      iterations,
-    },
-    material,
-    256,
-  );
-  return { hash: toBase64Url(new Uint8Array(bits)), salt, iterations };
+  const baseSalt = fromBase64Url(salt);
+  let materialBytes = encoder.encode(`${password}\u0000${pepper}`);
+  let remaining = iterations;
+  let round = 0;
+
+  // Workers caps each Web Crypto PBKDF2 call at 100k iterations. Chaining
+  // domain-separated rounds retains the full 600k sequential work factor while
+  // keeping every individual operation within the platform limit.
+  while (remaining > 0) {
+    const material = await crypto.subtle.importKey(
+      'raw',
+      materialBytes,
+      'PBKDF2',
+      false,
+      ['deriveBits'],
+    );
+    const roundSalt =
+      round === 0
+        ? baseSalt
+        : concatBytes(baseSalt, encoder.encode(`\u0000round:${round}`));
+    const operationIterations = Math.min(remaining, PBKDF2_OPERATION_LIMIT);
+    const bits = await crypto.subtle.deriveBits(
+      {
+        name: 'PBKDF2',
+        hash: 'SHA-256',
+        salt: roundSalt,
+        iterations: operationIterations,
+      },
+      material,
+      256,
+    );
+    materialBytes = new Uint8Array(bits);
+    remaining -= operationIterations;
+    round += 1;
+  }
+  return { hash: toBase64Url(materialBytes), salt, iterations };
 }
 
 export async function verifyPassword(
@@ -66,8 +82,26 @@ export async function verifyPassword(
   iterations: number,
   expected: string,
 ) {
-  const actual = (await hashPassword(password, salt, iterations)).hash;
-  return timingSafeEqual(actual, expected);
+  const supported =
+    Number.isSafeInteger(iterations) &&
+    iterations >= PBKDF2_OPERATION_LIMIT &&
+    iterations <= PASSWORD_ITERATIONS &&
+    iterations % PBKDF2_OPERATION_LIMIT === 0;
+  const actual = (
+    await hashPassword(
+      password,
+      salt,
+      supported ? iterations : PASSWORD_ITERATIONS,
+    )
+  ).hash;
+  return supported && timingSafeEqual(actual, expected);
+}
+
+function concatBytes(left: Uint8Array, right: Uint8Array) {
+  const combined = new Uint8Array(left.length + right.length);
+  combined.set(left);
+  combined.set(right, left.length);
+  return combined;
 }
 
 export function timingSafeEqual(left: string, right: string) {

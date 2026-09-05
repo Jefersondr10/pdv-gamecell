@@ -22,6 +22,7 @@ import {
   normalizeEmail,
   normalizeStoreCode,
   normalizeUsername,
+  PASSWORD_ITERATIONS,
   sha256,
   toBase64Url,
   verifyPassword,
@@ -150,7 +151,7 @@ export async function POST(request: Request) {
     const valid = await verifyPassword(
       password,
       row?.passwordSalt ?? dummySalt,
-      row?.passwordIterations ?? 600_000,
+      row?.passwordIterations ?? PASSWORD_ITERATIONS,
       row?.passwordHash ?? 'invalid-password-hash',
     );
     if (!row || !valid || !row.active) {
