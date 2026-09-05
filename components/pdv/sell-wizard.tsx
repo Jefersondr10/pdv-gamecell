@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -38,6 +38,7 @@ type SaleStep =
   | 'serial'
   | 'photo'
   | 'price'
+  | 'items'
   | 'payments'
   | 'receipt'
   | 'review'
@@ -50,6 +51,13 @@ type SaleItem = {
   photoCount: number;
   priceCents: number;
 };
+
+type SaleProduct = {
+  product: string;
+  detail: string;
+};
+
+export type SaleProductLookup = Record<string, SaleProduct>;
 
 type PaymentMethod = 'pix' | 'cash';
 
@@ -65,6 +73,7 @@ const SALE_STEPS = [
   'SN',
   'Foto',
   'Preço',
+  'Aparelhos',
   'Pagamentos',
   'Comprovante',
   'Revisão',
@@ -84,30 +93,49 @@ const STEP_INDEX: Record<SaleStep, number> = {
   serial: 1,
   photo: 2,
   price: 3,
-  payments: 4,
-  receipt: 5,
-  review: 6,
-  done: 6,
+  items: 4,
+  payments: 5,
+  receipt: 6,
+  review: 7,
+  done: 7,
 };
 
-export function SellWizard({ stagedSerial = '' }: { stagedSerial?: string }) {
+export function SellWizard({
+  stagedSerial = '',
+  productsBySerial = {},
+}: {
+  stagedSerial?: string;
+  productsBySerial?: SaleProductLookup;
+}) {
   const initialSerial = stagedSerial
     ? normalizeCandidate(stagedSerial, 'manual_code_128', 'apple_serial')
+    : null;
+  const initialProduct = initialSerial
+    ? productsBySerial[initialSerial.normalizedValue]
     : null;
   const [step, setStep] = useState<SaleStep>('customer');
   const [customer, setCustomer] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
   const [pendingSerial, setPendingSerial] = useState<ScanCandidate | null>(
-    initialSerial,
+    initialProduct ? initialSerial : null,
+  );
+  const [pendingProduct, setPendingProduct] = useState<SaleProduct | null>(
+    initialProduct,
   );
   const [photoCount, setPhotoCount] = useState(0);
   const [price, setPrice] = useState('9.999,00');
   const [items, setItems] = useState<SaleItem[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
   const [receiptNames, setReceiptNames] = useState<string[]>([]);
+  const [serialWarning, setSerialWarning] = useState(
+    initialSerial && !initialProduct
+      ? `O SN ${initialSerial.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`
+      : '',
+  );
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Pesquise o cliente para começar.',
   );
+  const itemsRef = useRef<SaleItem[]>([]);
 
   const total = useMemo(
     () => items.reduce((sum, item) => sum + item.priceCents, 0),
@@ -132,6 +160,8 @@ export function SellWizard({ stagedSerial = '' }: { stagedSerial?: string }) {
     if (step === 'serial') return 'Localize o aparelho pelo número de série.';
     if (step === 'photo') return 'Vincule a foto deste aparelho.';
     if (step === 'price') return 'Informe o preço unitário.';
+    if (step === 'items')
+      return 'Bipe outro SN ou siga com o pagamento da venda inteira.';
     if (step === 'payments')
       return 'Adicione somente as formas usadas nesta venda.';
     if (step === 'receipt') return 'Anexe o comprovante ou pule esta etapa.';
@@ -145,59 +175,125 @@ export function SellWizard({ stagedSerial = '' }: { stagedSerial?: string }) {
     setCustomer('');
     setCustomerQuery('');
     setPendingSerial(null);
+    setPendingProduct(null);
     setPhotoCount(0);
     setPrice('9.999,00');
     setItems([]);
+    itemsRef.current = [];
     setPayments([]);
     setReceiptNames([]);
+    setSerialWarning('');
     setAnnouncement('Nova venda. Pesquise o cliente para começar.');
+  };
+
+  const clearCheckout = () => {
+    const hadCheckout = payments.length > 0 || receiptNames.length > 0;
+    setPayments([]);
+    setReceiptNames([]);
+    return hadCheckout;
   };
 
   const acceptSerial = (candidate: ScanCandidate) => {
     if (
-      items.some(
+      itemsRef.current.some(
         (item) => item.serial.normalizedValue === candidate.normalizedValue,
       )
     ) {
-      setAnnouncement(
-        `O SN ${candidate.normalizedValue} já está nesta venda e foi ignorado.`,
-      );
+      const warning = `O SN ${candidate.normalizedValue} já está nesta venda. Bipe outro SN.`;
+      setPendingSerial(null);
+      setPendingProduct(null);
+      setSerialWarning(warning);
+      navigator.vibrate?.([120, 80, 120]);
       return;
     }
+    const product = productsBySerial[candidate.normalizedValue];
+    if (!product) {
+      const warning = `O SN ${candidate.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`;
+      setPendingSerial(null);
+      setPendingProduct(null);
+      setSerialWarning(warning);
+      navigator.vibrate?.([120, 80, 120]);
+      return;
+    }
+    setSerialWarning('');
     setPendingSerial(candidate);
+    setPendingProduct(product);
     setAnnouncement(`SN ${candidate.normalizedValue} localizado e disponível.`);
   };
 
   const addPendingItem = () => {
-    if (!pendingSerial) return;
+    if (!pendingSerial || !pendingProduct) return;
     const priceCents = parseMoney(price);
     if (priceCents <= 0) return;
-    setItems((current) => [
-      ...current,
+    if (
+      itemsRef.current.some(
+        (item) => item.serial.normalizedValue === pendingSerial.normalizedValue,
+      )
+    ) {
+      const warning = `O SN ${pendingSerial.normalizedValue} já está nesta venda e não foi adicionado novamente.`;
+      setSerialWarning(warning);
+      setAnnouncement(warning);
+      return;
+    }
+
+    const nextItems = [
+      ...itemsRef.current,
       {
         serial: pendingSerial,
-        product: 'iPhone 17 Pro Max',
-        detail: 'Deep Blue · 256 GB',
+        product: pendingProduct.product,
+        detail: pendingProduct.detail,
         photoCount,
         priceCents,
       },
-    ]);
+    ];
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+    const checkoutReset = clearCheckout();
     setPendingSerial(null);
+    setPendingProduct(null);
     setPhotoCount(0);
     setPrice('9.999,00');
-    setStep('payments');
-    setAnnouncement('Etapa 5. Adicione as formas de pagamento utilizadas.');
+    setSerialWarning('');
+    setStep('items');
+    setAnnouncement(
+      checkoutReset
+        ? 'Aparelho adicionado. Pagamentos e comprovantes foram reiniciados porque o total mudou.'
+        : 'Etapa 5. Aparelho adicionado. Bipe outro SN ou vá para o pagamento.',
+    );
   };
 
-  const editLastItem = () => {
-    const lastItem = items.at(-1);
-    if (!lastItem) return;
-    setItems((current) => current.slice(0, -1));
-    setPendingSerial(lastItem.serial);
-    setPhotoCount(lastItem.photoCount);
-    setPrice(formatMoneyInput(lastItem.priceCents));
-    setStep('price');
-    setAnnouncement('Edite o preço do último aparelho.');
+  const removeItem = (serial: string) => {
+    const nextItems = itemsRef.current.filter(
+      (item) => item.serial.normalizedValue !== serial,
+    );
+    if (nextItems.length === itemsRef.current.length) return;
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+    const checkoutReset = clearCheckout();
+    if (nextItems.length === 0) {
+      setStep('serial');
+      setAnnouncement(
+        checkoutReset
+          ? 'A venda ficou sem aparelhos. Pagamentos e comprovantes foram reiniciados. Bipe um SN para continuar.'
+          : 'A venda ficou sem aparelhos. Bipe um SN para continuar.',
+      );
+      return;
+    }
+    setAnnouncement(
+      checkoutReset
+        ? 'Aparelho removido. Pagamentos e comprovantes foram reiniciados porque o total mudou.'
+        : 'Aparelho removido da venda.',
+    );
+  };
+
+  const scanAnotherItem = () => {
+    setPendingSerial(null);
+    setPendingProduct(null);
+    setPhotoCount(0);
+    setPrice('9.999,00');
+    setSerialWarning('');
+    setStep('serial');
+    setAnnouncement('Bipe o SN do próximo aparelho.');
   };
 
   const addPayment = (method: PaymentMethod) => {
@@ -272,15 +368,19 @@ export function SellWizard({ stagedSerial = '' }: { stagedSerial?: string }) {
         <SaleSerialStage
           candidate={pendingSerial}
           onAccepted={acceptSerial}
-          onBack={() => setStep(items.length > 0 ? 'review' : 'customer')}
+          onBack={() => setStep(items.length > 0 ? 'items' : 'customer')}
           onConfirm={() => {
             setStep('photo');
             setAnnouncement('Etapa 3. Fotografe o aparelho.');
           }}
           onRescan={() => {
             setPendingSerial(null);
+            setPendingProduct(null);
+            setSerialWarning('');
             setAnnouncement('Faça uma nova leitura do SN.');
           }}
+          product={pendingProduct}
+          warning={serialWarning}
         />
       )}
 
@@ -302,24 +402,46 @@ export function SellWizard({ stagedSerial = '' }: { stagedSerial?: string }) {
         />
       )}
 
-      {step === 'price' && pendingSerial && (
+      {step === 'price' && pendingSerial && pendingProduct && (
         <PriceStage
           candidate={pendingSerial}
           onBack={() => setStep('photo')}
           onChange={setPrice}
           onNext={addPendingItem}
+          product={pendingProduct}
           value={price}
+        />
+      )}
+
+      {step === 'items' && (
+        <SaleItemsStage
+          items={items}
+          onAddAnother={scanAnotherItem}
+          onNext={() => {
+            setStep('payments');
+            setAnnouncement(
+              'Etapa 6. Adicione as formas de pagamento da venda inteira.',
+            );
+          }}
+          onRemove={removeItem}
+          total={total}
         />
       )}
 
       {step === 'payments' && (
         <PaymentStage
+          itemCount={items.length}
           onAdd={addPayment}
-          onBack={editLastItem}
+          onBack={() => {
+            setStep('items');
+            setAnnouncement(
+              'Revise os aparelhos ou siga novamente para o pagamento.',
+            );
+          }}
           onNext={() => {
             setStep('receipt');
             setAnnouncement(
-              'Etapa 6. Anexe um comprovante ou use Pular comprovante.',
+              'Etapa 7. Anexe um comprovante ou use Pular comprovante.',
             );
           }}
           onRemove={removePayment}
@@ -353,11 +475,9 @@ export function SellWizard({ stagedSerial = '' }: { stagedSerial?: string }) {
         <SaleReview
           customer={customer}
           items={items}
-          onAddAnother={() => {
-            setPendingSerial(null);
-            setPhotoCount(0);
-            setStep('serial');
-            setAnnouncement('Bipe o SN do próximo aparelho.');
+          onEditItems={() => {
+            setStep('items');
+            setAnnouncement('Revise os aparelhos antes de finalizar a venda.');
           }}
           onBack={() => setStep('receipt')}
           onConfirm={() => {
@@ -483,12 +603,16 @@ function CustomerStage({
 
 function SaleSerialStage({
   candidate,
+  product,
+  warning,
   onAccepted,
   onBack,
   onConfirm,
   onRescan,
 }: {
   candidate: ScanCandidate | null;
+  product: SaleProduct | null;
+  warning: string;
   onAccepted: (candidate: ScanCandidate) => void;
   onBack: () => void;
   onConfirm: () => void;
@@ -502,6 +626,7 @@ function SaleSerialStage({
           fill
           description="IMEI, EID e códigos numéricos ao redor não são considerados SN."
           mode="apple_serial"
+          notice={warning}
           onAccepted={onAccepted}
           onBack={onBack}
           title="2. Bipar somente o SN"
@@ -518,8 +643,12 @@ function SaleSerialStage({
             <Smartphone className="size-8" />
           </span>
           <p className="eyebrow mt-5">Aparelho disponível</p>
-          <h2 className="mt-1 text-xl font-bold">iPhone 17 Pro Max</h2>
-          <p className="text-sm text-muted-foreground">Deep Blue · 256 GB</p>
+          <h2 className="mt-1 text-xl font-bold">
+            {product?.product ?? 'Produto não identificado'}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {product?.detail ?? 'Confira o estoque antes de continuar'}
+          </p>
           <p className="mx-auto mt-4 w-fit rounded-xl bg-muted px-4 py-2 font-mono text-sm font-bold">
             SN {candidate.normalizedValue}
           </p>
@@ -531,10 +660,14 @@ function SaleSerialStage({
           onClick={onRescan}
           variant="outline"
         >
-          <ScanBarcode /> Ler novamente
+          <ScanBarcode />
+          <span className="sm:hidden">Reler</span>
+          <span className="hidden sm:inline">Ler novamente</span>
         </Button>
         <Button className="h-12 rounded-xl" onClick={onConfirm}>
-          Confirmar aparelho <ArrowRight />
+          <span className="sm:hidden">Confirmar</span>
+          <span className="hidden sm:inline">Confirmar aparelho</span>
+          <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
     </Card>
@@ -594,7 +727,9 @@ function SalePhotoStage({
           disabled={photoCount === 0}
           onClick={onNext}
         >
-          Informar preço <ArrowRight />
+          <span className="sm:hidden">Preço</span>
+          <span className="hidden sm:inline">Informar preço</span>
+          <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
     </Card>
@@ -603,12 +738,14 @@ function SalePhotoStage({
 
 function PriceStage({
   candidate,
+  product,
   value,
   onChange,
   onBack,
   onNext,
 }: {
   candidate: ScanCandidate;
+  product: SaleProduct;
   value: string;
   onChange: (value: string) => void;
   onBack: () => void;
@@ -624,7 +761,10 @@ function PriceStage({
               <Smartphone className="size-6" />
             </span>
             <div className="min-w-0">
-              <p className="truncate font-bold">iPhone 17 Pro Max</p>
+              <p className="truncate font-bold">{product.product}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {product.detail}
+              </p>
               <p className="truncate text-sm text-muted-foreground">
                 SN {candidate.normalizedValue}
               </p>
@@ -655,7 +795,104 @@ function PriceStage({
           <ArrowLeft /> Voltar
         </Button>
         <Button className="h-12 rounded-xl" disabled={!valid} onClick={onNext}>
-          Pagamentos <ArrowRight />
+          <span className="sm:hidden">Adicionar</span>
+          <span className="hidden sm:inline">Adicionar aparelho</span>
+          <ArrowRight className="hidden sm:block" />
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function SaleItemsStage({
+  items,
+  total,
+  onAddAnother,
+  onRemove,
+  onNext,
+}: {
+  items: SaleItem[];
+  total: number;
+  onAddAnother: () => void;
+  onRemove: (serial: string) => void;
+  onNext: () => void;
+}) {
+  return (
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+      <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
+        <div className="mx-auto max-w-2xl">
+          <div className="rounded-2xl bg-secondary p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-bold">Aparelhos desta venda</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Cada SN é um aparelho. O pagamento será do total da venda.
+                </p>
+              </div>
+              <Badge className="shrink-0" variant="secondary">
+                {items.length} {items.length === 1 ? 'item' : 'itens'}
+              </Badge>
+            </div>
+          </div>
+
+          <ul className="mt-4 space-y-2" aria-label="Aparelhos da venda">
+            {items.map((item) => (
+              <li
+                className="flex items-center gap-3 rounded-2xl border bg-background p-3"
+                key={item.serial.normalizedValue}
+              >
+                <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
+                  <Smartphone className="size-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold">{item.product}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {item.detail}
+                  </p>
+                  <p className="truncate font-mono text-xs text-muted-foreground">
+                    SN {item.serial.normalizedValue}
+                  </p>
+                </div>
+                <strong className="shrink-0 text-sm">
+                  {formatMoney(item.priceCents)}
+                </strong>
+                <Button
+                  aria-label={`Remover ${item.product}, SN ${item.serial.normalizedValue}`}
+                  className="size-11 shrink-0"
+                  onClick={() => onRemove(item.serial.normalizedValue)}
+                  size="icon"
+                  variant="ghost"
+                >
+                  <Trash2 />
+                </Button>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-4 flex items-center justify-between rounded-2xl bg-muted p-4">
+            <span className="font-semibold">Total da venda</span>
+            <strong className="text-lg">{formatMoney(total)}</strong>
+          </div>
+        </div>
+      </CardContent>
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
+        <Button
+          className="h-12 rounded-xl"
+          onClick={onAddAnother}
+          variant="outline"
+        >
+          <ScanBarcode />
+          <span className="sm:hidden">Outro SN</span>
+          <span className="hidden sm:inline">Bipar outro SN</span>
+        </Button>
+        <Button
+          className="h-12 rounded-xl"
+          disabled={items.length === 0}
+          onClick={onNext}
+        >
+          <span className="sm:hidden">Pagamento</span>
+          <span className="hidden sm:inline">Ir para pagamento</span>
+          <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
     </Card>
@@ -663,6 +900,7 @@ function PriceStage({
 }
 
 function PaymentStage({
+  itemCount,
   total,
   paid,
   remaining,
@@ -674,6 +912,7 @@ function PaymentStage({
   onBack,
   onNext,
 }: {
+  itemCount: number;
   total: number;
   paid: number;
   remaining: number;
@@ -691,6 +930,17 @@ function PaymentStage({
     <Card className="flex h-full min-h-0 flex-col overflow-hidden">
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
         <div className="mx-auto max-w-2xl space-y-3">
+          <div className="rounded-2xl bg-secondary px-4 py-3">
+            <p className="font-bold">Pagamento da venda inteira</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              As formas de pagamento cobrem{' '}
+              {itemCount === 1
+                ? 'o total do aparelho'
+                : `o total dos ${itemCount} aparelhos`}{' '}
+              desta venda.
+            </p>
+          </div>
+
           {payments.length === 0 && (
             <div className="rounded-2xl border border-dashed bg-muted/25 p-5 text-center">
               <WalletCards className="mx-auto size-7 text-primary" />
@@ -838,7 +1088,7 @@ function PaymentStage({
           <ArrowLeft /> Voltar
         </Button>
         <Button className="h-12 rounded-xl" disabled={!ready} onClick={onNext}>
-          Comprovante <ArrowRight />
+          Comprovante <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
     </Card>
@@ -952,7 +1202,7 @@ function SaleReview({
   total,
   paid,
   onBack,
-  onAddAnother,
+  onEditItems,
   onConfirm,
 }: {
   customer: string;
@@ -962,7 +1212,7 @@ function SaleReview({
   total: number;
   paid: number;
   onBack: () => void;
-  onAddAnother: () => void;
+  onEditItems: () => void;
   onConfirm: () => void;
 }) {
   return (
@@ -1002,7 +1252,8 @@ function SaleReview({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{item.product}</p>
                     <p className="truncate font-mono text-xs text-muted-foreground">
-                      SN {item.serial.normalizedValue} · {item.photoCount} foto
+                      SN {item.serial.normalizedValue} · {item.photoCount}{' '}
+                      {item.photoCount === 1 ? 'foto' : 'fotos'}
                     </p>
                   </div>
                   <strong className="text-sm">
@@ -1013,10 +1264,10 @@ function SaleReview({
             </div>
             <Button
               className="mt-3 h-11 w-full rounded-xl border-dashed"
-              onClick={onAddAnother}
+              onClick={onEditItems}
               variant="outline"
             >
-              <Plus /> Adicionar outro aparelho
+              <Smartphone /> Alterar aparelhos
             </Button>
           </section>
 
@@ -1034,7 +1285,9 @@ function SaleReview({
               <div className="flex items-center justify-between gap-3">
                 <span className="font-semibold">Comprovante</span>
                 <strong>
-                  {receiptCount > 0 ? `${receiptCount} anexado` : 'Pulado'}
+                  {receiptCount > 0
+                    ? `${receiptCount} ${receiptCount === 1 ? 'anexado' : 'anexados'}`
+                    : 'Pulado'}
                 </strong>
               </div>
             </div>

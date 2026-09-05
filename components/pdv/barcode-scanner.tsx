@@ -26,6 +26,7 @@ type BarcodeScannerProps = {
   onAccepted: (candidate: ScanCandidate) => void;
   title?: string;
   description?: string;
+  notice?: string;
   autoStart?: boolean;
   fill?: boolean;
   onBack?: () => void;
@@ -35,10 +36,10 @@ export function BarcodeScanner({
   mode,
   onAccepted,
   title = mode === 'product' ? 'Leitor de produto' : 'Leitor de SN',
-  description =
-    mode === 'product'
-      ? 'Aponte para o UPC, EAN ou JAN da embalagem.'
-      : 'Alinhe somente a faixa do SN. IMEI, EID e outros códigos serão ignorados.',
+  description = mode === 'product'
+    ? 'Aponte para o UPC, EAN ou JAN da embalagem.'
+    : 'Alinhe somente a faixa do SN. IMEI, EID e outros códigos serão ignorados.',
+  notice = '',
   autoStart = false,
   fill = false,
   onBack,
@@ -122,7 +123,9 @@ export function BarcodeScanner({
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-4 py-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold tracking-tight sm:text-lg">{title}</h2>
+            <h2 className="text-base font-bold tracking-tight sm:text-lg">
+              {title}
+            </h2>
             <Badge className="bg-white/10 text-white ring-1 ring-white/10 hover:bg-white/10">
               {mode === 'product' ? 'UPC · EAN · JAN' : 'Somente SN'}
             </Badge>
@@ -162,7 +165,9 @@ export function BarcodeScanner({
                 <Camera className="size-6 text-sky" strokeWidth={1.8} />
               </span>
               <p className="mt-3 text-sm font-semibold sm:text-base">
-                {requestingPermission ? 'Abrindo a câmera…' : 'Câmera desligada'}
+                {requestingPermission
+                  ? 'Abrindo a câmera…'
+                  : 'Câmera desligada'}
               </p>
               <p className="mt-1 text-xs leading-5 text-white/50 sm:text-sm">
                 O acesso é usado somente durante esta etapa.
@@ -178,16 +183,22 @@ export function BarcodeScanner({
             </p>
           )}
 
-          {error && (
-            <div className="absolute inset-x-3 top-3 z-20 flex items-start gap-2 rounded-xl bg-amber-950/90 px-3 py-2.5 text-left text-sm text-amber-50 ring-1 ring-amber-300/20 backdrop-blur">
+          {(error || notice) && (
+            <div
+              className="absolute inset-x-3 top-3 z-20 flex items-start gap-2 rounded-xl bg-amber-950/90 px-3 py-2.5 text-left text-sm text-amber-50 ring-1 ring-amber-300/20 backdrop-blur"
+              role="alert"
+            >
               <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-              <span>{error}</span>
+              <span>{error || notice}</span>
             </div>
           )}
 
           {showManual && (
             <div className="absolute inset-x-3 bottom-3 z-30 rounded-2xl border border-white/15 bg-[#07182a]/95 p-3 text-left shadow-2xl backdrop-blur">
-              <label className="text-sm font-semibold" htmlFor={`manual-${mode}`}>
+              <label
+                className="text-sm font-semibold"
+                htmlFor={`manual-${mode}`}
+              >
                 {mode === 'product' ? 'Código comercial' : 'Número de série'}
               </label>
               <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
@@ -199,7 +210,9 @@ export function BarcodeScanner({
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') submitManual();
                   }}
-                  placeholder={mode === 'product' ? '195950638011' : 'HC9P06R095'}
+                  placeholder={
+                    mode === 'product' ? '195950638011' : 'HC9P06R095'
+                  }
                   value={manualValue}
                 />
                 <Button
@@ -231,7 +244,11 @@ export function BarcodeScanner({
             disabled={requestingPermission}
             onClick={scanning ? stop : start}
           >
-            {scanning ? <Pause className="size-5" /> : <ScanLine className="size-5" />}
+            {scanning ? (
+              <Pause className="size-5" />
+            ) : (
+              <ScanLine className="size-5" />
+            )}
             {scanning
               ? 'Pausar'
               : requestingPermission

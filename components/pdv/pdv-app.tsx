@@ -28,7 +28,10 @@ import {
   type LocalTestEntryCommitResult,
   type LocalTestEntryRecord,
 } from '@/components/pdv/entry-wizard';
-import { SellWizard } from '@/components/pdv/sell-wizard';
+import {
+  SellWizard,
+  type SaleProductLookup,
+} from '@/components/pdv/sell-wizard';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -231,6 +234,18 @@ export function PdvApp() {
     () => testEntries.flatMap((entry) => entry.serials),
     [testEntries],
   );
+  const saleProductsBySerial = useMemo<SaleProductLookup>(() => {
+    const lookup: SaleProductLookup = {};
+    for (const entry of testEntries) {
+      for (const serial of entry.serials) {
+        lookup[serial.trim().toUpperCase()] = {
+          product: entry.productName,
+          detail: entry.productDetail,
+        };
+      }
+    }
+    return lookup;
+  }, [testEntries]);
 
   const changeView = (view: View) => {
     if (view === 'sell') setStagedSerial('');
@@ -408,7 +423,11 @@ export function PdvApp() {
         </div>
         <div className="min-h-0 flex-1 overflow-hidden pb-[calc(4.75rem+env(safe-area-inset-bottom))] lg:pb-0">
           {activeView === 'sell' && (
-            <SellWizard key={`sell-${viewRun}`} stagedSerial={stagedSerial} />
+            <SellWizard
+              key={`sell-${viewRun}`}
+              productsBySerial={saleProductsBySerial}
+              stagedSerial={stagedSerial}
+            />
           )}
           {activeView === 'entry' && (
             <EntryWizard
