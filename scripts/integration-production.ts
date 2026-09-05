@@ -472,21 +472,28 @@ const soldProductDetails = await call(
   { cookie: ownerCookie },
 );
 assert.equal(soldProductDetails.body.total, 2);
+const soldInventoryItems = soldProductDetails.body.items as Array<{
+  id: string;
+  status: string;
+  saleId: string | null;
+  saleNumber: number | null;
+  photos: unknown[];
+}>;
 assert.deepEqual(
-  (
-    soldProductDetails.body.items as Array<{
-      status: string;
-      photos: unknown[];
-    }>
-  ).map((item) => item.status),
+  soldInventoryItems.map((item) => item.status),
   ['sold', 'sold'],
 );
-assert.ok(
-  (
-    soldProductDetails.body.items as Array<{
-      photos: unknown[];
-    }>
-  ).every((item) => item.photos.length === 1),
+assert.ok(soldInventoryItems.every((item) => item.photos.length === 1));
+assert.ok(soldInventoryItems.every((item) => item.saleId === saleId));
+assert.ok(soldInventoryItems.every((item) => item.saleNumber === 1));
+const exactInventoryUnit = await call(
+  `/api/inventory?unitId=${encodeURIComponent(soldInventoryItems[0].id)}&status=all&limit=10&includePhotos=1`,
+  { cookie: ownerCookie },
+);
+assert.equal(exactInventoryUnit.body.total, 1);
+assert.equal(
+  (exactInventoryUnit.body.items as Array<{ saleId: string }>)[0].saleId,
+  saleId,
 );
 
 const sales = await call('/api/sales?group=sale&limit=50', {
@@ -502,6 +509,11 @@ assert.equal(
   900_000,
 );
 assert.equal((sales.body.aggregates as { alertCount: number }).alertCount, 1);
+const alertedSales = await call(
+  '/api/sales?group=sale&limit=50&period=all&alert=1',
+  { cookie: ownerCookie },
+);
+assert.equal(alertedSales.body.total, 1);
 const listedSale = (
   sales.body.items as Array<{
     id: string;
@@ -708,6 +720,21 @@ assert.equal(editedSale.orderStatus?.name, 'Pagamento pendente');
 assert.equal(editedSale.orderStatus?.color, 'orange');
 assert.equal(editedSale.receipts.length, 1);
 assert.equal(
+  (editedSales.body.aggregates as { alertCount: number }).alertCount,
+  0,
+);
+const clearedAlerts = await call(
+  '/api/sales?group=sale&limit=50&period=all&alert=1',
+  { cookie: ownerCookie },
+);
+assert.equal(clearedAlerts.body.total, 0);
+const exactSale = await call(
+  `/api/sales?group=sale&period=all&saleId=${encodeURIComponent(saleId)}`,
+  { cookie: ownerCookie },
+);
+assert.equal(exactSale.body.total, 1);
+assert.equal((exactSale.body.items as Array<{ id: string }>)[0].id, saleId);
+assert.equal(
   editedSale.items.find((item) => item.id === listedSale.items[0].id)?.photos
     .length,
   2,
@@ -835,6 +862,10 @@ await call('/api/sales?group=all&period=day&day=2026-02-31', {
   cookie: ownerCookie,
   expected: 400,
 });
+await call('/api/sales?group=sale&period=all&alert=yes', {
+  cookie: ownerCookie,
+  expected: 400,
+});
 
 await call(`/api/sales/${saleId}/cancel`, {
   method: 'POST',
@@ -927,13 +958,56 @@ const changedStaffSession = await call('/api/auth/session', {
 const changedStaffCsrf = String(changedStaffSession.body.csrfToken);
 await call('/api/bootstrap', { cookie: staffCookie });
 
+const staffClientName = `Cliente operador ${runId}`;
+const staffClientOperationId = crypto.randomUUID();
+const staffClientPayload = {
+  operationId: staffClientOperationId,
+  name: staffClientName,
+  phone: '11955550999',
+};
+const staffClient = await call('/api/clients', {
+  method: 'POST',
+  cookie: staffCookie,
+  expected: 201,
+  headers: {
+    'x-csrf-token': changedStaffCsrf,
+    'content-type': 'application/json',
+  },
+  body: JSON.stringify(staffClientPayload),
+});
+const staffClientId = String(staffClient.body.id);
+const replayedStaffClient = await call('/api/clients', {
+  method: 'POST',
+  cookie: staffCookie,
+  headers: {
+    'x-csrf-token': changedStaffCsrf,
+    'content-type': 'application/json',
+  },
+  body: JSON.stringify(staffClientPayload),
+});
+assert.equal(replayedStaffClient.body.id, staffClientId);
+assert.equal(replayedStaffClient.body.replayed, true);
+const conflictingStaffClient = await call('/api/clients', {
+  method: 'POST',
+  cookie: staffCookie,
+  expected: 409,
+  headers: {
+    'x-csrf-token': changedStaffCsrf,
+    'content-type': 'application/json',
+  },
+  body: JSON.stringify({ ...staffClientPayload, name: 'Outro cliente' }),
+});
+assert.equal(conflictingStaffClient.body.code, 'OPERATION_REUSED');
+
 const activeSaleForm = new FormData();
+const activeSaleOperationId = crypto.randomUUID();
 activeSaleForm.set(
   'payload',
   JSON.stringify({
-    customerId: clientId,
+    operationId: activeSaleOperationId,
+    customerId: staffClientId,
     items: [{ serial: 'HC9P06R095', priceCents: 500_000 }],
-    payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 450_000 }],
+    payments: [],
   }),
 );
 activeSaleForm.append('itemPhotos:0', tinyPhoto(), 'aparelho-ativo.png');
@@ -945,6 +1019,74 @@ const activeSale = await call('/api/sales', {
   body: activeSaleForm,
 });
 assert.equal(activeSale.body.number, 2);
+assert.equal(activeSale.body.receivedTotalCents, 0);
+assert.equal(activeSale.body.receivedDifferenceCents, -500_000);
+const unpaidSales = await call(
+  '/api/sales?group=sale&period=all&alert=1&limit=50',
+  { cookie: staffCookie },
+);
+const unpaidSale = (
+  unpaidSales.body.items as Array<{
+    id: string;
+    customerName: string;
+    payments: unknown[];
+    receipts: unknown[];
+  }>
+).find((item) => item.id === String(activeSale.body.id));
+assert.equal(unpaidSale?.customerName, staffClientName);
+assert.deepEqual(unpaidSale?.payments, []);
+assert.deepEqual(unpaidSale?.receipts, []);
+
+const activeSaleId = String(activeSale.body.id);
+const completedPendingPayment = await call(
+  `/api/sales/${activeSaleId}/payments`,
+  {
+    method: 'POST',
+    cookie: staffCookie,
+    expected: 201,
+    headers: {
+      'x-csrf-token': changedStaffCsrf,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      method: 'cash',
+      pixAccountId: null,
+      amountCents: 500_000,
+    }),
+  },
+);
+assert.equal(
+  (completedPendingPayment.body.sale as { receivedDifferenceCents: number })
+    .receivedDifferenceCents,
+  0,
+);
+const missingReceiptAlerts = await call(
+  '/api/sales?group=sale&period=all&alert=1&limit=50',
+  { cookie: staffCookie },
+);
+assert.ok(
+  (missingReceiptAlerts.body.items as Array<{ id: string }>).some(
+    (item) => item.id === activeSaleId,
+  ),
+);
+const activeReceipt = new FormData();
+activeReceipt.append('receipts', tinyPhoto(), 'comprovante-operador.png');
+await call(`/api/sales/${activeSaleId}/attachments`, {
+  method: 'POST',
+  cookie: staffCookie,
+  headers: { 'x-csrf-token': changedStaffCsrf },
+  body: activeReceipt,
+});
+const completedSaleAlerts = await call(
+  '/api/sales?group=sale&period=all&alert=1&limit=50',
+  { cookie: staffCookie },
+);
+assert.ok(
+  !(completedSaleAlerts.body.items as Array<{ id: string }>).some(
+    (item) => item.id === activeSaleId,
+  ),
+);
 
 const rotatedCodesResult = await call('/api/me/recovery-codes', {
   method: 'POST',

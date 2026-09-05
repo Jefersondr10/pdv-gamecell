@@ -107,9 +107,14 @@ export async function GET(request: Request) {
                   WHERE aggregate_item.sale_id = s.id
                     AND aggregate_item.store_id = s.store_id
                 ) ELSE 0 END), 0) AS itemCount,
-                COALESCE(SUM(CASE WHEN s.status = 'completed' AND
-                  (s.received_difference_cents <> 0 OR s.price_difference_cents <> 0)
-                  THEN 1 ELSE 0 END), 0) AS alertCount
+                COALESCE(SUM(CASE WHEN s.status = 'completed' AND (
+                  s.received_difference_cents <> 0 OR NOT EXISTS (
+                    SELECT 1 FROM attachments aggregate_attachment
+                    WHERE aggregate_attachment.store_id = s.store_id
+                      AND aggregate_attachment.sale_id = s.id
+                      AND aggregate_attachment.kind = 'receipt'
+                  )
+                ) THEN 1 ELSE 0 END), 0) AS alertCount
          FROM sales s WHERE ${filterSql}`,
       )
       .bind(...bindings);
@@ -1017,10 +1022,10 @@ function parseItems(value: unknown): SaleInputItem[] {
 }
 
 function parsePayments(value: unknown): SaleInputPayment[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 20) {
+  if (!Array.isArray(value) || value.length > 20) {
     throw new HttpError(
       400,
-      'Adicione ao menos um pagamento.',
+      'Envie no máximo 20 pagamentos.',
       'INVALID_PAYMENTS',
     );
   }

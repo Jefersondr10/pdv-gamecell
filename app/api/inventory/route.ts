@@ -66,6 +66,10 @@ export async function GET(request: Request) {
     if (productId.length > 80) {
       throw new HttpError(400, 'Produto inválido.', 'INVALID_PRODUCT');
     }
+    const unitId = (url.searchParams.get('unitId') ?? '').trim();
+    if (unitId && !/^[a-f0-9-]{20,80}$/i.test(unitId)) {
+      throw new HttpError(400, 'Aparelho inválido.', 'INVALID_UNIT');
+    }
     const status = url.searchParams.get('status') ?? 'available';
     if (!['available', 'sold', 'all'].includes(status)) {
       throw new HttpError(400, 'Situação inválida.', 'INVALID_STATUS');
@@ -80,6 +84,10 @@ export async function GET(request: Request) {
     if (productId) {
       where.push('iu.product_id = ?');
       bindings.push(productId);
+    }
+    if (unitId) {
+      where.push('iu.id = ?');
+      bindings.push(unitId);
     }
     if (query) {
       const pattern = `%${query}%`;
@@ -111,9 +119,11 @@ export async function GET(request: Request) {
           `SELECT iu.id, iu.product_id AS productId, iu.entry_id AS entryId,
                   p.model AS productName,
                   (p.color || ' · ' || p.memory) AS productDetail,
-                  iu.serial, iu.status, iu.created_at AS createdAt
+                  iu.serial, iu.status, iu.sale_id AS saleId,
+                  s.number AS saleNumber, iu.created_at AS createdAt
            FROM inventory_units iu
            JOIN products p ON p.id = iu.product_id AND p.store_id = iu.store_id
+           LEFT JOIN sales s ON s.id = iu.sale_id AND s.store_id = iu.store_id
            WHERE ${filterSql}
            ORDER BY iu.created_at DESC, iu.id DESC LIMIT ?`,
         )
@@ -129,6 +139,10 @@ export async function GET(request: Request) {
       (item): InventoryDetailRecord => ({
         ...item,
         createdAt: Number(item.createdAt),
+        saleNumber:
+          item.saleNumber === null || item.saleNumber === undefined
+            ? null
+            : Number(item.saleNumber),
         photos: photosByEntry.get(item.entryId) ?? [],
       }),
     );

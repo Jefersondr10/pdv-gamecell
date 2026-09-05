@@ -21,9 +21,13 @@ import {
   type ScannerState,
 } from '@/lib/scanner';
 
+export type ScanFeedback = 'success' | 'error' | 'silent';
+
 type BarcodeScannerProps = {
   mode: ScannerMode;
-  onAccepted: (candidate: ScanCandidate) => void;
+  onAccepted: (
+    candidate: ScanCandidate,
+  ) => ScanFeedback | Promise<ScanFeedback>;
   title?: string;
   description?: string;
   notice?: string;
@@ -43,7 +47,9 @@ export function unlockScannerAudio() {
     if (!AudioContextConstructor) return;
     scannerAudioContext ??= new AudioContextConstructor();
     if (scannerAudioContext.state === 'suspended') {
-      void scannerAudioContext.resume();
+      void scannerAudioContext.resume().catch(() => {
+        // Alguns navegadores só liberam áudio no próximo gesto do usuário.
+      });
     }
   } catch {
     // O navegador ainda pode oferecer vibração ou feedback visual.
@@ -85,6 +91,14 @@ export function BarcodeScanner({
     };
   }, []);
 
+  const deliverCandidate = useCallback((candidate: ScanCandidate) => {
+    void Promise.resolve(onAcceptedRef.current(candidate))
+      .then((feedback) => {
+        if (feedback !== 'silent') playScannerFeedback(feedback);
+      })
+      .catch(() => playScannerFeedback('error'));
+  }, []);
+
   const start = useCallback(async () => {
     unlockScannerAudio();
     const video = videoRef.current;
@@ -95,16 +109,13 @@ export function BarcodeScanner({
       video,
       mode,
       {
-        onAccepted: (candidate) => {
-          playSerialFeedback(mode);
-          onAcceptedRef.current(candidate);
-        },
+        onAccepted: deliverCandidate,
         onStateChange: setState,
         onError: setError,
       },
       scanFrameRef.current,
     );
-  }, [mode]);
+  }, [deliverCandidate, mode]);
 
   useEffect(() => {
     if (!autoStart || autoStartAttemptedRef.current) return;
@@ -131,11 +142,11 @@ export function BarcodeScanner({
           ? 'Digite um UPC, EAN ou JAN válido, incluindo o dígito verificador.'
           : 'Digite um SN de 8 a 18 caracteres contendo pelo menos uma letra.',
       );
+      playScannerFeedback('error');
       return;
     }
     setError('');
-    playSerialFeedback(mode);
-    onAcceptedRef.current(candidate);
+    deliverCandidate(candidate);
     setManualValue('');
     setShowManual(false);
   };
@@ -298,37 +309,61 @@ export function BarcodeScanner({
   );
 }
 
-function playSerialFeedback(mode: ScannerMode) {
-  if (mode !== 'apple_serial') return;
-  navigator.vibrate?.(80);
+export function playScannerFeedback(kind: Exclude<ScanFeedback, 'silent'>) {
+  navigator.vibrate?.(kind === 'success' ? 70 : [120, 80, 120]);
   try {
     unlockScannerAudio();
     const context = scannerAudioContext;
     if (!context) return;
     if (context.state === 'suspended') {
-      void context.resume().then(() => emitSerialTone(context));
+      void context
+        .resume()
+        .then(() => emitScannerTone(context, kind))
+        .catch(() => {
+          // A vibração e o aviso visual continuam disponíveis.
+        });
       return;
     }
-    emitSerialTone(context);
+    emitScannerTone(context, kind);
   } catch {
     // O feedback visual da etapa continua disponível.
   }
 }
 
-function emitSerialTone(context: AudioContext) {
+function emitScannerTone(
+  context: AudioContext,
+  kind: Exclude<ScanFeedback, 'silent'>,
+) {
+  if (kind === 'success') {
+    emitTone(context, 1046, context.currentTime, 0.09, 0.12);
+    return;
+  }
+  emitTone(context, 220, context.currentTime, 0.11, 0.14);
+  emitTone(context, 165, context.currentTime + 0.15, 0.14, 0.14);
+}
+
+function emitTone(
+  context: AudioContext,
+  frequency: number,
+  startAt: number,
+  duration: number,
+  volume: number,
+) {
   try {
     const oscillator = context.createOscillator();
     const gain = context.createGain();
-    const startAt = context.currentTime;
     oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(1046, startAt);
+    oscillator.frequency.setValueAtTime(frequency, startAt);
     gain.gain.setValueAtTime(0.0001, startAt);
-    gain.gain.exponentialRampToValueAtTime(0.12, startAt + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.09);
+    gain.gain.exponentialRampToValueAtTime(volume, startAt + 0.01);
+    gain.gain.exponentialRampToValueAtTime(
+      0.0001,
+      startAt + Math.max(0.03, duration),
+    );
     oscillator.connect(gain);
     gain.connect(context.destination);
     oscillator.start(startAt);
-    oscillator.stop(startAt + 0.1);
+    oscillator.stop(startAt + duration + 0.01);
   } catch {
     // O feedback visual da etapa continua disponível.
   }

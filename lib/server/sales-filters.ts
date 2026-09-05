@@ -10,12 +10,14 @@ export type SalesPeriod =
   | 'all';
 
 export type ParsedSalesFilters = {
+  alertOnly: boolean;
   bindings: Array<string | number>;
   day: string | null;
   from: number | null;
   month: string | null;
   period: SalesPeriod | null;
   query: string;
+  saleId: string | null;
   to: number | null;
   where: string[];
 };
@@ -61,6 +63,15 @@ export function parseSalesFilters(
   }
 
   const query = utf8Prefix((url.searchParams.get('q') ?? '').trim(), 48);
+  const alertValue = url.searchParams.get('alert');
+  if (alertValue !== null && alertValue !== '' && alertValue !== '1') {
+    throw new HttpError(400, 'Filtro de avisos inválido.', 'INVALID_ALERT');
+  }
+  const alertOnly = alertValue === '1';
+  const saleId = (url.searchParams.get('saleId') ?? '').trim() || null;
+  if (saleId && !/^[a-f0-9-]{20,80}$/i.test(saleId)) {
+    throw new HttpError(400, 'Venda inválida.', 'INVALID_SALE');
+  }
   const where = ['s.store_id = ?'];
   const bindings: Array<string | number> = [storeId];
   if (from !== null) {
@@ -85,8 +96,35 @@ export function parseSalesFilters(
     )`);
     bindings.push(pattern, pattern, pattern, pattern, pattern, pattern);
   }
+  if (alertOnly) {
+    where.push(`(
+      s.status = 'completed' AND (
+        s.received_difference_cents <> 0 OR NOT EXISTS (
+          SELECT 1 FROM attachments alert_attachment
+          WHERE alert_attachment.store_id = s.store_id
+            AND alert_attachment.sale_id = s.id
+            AND alert_attachment.kind = 'receipt'
+        )
+      )
+    )`);
+  }
+  if (saleId) {
+    where.push('s.id = ?');
+    bindings.push(saleId);
+  }
 
-  return { bindings, day, from, month, period, query, to, where };
+  return {
+    alertOnly,
+    bindings,
+    day,
+    from,
+    month,
+    period,
+    query,
+    saleId,
+    to,
+    where,
+  };
 }
 
 function parsePeriod(value: string | null): SalesPeriod | null {

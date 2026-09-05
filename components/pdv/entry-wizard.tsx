@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -15,7 +15,10 @@ import {
   Trash2,
 } from 'lucide-react';
 
-import { BarcodeScanner } from '@/components/pdv/barcode-scanner';
+import {
+  BarcodeScanner,
+  type ScanFeedback,
+} from '@/components/pdv/barcode-scanner';
 import { FlowFrame } from '@/components/pdv/flow-frame';
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import { Badge } from '@/components/ui/badge';
@@ -117,6 +120,7 @@ export function EntryWizard({
   const [submitError, setSubmitError] = useState('');
   const [savedCount, setSavedCount] = useState(0);
   const [ignoredCount, setIgnoredCount] = useState(0);
+  const [serialChecksPending, setSerialChecksPending] = useState(0);
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Leia o UPC ou EAN do produto.',
   );
@@ -128,6 +132,14 @@ export function EntryWizard({
   const existingSerialSet = useMemo(
     () => new Set(existingTestSerials),
     [existingTestSerials],
+  );
+
+  useEffect(
+    () => () => {
+      serialGenerationRef.current += 1;
+      pendingSerialKeysRef.current.clear();
+    },
+    [],
   );
 
   const description = useMemo(() => {
@@ -149,6 +161,7 @@ export function EntryWizard({
     serialsRef.current = [];
     serialGenerationRef.current += 1;
     pendingSerialKeysRef.current.clear();
+    setSerialChecksPending(0);
     setPhotos([]);
     setPreparingPhotos(false);
     setPhotoProgress('');
@@ -162,7 +175,7 @@ export function EntryWizard({
     setAnnouncement('Nova entrada. Leia o UPC ou EAN do produto.');
   };
 
-  const acceptProductCode = (candidate: ScanCandidate) => {
+  const acceptProductCode = (candidate: ScanCandidate): ScanFeedback => {
     const matchingCode = [candidate.normalizedValue, candidate.alternateValue]
       .filter((value): value is string => Boolean(value))
       .find((value) => productsByCode[value]);
@@ -177,6 +190,7 @@ export function EntryWizard({
     serialsRef.current = [];
     serialGenerationRef.current += 1;
     pendingSerialKeysRef.current.clear();
+    setSerialChecksPending(0);
     setSerials([]);
     setPhotos([]);
     setPhotoProgress('');
@@ -192,9 +206,10 @@ export function EntryWizard({
         ? `${matchedProduct.name} encontrado. Confirme o produto.`
         : 'Código não cadastrado. Cadastre o produto antes de continuar.',
     );
+    return matchedProduct ? 'success' : 'error';
   };
 
-  const addSerial = async (candidate: ScanCandidate) => {
+  const addSerial = async (candidate: ScanCandidate): Promise<ScanFeedback> => {
     const generation = serialGenerationRef.current;
     const candidateValues = serialCandidateValues(candidate);
     const existingValue = candidateValues.find((value) =>
@@ -204,29 +219,32 @@ export function EntryWizard({
       setAnnouncement(
         `SN ${existingValue} já existe no estoque e foi ignorado.`,
       );
-      return;
+      return 'error';
     }
     const repeatedValue = candidateValues.find((value) =>
       serialsRef.current.some((item) => item.normalized === value),
     );
     if (repeatedValue) {
       setAnnouncement(`SN ${repeatedValue} já foi bipado e foi ignorado.`);
-      return;
+      return 'error';
     }
     const pendingValue = candidateValues.find((value) =>
       pendingSerialKeysRef.current.has(value),
     );
     if (pendingValue) {
       setAnnouncement(`SN ${pendingValue} já está sendo verificado.`);
-      return;
+      return 'silent';
     }
     candidateValues.forEach((value) =>
       pendingSerialKeysRef.current.set(value, generation),
     );
+    if (lookupSerials) {
+      setSerialChecksPending((current) => current + 1);
+    }
     try {
       if (lookupSerials) {
         const matches = await lookupSerials(candidateValues);
-        if (generation !== serialGenerationRef.current) return;
+        if (generation !== serialGenerationRef.current) return 'silent';
         const registered = candidateValues
           .map((value) => matches.find((match) => match.serial === value))
           .find(Boolean);
@@ -234,7 +252,7 @@ export function EntryWizard({
           setAnnouncement(
             `SN ${registered.serial} já está cadastrado e foi ignorado.`,
           );
-          return;
+          return 'error';
         }
       }
       const repeatedAfterLookup = candidateValues.find((value) =>
@@ -244,7 +262,7 @@ export function EntryWizard({
         setAnnouncement(
           `SN ${repeatedAfterLookup} já foi bipado e foi ignorado.`,
         );
-        return;
+        return 'error';
       }
       const nextSerials = [
         ...serialsRef.current,
@@ -253,24 +271,28 @@ export function EntryWizard({
       serialsRef.current = nextSerials;
       setSerials(nextSerials);
       setAnnouncement(`SN ${candidate.normalizedValue} adicionado.`);
+      return 'success';
     } catch {
+      if (generation !== serialGenerationRef.current) return 'silent';
       if (lookupSerials) {
         setAnnouncement(
           'Não foi possível verificar este SN. Confira a conexão e bipe novamente.',
         );
       }
+      return 'error';
     } finally {
       candidateValues.forEach((value) => {
         if (pendingSerialKeysRef.current.get(value) === generation) {
           pendingSerialKeysRef.current.delete(value);
         }
       });
+      if (lookupSerials && generation === serialGenerationRef.current) {
+        setSerialChecksPending((current) => Math.max(0, current - 1));
+      }
     }
   };
 
-  const acceptSerial = (candidate: ScanCandidate) => {
-    void addSerial(candidate);
-  };
+  const acceptSerial = (candidate: ScanCandidate) => addSerial(candidate);
 
   return (
     <FlowFrame
@@ -320,9 +342,18 @@ export function EntryWizard({
       {step === 'serials' && product && (
         <SerialStage
           announcement={announcement}
+          checking={serialChecksPending > 0}
           onAccepted={acceptSerial}
-          onBack={() => setStep('product-confirm')}
+          onBack={() => {
+            serialGenerationRef.current += 1;
+            pendingSerialKeysRef.current.clear();
+            setSerialChecksPending(0);
+            setStep('product-confirm');
+          }}
           onNext={() => {
+            serialGenerationRef.current += 1;
+            pendingSerialKeysRef.current.clear();
+            setSerialChecksPending(0);
             setStep('photos');
             setAnnouncement(
               'Etapa 3. Adicione ao menos uma foto do recebimento.',
@@ -549,6 +580,7 @@ function ProductConfirmation({
 
 function SerialStage({
   announcement,
+  checking,
   product,
   serials,
   onAccepted,
@@ -557,9 +589,10 @@ function SerialStage({
   onRemove,
 }: {
   announcement: string;
+  checking: boolean;
   product: Product;
   serials: SerialItem[];
-  onAccepted: (candidate: ScanCandidate) => void;
+  onAccepted: (candidate: ScanCandidate) => Promise<ScanFeedback>;
   onBack: () => void;
   onNext: () => void;
   onRemove: (serial: string) => void;
@@ -667,6 +700,7 @@ function SerialStage({
             <Button
               aria-label="Voltar"
               className="h-11 rounded-xl"
+              disabled={checking}
               onClick={onBack}
               variant="outline"
             >
@@ -674,10 +708,18 @@ function SerialStage({
             </Button>
             <Button
               className="h-11 rounded-xl"
-              disabled={serials.length === 0}
+              disabled={serials.length === 0 || checking}
               onClick={onNext}
             >
-              Finalizar bipagem <ArrowRight />
+              {checking ? (
+                <>
+                  <LoaderCircle className="animate-spin" /> Verificando SN…
+                </>
+              ) : (
+                <>
+                  Finalizar bipagem <ArrowRight />
+                </>
+              )}
             </Button>
           </div>
         </div>

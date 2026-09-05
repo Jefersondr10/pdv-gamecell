@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Download,
   FileText,
+  ListFilter,
   LoaderCircle,
   Search,
   Smartphone,
@@ -57,8 +58,15 @@ type StockRow = ProductRecord & {
   photos: AttachmentRecord[];
 };
 
-export function StockProductionView({ data }: { data: BootstrapData }) {
+export function StockProductionView({
+  data,
+  onOpenSale,
+}: {
+  data: BootstrapData;
+  onOpenSale?: (saleId: string) => void;
+}) {
   const [query, setQuery] = useState('');
+  const [onlyAvailable, setOnlyAvailable] = useState(true);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportGeneratedAt, setReportGeneratedAt] = useState(() => Date.now());
   const [summary, setSummary] = useState<StockSummaryRecord[]>([]);
@@ -121,11 +129,14 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
     () => buildRows(data, summary, details),
     [data, details, summary],
   );
+  const rowsWithStock = rows.filter((row) => row.available > 0);
   const normalized = query.trim().toLocaleLowerCase('pt-BR');
-  const filtered = rows.filter((row) =>
-    `${row.model} ${row.color} ${row.memory} ${row.codes.map((code) => code.code).join(' ')}`
-      .toLocaleLowerCase('pt-BR')
-      .includes(normalized),
+  const filtered = rows.filter(
+    (row) =>
+      (!onlyAvailable || row.available > 0) &&
+      `${row.model} ${row.color} ${row.memory} ${row.codes.map((code) => code.code).join(' ')}`
+        .toLocaleLowerCase('pt-BR')
+        .includes(normalized),
   );
   const available = rows.reduce((sum, row) => sum + row.available, 0);
   const soldToday = data.metrics.soldTodayItems;
@@ -159,7 +170,7 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
         <Metric
           icon={Smartphone}
           label="Variações"
-          value={String(rows.length)}
+          value={String(rowsWithStock.length)}
         />
         <Metric
           icon={TrendingUp}
@@ -171,20 +182,31 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
         <CardHeader className="shrink-0 border-b p-3 sm:p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="hidden sm:block">
-              <CardTitle className="text-base">Produtos cadastrados</CardTitle>
+              <CardTitle className="text-base">Estoque disponível</CardTitle>
               <CardDescription>
-                O estoque começa vazio e cresce somente pelas entradas
-                confirmadas.
+                A lista mostra somente a quantidade disponível de cada variação.
               </CardDescription>
             </div>
-            <div className="relative w-full sm:w-80">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-11 rounded-xl pl-9"
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Modelo, cor, memória ou código"
-                value={query}
-              />
+            <div className="flex w-full gap-2 sm:w-auto">
+              <div className="relative min-w-0 flex-1 sm:w-80">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-11 rounded-xl pl-9"
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Modelo, cor, memória ou código"
+                  value={query}
+                />
+              </div>
+              <Button
+                aria-label="Mostrar somente produtos com estoque disponível"
+                aria-pressed={onlyAvailable}
+                className="h-11 shrink-0 rounded-xl px-3"
+                onClick={() => setOnlyAvailable((value) => !value)}
+                variant={onlyAvailable ? 'secondary' : 'outline'}
+              >
+                <ListFilter />
+                <span className="hidden sm:inline">Somente com estoque</span>
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -216,14 +238,18 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
               <div>
                 <Smartphone className="mx-auto size-9 text-muted-foreground" />
                 <p className="mt-3 font-bold">
-                  {rows.length
+                  {normalized
                     ? 'Nenhum produto encontrado'
-                    : 'Nenhum produto cadastrado'}
+                    : rows.length
+                      ? 'Nenhum produto com estoque disponível'
+                      : 'Nenhum produto cadastrado'}
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {rows.length
+                  {normalized
                     ? 'Tente outra pesquisa.'
-                    : 'Cadastre o primeiro produto em Configurações.'}
+                    : rows.length
+                      ? 'Desative o filtro para ver os cadastros zerados.'
+                      : 'Cadastre o primeiro produto em Configurações.'}
                 </p>
               </div>
             </div>
@@ -232,7 +258,7 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
               {filtered.map((row) => (
                 <button
                   aria-label={`Abrir estoque de ${row.model}, ${row.color}, ${row.memory}`}
-                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none sm:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto_auto] sm:px-5"
+                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none sm:px-5"
                   key={row.id}
                   onClick={() => setSelectedRow(row)}
                   type="button"
@@ -276,18 +302,6 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
                       {row.available}
                     </Badge>
                   </div>
-                  <div className="hidden text-center sm:block">
-                    <p className="text-[.65rem] font-bold uppercase text-muted-foreground">
-                      Recebidos
-                    </p>
-                    <p className="font-bold">{row.received}</p>
-                  </div>
-                  <div className="hidden text-center sm:block">
-                    <p className="text-[.65rem] font-bold uppercase text-muted-foreground">
-                      Vendidos
-                    </p>
-                    <p className="font-bold">{row.sold}</p>
-                  </div>
                   <ChevronRight className="size-5 text-muted-foreground" />
                 </button>
               ))}
@@ -305,13 +319,14 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
         onLoadDetails={() => void loadDetails()}
         open={reportOpen}
         onOpenChange={setReportOpen}
-        rows={rows}
+        rows={rowsWithStock}
         storeName={data.store.name}
       />
       {selectedRow && (
         <StockProductDetails
           key={selectedRow.id}
           onOpenChange={(open) => !open && setSelectedRow(null)}
+          onOpenSale={onOpenSale}
           row={selectedRow}
         />
       )}
@@ -322,10 +337,15 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
 function StockProductDetails({
   row,
   onOpenChange,
+  onOpenSale,
 }: {
   row: StockRow;
   onOpenChange: (open: boolean) => void;
+  onOpenSale?: (saleId: string) => void;
 }) {
+  const [status, setStatus] = useState<'available' | 'sold'>('available');
+  const [queryDraft, setQueryDraft] = useState('');
+  const [query, setQuery] = useState('');
   const [items, setItems] = useState<InventoryDetailRecord[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
@@ -337,26 +357,42 @@ function StockProductDetails({
   const [selectedPhoto, setSelectedPhoto] = useState<AttachmentRecord | null>(
     null,
   );
-  const loadingRef = useRef(false);
+  const [unitLoadingId, setUnitLoadingId] = useState('');
+  const requestIdRef = useRef(0);
+  const unitRequestIdRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      requestIdRef.current += 1;
+      unitRequestIdRef.current += 1;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(queryDraft.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [queryDraft]);
 
   const loadPage = useCallback(
     async (nextCursor: string | null) => {
-      if (loadingRef.current) return;
-      loadingRef.current = true;
+      const requestId = ++requestIdRef.current;
       setLoading(true);
       setError('');
       try {
         const params = new URLSearchParams({
           productId: row.id,
-          status: 'all',
+          status,
           limit: '99',
-          includePhotos: '1',
         });
+        if (query) params.set('q', query);
         if (nextCursor) params.set('cursor', nextCursor);
         const result = await requestJson<InventoryPage>(
           `/api/inventory?${params.toString()}`,
         );
+        if (requestId !== requestIdRef.current) return;
         setItems((current) => {
+          if (!nextCursor) return result.items;
           const byId = new Map(current.map((item) => [item.id, item]));
           result.items.forEach((item) => byId.set(item.id, item));
           return Array.from(byId.values());
@@ -365,20 +401,56 @@ function StockProductDetails({
         setCursor(result.nextCursor);
         setStarted(true);
       } catch (caught) {
+        if (requestId !== requestIdRef.current) return;
         setError(messageOf(caught));
         setStarted(true);
       } finally {
-        loadingRef.current = false;
-        setLoading(false);
+        if (requestId === requestIdRef.current) setLoading(false);
       }
     },
-    [row.id],
+    [query, row.id, status],
   );
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadPage(null), 0);
+    const timer = window.setTimeout(() => {
+      setItems([]);
+      setCursor(null);
+      setTotal(null);
+      setStarted(false);
+      setError('');
+      void loadPage(null);
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [loadPage]);
+
+  const openUnit = async (item: InventoryDetailRecord) => {
+    const requestId = ++unitRequestIdRef.current;
+    if (item.status === 'sold' && item.saleId && onOpenSale) {
+      onOpenChange(false);
+      onOpenSale(item.saleId);
+      return;
+    }
+    setUnitLoadingId(item.id);
+    setError('');
+    try {
+      const params = new URLSearchParams({
+        unitId: item.id,
+        status: 'all',
+        includePhotos: '1',
+        limit: '10',
+      });
+      const result = await requestJson<InventoryPage>(
+        `/api/inventory?${params.toString()}`,
+      );
+      if (requestId !== unitRequestIdRef.current) return;
+      setSelectedUnit(result.items.find((unit) => unit.id === item.id) ?? item);
+    } catch (caught) {
+      if (requestId !== unitRequestIdRef.current) return;
+      setError(messageOf(caught));
+    } finally {
+      if (requestId === unitRequestIdRef.current) setUnitLoadingId('');
+    }
+  };
 
   const goBack = () => {
     if (selectedPhoto) {
@@ -416,6 +488,20 @@ function StockProductDetails({
                   {row.memory}
                 </Badge>
               </DialogDescription>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="rounded-lg bg-muted px-2 py-1.5">
+              <span className="block text-muted-foreground">Disponível</span>
+              <strong>{row.available}</strong>
+            </div>
+            <div className="rounded-lg bg-muted px-2 py-1.5">
+              <span className="block text-muted-foreground">Recebido</span>
+              <strong>{row.received}</strong>
+            </div>
+            <div className="rounded-lg bg-muted px-2 py-1.5">
+              <span className="block text-muted-foreground">Vendido</span>
+              <strong>{row.sold}</strong>
             </div>
           </div>
         </DialogHeader>
@@ -467,6 +553,23 @@ function StockProductDetails({
                 <p className="mt-3 text-sm text-muted-foreground">
                   Entrada em {formatDateTime(selectedUnit.createdAt)}
                 </p>
+                {selectedUnit.status === 'sold' &&
+                  selectedUnit.saleId &&
+                  onOpenSale && (
+                    <Button
+                      className="mt-3 h-11 w-full rounded-xl"
+                      onClick={() => {
+                        onOpenChange(false);
+                        onOpenSale(selectedUnit.saleId!);
+                      }}
+                    >
+                      Abrir venda
+                      {selectedUnit.saleNumber
+                        ? ` #${String(selectedUnit.saleNumber).padStart(5, '0')}`
+                        : ''}
+                      <ChevronRight />
+                    </Button>
+                  )}
               </div>
               <h3 className="mt-5 font-bold">Fotos da entrada</h3>
               {selectedUnit.photos.length ? (
@@ -511,31 +614,47 @@ function StockProductDetails({
             </div>
           ) : (
             <>
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-bold">Lista de números de série</p>
-                  <p className="text-xs text-muted-foreground">
-                    {items.length}
-                    {total === null ? '' : ` de ${total}`} SNs recebidos
-                  </p>
+              <div className="mb-3 grid gap-2">
+                <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
+                  <Button
+                    className="h-9 rounded-lg"
+                    onClick={() => setStatus('available')}
+                    size="sm"
+                    variant={status === 'available' ? 'default' : 'ghost'}
+                  >
+                    Disponíveis ({row.available})
+                  </Button>
+                  <Button
+                    className="h-9 rounded-lg"
+                    onClick={() => setStatus('sold')}
+                    size="sm"
+                    variant={status === 'sold' ? 'default' : 'ghost'}
+                  >
+                    Vendidos ({row.sold})
+                  </Button>
                 </div>
-                <div className="flex gap-1.5">
-                  <Badge className="bg-success/10 text-success hover:bg-success/10">
-                    {items.filter((item) => item.status === 'available').length}{' '}
-                    disponíveis
-                  </Badge>
-                  <Badge variant="secondary">
-                    {items.filter((item) => item.status === 'sold').length}{' '}
-                    vendidos
-                  </Badge>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    aria-label="Pesquisar número de série"
+                    className="h-10 rounded-xl pl-9"
+                    onChange={(event) => setQueryDraft(event.target.value)}
+                    placeholder="Pesquisar SN"
+                    value={queryDraft}
+                  />
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {items.length}
+                  {total === null ? '' : ` de ${total}`}{' '}
+                  {status === 'available' ? 'disponíveis' : 'vendidos'}
+                </p>
               </div>
               <div className="divide-y overflow-hidden rounded-2xl border">
                 {items.map((item) => (
                   <button
                     className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 bg-card px-3 py-3 text-left transition-colors hover:bg-muted/45"
                     key={item.id}
-                    onClick={() => setSelectedUnit(item)}
+                    onClick={() => void openUnit(item)}
                     type="button"
                   >
                     <div className="min-w-0">
@@ -543,9 +662,9 @@ function StockProductDetails({
                         {item.serial}
                       </p>
                       <p className="truncate text-xs text-muted-foreground">
-                        Entrada {formatDateTime(item.createdAt)} ·{' '}
-                        {item.photos.length}{' '}
-                        {item.photos.length === 1 ? 'foto' : 'fotos'}
+                        {item.status === 'sold' && item.saleNumber
+                          ? `Venda #${String(item.saleNumber).padStart(5, '0')} · toque para abrir`
+                          : `Entrada ${formatDateTime(item.createdAt)} · toque para ver a foto`}
                       </p>
                     </div>
                     <Badge
@@ -560,12 +679,20 @@ function StockProductDetails({
                     >
                       {item.status === 'available' ? 'Disponível' : 'Vendido'}
                     </Badge>
-                    <ChevronRight className="size-4 text-muted-foreground" />
+                    {unitLoadingId === item.id ? (
+                      <LoaderCircle className="size-4 animate-spin text-primary" />
+                    ) : (
+                      <ChevronRight className="size-4 text-muted-foreground" />
+                    )}
                   </button>
                 ))}
                 {items.length === 0 && (
                   <p className="p-6 text-center text-sm text-muted-foreground">
-                    Este produto ainda não possui SN recebido.
+                    {query
+                      ? 'Nenhum SN encontrado nesta lista.'
+                      : status === 'available'
+                        ? 'Este produto não possui SN disponível.'
+                        : 'Este produto ainda não possui SN vendido.'}
                   </p>
                 )}
               </div>

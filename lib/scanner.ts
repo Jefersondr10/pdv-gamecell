@@ -50,15 +50,35 @@ type Detector = {
   >;
 };
 
+type DetectorConstructor = {
+  new (options: { formats: string[] }): Detector;
+  getSupportedFormats?: () => Promise<string[]>;
+};
+
+type PreparedDetector = {
+  detector: Detector;
+  native: boolean;
+};
+
 type TimedSample = ScanCandidate & { at: number };
 
 const PRODUCT_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e'] as const;
 const SERIAL_FORMATS = ['code_128'] as const;
-const SAMPLE_WINDOW_MS = 500;
+const SAMPLE_WINDOW_MS = 1_400;
 const SCAN_INTERVAL_MS = 100;
 const EMPTY_FRAMES_TO_REARM = 6;
 
 let decoderConfigured = false;
+let ponyfillPromise: Promise<
+  typeof import('barcode-detector/ponyfill')
+> | null = null;
+
+export function preloadScannerDecoder() {
+  void loadPonyfill().catch(() => {
+    // Uma falha transitória no aquecimento não deve gerar erro global.
+    // O início do leitor fará uma nova tentativa quando necessário.
+  });
+}
 
 export class ScannerService {
   private detector: Detector | null = null;
@@ -79,6 +99,9 @@ export class ScannerService {
   private active = false;
   private callbacks: ScannerCallbacks | null = null;
   private mode: ScannerMode = 'apple_serial';
+  private generation = 0;
+  private usingNativeDetector = false;
+  private nativeFallbackAttempted = false;
 
   async start(
     video: HTMLVideoElement,
@@ -87,6 +110,7 @@ export class ScannerService {
     scanRegion?: HTMLElement | null,
   ) {
     await this.stop(false);
+    const generation = ++this.generation;
     this.video = video;
     this.scanRegion = scanRegion ?? null;
     this.mode = mode;
@@ -95,44 +119,48 @@ export class ScannerService {
     callbacks.onStateChange?.('requesting-permission');
 
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      const detectorTask = createDetector(mode).then(
+        (detector) => ({ detector, error: null }),
+        (error: unknown) => ({ detector: null, error }),
+      );
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
           facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
       });
 
-      if (!this.active) {
-        this.stopTracks();
+      if (!this.isCurrent(generation)) {
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
 
-      video.srcObject = this.stream;
+      this.stream = stream;
+      video.srcObject = stream;
       video.autoplay = true;
       video.muted = true;
       video.playsInline = true;
       await video.play();
 
-      callbacks.onStateChange?.('loading-decoder');
-      const barcodeLibrary = await import('barcode-detector/ponyfill');
-      if (!decoderConfigured) {
-        barcodeLibrary.prepareZXingModule({
-          overrides: {
-            locateFile: (path: string, prefix: string) =>
-              path.endsWith('.wasm')
-                ? '/wasm/zxing_reader.wasm'
-                : prefix + path,
-          },
-        });
-        decoderConfigured = true;
+      if (!this.isCurrent(generation)) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
 
-      this.detector = new barcodeLibrary.BarcodeDetector({
-        formats:
-          mode === 'product' ? [...PRODUCT_FORMATS] : [...SERIAL_FORMATS],
-      }) as Detector;
+      callbacks.onStateChange?.('loading-decoder');
+      const detectorResult = await detectorTask;
+      if (!this.isCurrent(generation)) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      if (detectorResult.error || !detectorResult.detector) {
+        throw detectorResult.error ?? new Error('Leitor indisponível.');
+      }
+      this.detector = detectorResult.detector.detector;
+      this.usingNativeDetector = detectorResult.detector.native;
+      this.nativeFallbackAttempted = false;
       callbacks.onStateChange?.('scanning');
       document.addEventListener(
         'visibilitychange',
@@ -140,6 +168,7 @@ export class ScannerService {
       );
       this.queueNextFrame();
     } catch (error) {
+      if (!this.isCurrent(generation)) return;
       this.active = false;
       this.stopTracks();
       callbacks.onStateChange?.('error');
@@ -148,6 +177,7 @@ export class ScannerService {
   }
 
   async stop(updateState = true) {
+    this.generation += 1;
     this.active = false;
     if (this.animationFrame !== null) {
       cancelAnimationFrame(this.animationFrame);
@@ -162,7 +192,15 @@ export class ScannerService {
     this.samples = [];
     this.lockedKey = null;
     this.emptyFrames = 0;
+    this.lastAttemptAt = 0;
+    this.detector = null;
+    this.usingNativeDetector = false;
+    this.nativeFallbackAttempted = false;
     if (updateState) this.callbacks?.onStateChange?.('stopped');
+  }
+
+  private isCurrent(generation: number) {
+    return this.active && generation === this.generation;
   }
 
   private handleVisibilityChange = () => {
@@ -199,6 +237,7 @@ export class ScannerService {
   };
 
   private async detectCurrentFrame() {
+    const generation = this.generation;
     const video = this.video;
     const context = this.canvasContext;
     const detector = this.detector;
@@ -218,9 +257,12 @@ export class ScannerService {
       width: sourceWidth,
       height: sourceHeight,
     } = sourceRegionForObjectCover(video, this.scanRegion, this.mode);
-    const targetWidth = Math.min(1100, Math.round(sourceWidth));
+    const targetWidth = Math.min(
+      this.mode === 'product' ? 900 : 800,
+      Math.round(sourceWidth),
+    );
     const targetHeight = Math.max(
-      this.mode === 'apple_serial' ? 128 : 220,
+      this.mode === 'apple_serial' ? 112 : 180,
       Math.round((sourceHeight / sourceWidth) * targetWidth),
     );
 
@@ -240,6 +282,7 @@ export class ScannerService {
 
     try {
       const results = await detector.detect(this.canvas);
+      if (!this.isCurrent(generation) || detector !== this.detector) return;
       const candidates: PositionedScanCandidate[] = [];
       for (const result of results) {
         const candidate = normalizeCandidate(
@@ -278,12 +321,33 @@ export class ScannerService {
       const confirmations = this.samples.filter(
         (sample) => sample.key === candidate.key,
       );
-      if (confirmations.length >= 2) {
+      const requiredConfirmations = 2;
+      if (confirmations.length >= requiredConfirmations) {
         this.lockedKey = candidate.key;
         this.samples = [];
         this.callbacks?.onAccepted(candidate);
       }
     } catch (error) {
+      if (!this.isCurrent(generation) || detector !== this.detector) return;
+      if (this.usingNativeDetector && !this.nativeFallbackAttempted) {
+        this.nativeFallbackAttempted = true;
+        this.callbacks?.onStateChange?.('loading-decoder');
+        try {
+          const fallback = await createPonyfillDetector(this.mode);
+          if (!this.isCurrent(generation)) return;
+          this.detector = fallback;
+          this.usingNativeDetector = false;
+          this.callbacks?.onStateChange?.('scanning');
+          return;
+        } catch (fallbackError) {
+          if (!this.isCurrent(generation)) return;
+          this.active = false;
+          this.stopTracks();
+          this.callbacks?.onStateChange?.('error');
+          this.callbacks?.onError?.(cameraErrorMessage(fallbackError));
+          return;
+        }
+      }
       this.callbacks?.onError?.(
         error instanceof Error
           ? error.message
@@ -301,6 +365,61 @@ export class ScannerService {
       this.emptyFrames = 0;
     }
   }
+}
+
+async function createDetector(mode: ScannerMode): Promise<PreparedDetector> {
+  const formats =
+    mode === 'product' ? [...PRODUCT_FORMATS] : [...SERIAL_FORMATS];
+  const NativeDetector = nativeDetectorConstructor();
+  if (NativeDetector?.getSupportedFormats) {
+    try {
+      const supported = await NativeDetector.getSupportedFormats();
+      if (formats.every((format) => supported.includes(format))) {
+        return { detector: new NativeDetector({ formats }), native: true };
+      }
+    } catch {
+      // Alguns Androids expõem uma implementação parcial. O leitor local é o fallback.
+    }
+  }
+
+  return { detector: await createPonyfillDetector(mode), native: false };
+}
+
+async function createPonyfillDetector(mode: ScannerMode): Promise<Detector> {
+  const formats =
+    mode === 'product' ? [...PRODUCT_FORMATS] : [...SERIAL_FORMATS];
+  const barcodeLibrary = await loadPonyfill();
+  return new barcodeLibrary.BarcodeDetector({ formats }) as Detector;
+}
+
+function nativeDetectorConstructor() {
+  return (globalThis as unknown as { BarcodeDetector?: DetectorConstructor })
+    .BarcodeDetector;
+}
+
+function loadPonyfill() {
+  ponyfillPromise ??= import('barcode-detector/ponyfill')
+    .then(async (barcodeLibrary) => {
+      if (!decoderConfigured) {
+        await barcodeLibrary.prepareZXingModule({
+          overrides: {
+            locateFile: (path: string, prefix: string) =>
+              path.endsWith('.wasm')
+                ? '/wasm/zxing_reader.wasm'
+                : prefix + path,
+          },
+          fireImmediately: true,
+        });
+        decoderConfigured = true;
+      }
+      return barcodeLibrary;
+    })
+    .catch((error: unknown) => {
+      ponyfillPromise = null;
+      decoderConfigured = false;
+      throw error;
+    });
+  return ponyfillPromise;
 }
 
 function sourceRegionForObjectCover(

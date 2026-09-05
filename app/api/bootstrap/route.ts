@@ -106,13 +106,20 @@ export async function GET(request: Request) {
 
     const productRows = rows<ProductRow>(results[0]);
     const codeRows = rows<CodeRow>(results[1]);
+    const codesByProduct = new Map<
+      string,
+      Array<{ id: string; code: string; kind: string }>
+    >();
+    for (const { productId, id, code, kind } of codeRows) {
+      const productCodes = codesByProduct.get(productId) ?? [];
+      productCodes.push({ id, code, kind });
+      codesByProduct.set(productId, productCodes);
+    }
     const products: ProductRecord[] = productRows.map((product) => ({
       ...product,
       detail: `${product.color} · ${product.memory}`,
       active: Boolean(product.active),
-      codes: codeRows
-        .filter((code) => code.productId === product.id)
-        .map(({ id, code, kind }) => ({ id, code, kind })),
+      codes: codesByProduct.get(product.id) ?? [],
     }));
     const clients = rows<ClientRow>(results[2]).map((client) => ({
       ...client,

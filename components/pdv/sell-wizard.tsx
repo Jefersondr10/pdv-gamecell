@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -25,12 +25,23 @@ import {
   X,
 } from 'lucide-react';
 
-import { BarcodeScanner } from '@/components/pdv/barcode-scanner';
+import {
+  BarcodeScanner,
+  type ScanFeedback,
+} from '@/components/pdv/barcode-scanner';
 import { FlowFrame } from '@/components/pdv/flow-frame';
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
   NativeSelect,
@@ -80,7 +91,7 @@ export type SaleSerialMatch = SaleProduct & {
 
 export type SaleProductLookup = Record<string, SaleProduct>;
 
-export type SaleCustomer = { id: string; name: string };
+export type SaleCustomer = { id: string; name: string; phone?: string | null };
 export type SalePixAccount = { id: string; name: string };
 
 type PaymentMethod = 'pix' | 'cash';
@@ -147,6 +158,7 @@ export function SellWizard({
   customers = [],
   pixAccounts = [],
   onComplete,
+  onCreateCustomer,
   unavailableSerials,
   resolveSerials,
 }: {
@@ -155,6 +167,11 @@ export function SellWizard({
   customers?: SaleCustomer[];
   pixAccounts?: SalePixAccount[];
   onComplete?: (sale: CompletedSalePayload) => void | Promise<void>;
+  onCreateCustomer?: (input: {
+    operationId: string;
+    name: string;
+    phone: string;
+  }) => Promise<SaleCustomer>;
   unavailableSerials?: ReadonlySet<string>;
   resolveSerials?: (serials: string[]) => Promise<SaleSerialMatch[]>;
 }) {
@@ -208,6 +225,15 @@ export function SellWizard({
   const completionSentRef = useRef(false);
   const operationIdRef = useRef(createOperationId());
   const checkingSerialRef = useRef(false);
+  const serialLookupGenerationRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      serialLookupGenerationRef.current += 1;
+      checkingSerialRef.current = false;
+    },
+    [],
+  );
 
   const total = useMemo(
     () => items.reduce((sum, item) => sum + item.priceCents, 0),
@@ -222,13 +248,11 @@ export function SellWizard({
     [payments],
   );
   const remaining = total - paid;
-  const paymentsValid =
-    payments.length > 0 &&
-    payments.every(
-      (payment) =>
-        parseMoneyInput(payment.amount) > 0 &&
-        (payment.method !== 'pix' || Boolean(payment.bank)),
-    );
+  const paymentsValid = payments.every(
+    (payment) =>
+      parseMoneyInput(payment.amount) > 0 &&
+      (payment.method !== 'pix' || Boolean(payment.bank)),
+  );
 
   const description = useMemo(() => {
     if (step === 'customer') return 'Nenhum cliente aparece antes da pesquisa.';
@@ -246,6 +270,9 @@ export function SellWizard({
   }, [step]);
 
   const reset = () => {
+    serialLookupGenerationRef.current += 1;
+    checkingSerialRef.current = false;
+    setCheckingSerial(false);
     setStep('customer');
     setCustomerId('');
     setCustomer('');
@@ -354,8 +381,11 @@ export function SellWizard({
     }
   };
 
-  const acceptSerial = async (candidate: ScanCandidate) => {
-    if (checkingSerialRef.current) return;
+  const acceptSerial = async (
+    candidate: ScanCandidate,
+  ): Promise<ScanFeedback> => {
+    if (checkingSerialRef.current) return 'silent';
+    const lookupGeneration = serialLookupGenerationRef.current;
     const candidateValues = serialCandidateValues(candidate);
     const repeatedValue = candidateValues.find((value) =>
       itemsRef.current.some((item) => item.serial.normalizedValue === value),
@@ -366,8 +396,7 @@ export function SellWizard({
       setPendingProduct(null);
       setPrice('');
       setSerialWarning(warning);
-      navigator.vibrate?.([120, 80, 120]);
-      return;
+      return 'error';
     }
     let availableValue = candidateValues.find(
       (value) =>
@@ -383,6 +412,9 @@ export function SellWizard({
       setSerialWarning('');
       try {
         const matches = await resolveSerials(candidateValues);
+        if (lookupGeneration !== serialLookupGenerationRef.current) {
+          return 'silent';
+        }
         const available = candidateValues
           .map((value) =>
             matches.find(
@@ -401,14 +433,18 @@ export function SellWizard({
         unavailableValue = unavailable?.serial;
         product = available ?? null;
       } catch {
+        if (lookupGeneration !== serialLookupGenerationRef.current) {
+          return 'silent';
+        }
         setSerialWarning(
           'Não foi possível consultar este SN agora. Confira a conexão e tente novamente.',
         );
-        navigator.vibrate?.([120, 80, 120]);
-        return;
+        return 'error';
       } finally {
-        checkingSerialRef.current = false;
-        setCheckingSerial(false);
+        if (lookupGeneration === serialLookupGenerationRef.current) {
+          checkingSerialRef.current = false;
+          setCheckingSerial(false);
+        }
       }
     }
     if (!availableValue && unavailableValue) {
@@ -420,8 +456,7 @@ export function SellWizard({
       setPhotoError('');
       setPrice('');
       setSerialWarning(warning);
-      navigator.vibrate?.([120, 80, 120]);
-      return;
+      return 'error';
     }
     setPhotoFiles([]);
     setPhotoProgress('');
@@ -432,8 +467,7 @@ export function SellWizard({
       setPendingProduct(null);
       setPrice('');
       setSerialWarning(warning);
-      navigator.vibrate?.([120, 80, 120]);
-      return;
+      return 'error';
     }
     const resolvedCandidate =
       availableValue === candidate.normalizedValue
@@ -448,6 +482,7 @@ export function SellWizard({
     setPendingProduct(product);
     setPrice(getDefaultPriceInput(product));
     setAnnouncement(`SN ${availableValue} localizado e disponível.`);
+    return 'success';
   };
 
   const addPendingItem = () => {
@@ -625,6 +660,7 @@ export function SellWizard({
             setStep('serial');
             setAnnouncement('Etapa 2. Bipe o número de série do aparelho.');
           }}
+          onCreateCustomer={onCreateCustomer}
           onQueryChange={(value) => {
             setCustomerQuery(value);
             if (customer && value.trim() !== customer) {
@@ -804,7 +840,9 @@ export function SellWizard({
             setStep('done');
             setSaving(false);
             setAnnouncement(
-              `Venda concluída com recebimento de ${formatMoney(paid)}.`,
+              payments.length === 0
+                ? 'Venda concluída sem pagamento informado.'
+                : `Venda concluída com recebimento de ${formatMoney(paid)}.`,
             );
           }}
           paid={paid}
@@ -820,7 +858,12 @@ export function SellWizard({
       )}
 
       {step === 'done' && (
-        <SaleCompletion customer={customer} onReset={reset} total={paid} />
+        <SaleCompletion
+          customer={customer}
+          onReset={reset}
+          productsTotal={total}
+          receivedTotal={paid}
+        />
       )}
     </FlowFrame>
   );
@@ -832,6 +875,7 @@ function CustomerStage({
   query,
   onQueryChange,
   onSelect,
+  onCreateCustomer,
   onNext,
 }: {
   customer: string;
@@ -839,8 +883,19 @@ function CustomerStage({
   query: string;
   onQueryChange: (value: string) => void;
   onSelect: (customer: SaleCustomer) => void;
+  onCreateCustomer?: (input: {
+    operationId: string;
+    name: string;
+    phone: string;
+  }) => Promise<SaleCustomer>;
   onNext: () => void;
 }) {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [createError, setCreateError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const createOperationIdRef = useRef(createOperationId());
   const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR');
   const canSearch = normalizedQuery.length >= 2;
   const allMatches = canSearch
@@ -920,6 +975,24 @@ function CustomerStage({
               <Check className="size-4" /> {customer} selecionado
             </div>
           )}
+          {!customer && canSearch && onCreateCustomer && (
+            <Button
+              className="mt-3 h-11 w-full rounded-xl border-dashed lg:mt-4"
+              onClick={() => {
+                setNewName(query.trim());
+                setNewPhone('');
+                setCreateError('');
+                createOperationIdRef.current = createOperationId();
+                setCreateOpen(true);
+              }}
+              variant="outline"
+            >
+              <Plus />{' '}
+              {matches.length > 0
+                ? 'Cadastrar outro cliente'
+                : 'Cadastrar novo cliente'}
+            </Button>
+          )}
         </div>
       </CardContent>
       <div className="flow-stage-actions shrink-0 border-t p-2.5 text-right lg:p-3">
@@ -931,6 +1004,112 @@ function CustomerStage({
           Bipar aparelho <ArrowRight />
         </Button>
       </div>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!creating) setCreateOpen(open);
+        }}
+        open={createOpen}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Novo cliente</DialogTitle>
+            <DialogDescription>
+              Cadastre sem sair da venda. O telefone é opcional.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label
+              className="block text-sm font-semibold"
+              htmlFor="sale-new-customer-name"
+            >
+              Nome
+            </label>
+            <Input
+              id="sale-new-customer-name"
+              maxLength={120}
+              onChange={(event) => setNewName(event.target.value)}
+              value={newName}
+            />
+            <label
+              className="block text-sm font-semibold"
+              htmlFor="sale-new-customer-phone"
+            >
+              Telefone{' '}
+              <span className="font-normal text-muted-foreground">
+                (opcional)
+              </span>
+            </label>
+            <Input
+              id="sale-new-customer-phone"
+              inputMode="tel"
+              maxLength={40}
+              onChange={(event) => setNewPhone(event.target.value)}
+              value={newPhone}
+            />
+            {createError && (
+              <p
+                className="rounded-xl bg-destructive/10 p-3 text-sm font-semibold text-destructive"
+                role="alert"
+              >
+                {createError}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              disabled={creating}
+              onClick={() => setCreateOpen(false)}
+              variant="outline"
+            >
+              Cancelar
+            </Button>
+            <Button
+              disabled={creating || newName.trim().length < 2}
+              onClick={async () => {
+                setCreateError('');
+                const normalizedName = newName
+                  .trim()
+                  .toLocaleLowerCase('pt-BR');
+                const normalizedPhone = comparablePhone(newPhone);
+                const duplicate = customers.find(
+                  (entry) =>
+                    entry.name.trim().toLocaleLowerCase('pt-BR') ===
+                      normalizedName &&
+                    (normalizedPhone.length === 0 ||
+                      comparablePhone(entry.phone ?? '') === normalizedPhone),
+                );
+                if (duplicate) {
+                  setCreateError(
+                    'Este cliente já está cadastrado. Feche esta janela e selecione-o na pesquisa.',
+                  );
+                  return;
+                }
+                setCreating(true);
+                try {
+                  const created = await onCreateCustomer!({
+                    operationId: createOperationIdRef.current,
+                    name: newName.trim(),
+                    phone: newPhone.trim(),
+                  });
+                  onSelect(created);
+                  setCreateOpen(false);
+                } catch (error) {
+                  setCreateError(
+                    error instanceof Error
+                      ? error.message
+                      : 'Não foi possível cadastrar o cliente.',
+                  );
+                } finally {
+                  setCreating(false);
+                }
+              }}
+            >
+              {creating && <LoaderCircle className="animate-spin" />}
+              Salvar cliente
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -949,7 +1128,7 @@ function SaleSerialStage({
   checking: boolean;
   product: SaleProduct | null;
   warning: string;
-  onAccepted: (candidate: ScanCandidate) => void;
+  onAccepted: (candidate: ScanCandidate) => Promise<ScanFeedback>;
   onBack: () => void;
   onConfirm: () => void;
   onRescan: () => void;
@@ -1146,10 +1325,6 @@ function PriceStage({
   const priceCents = parseMoneyInput(value);
   const valid = priceCents > 0;
   const hasDefaultPrice = product.defaultPriceCents > 0;
-  const difference = hasDefaultPrice
-    ? priceCents - product.defaultPriceCents
-    : 0;
-  const hasDifference = valid && difference !== 0;
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="grid min-h-0 flex-1 place-items-center overflow-hidden p-4 sm:p-6">
@@ -1186,21 +1361,18 @@ function PriceStage({
             />
           </div>
           <div
-            className={`mt-3 rounded-xl border px-3 py-2 text-sm ${hasDifference ? 'border-amber-500/35 bg-amber-50 text-amber-950 dark:bg-amber-500/10 dark:text-amber-100' : 'border-border bg-muted/50 text-foreground'}`}
+            className="mt-3 rounded-xl border border-border bg-muted/50 px-3 py-2 text-sm text-foreground"
             id="sale-price-guidance"
             role="note"
           >
             <p className="font-bold">
-              {hasDifference
-                ? `Atenção: ${formatPriceDifference(difference)} do preço padrão`
-                : hasDefaultPrice
-                  ? `Preço padrão: ${formatMoney(product.defaultPriceCents)}`
-                  : 'Preço padrão ainda não configurado'}
+              {hasDefaultPrice
+                ? `Preço preenchido: ${formatMoney(product.defaultPriceCents)}`
+                : 'Preço padrão ainda não configurado'}
             </p>
             <p className="flow-stage-support mt-0.5 text-xs">
-              {hasDifference
-                ? 'A venda será permitida e ficará sinalizada no histórico. O pagamento usará o valor digitado.'
-                : 'Você pode alterar este valor. Se houver diferença, a venda será permitida e ficará sinalizada.'}
+              Você pode alterar livremente. O valor digitado será usado nesta
+              venda sem gerar aviso sobre o preço padrão.
             </p>
           </div>
         </div>
@@ -1242,29 +1414,19 @@ function SaleItemsStage({
     safePage * pageSize,
     safePage * pageSize + pageSize,
   );
-  const priceDifference = getItemsPriceDifference(items);
-
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
         <div className="mx-auto max-w-2xl">
           <div
-            className={`rounded-2xl border p-3 sm:p-4 ${priceDifference !== 0 ? 'border-amber-500/35 bg-amber-50 text-amber-950 dark:bg-amber-500/10 dark:text-amber-100' : 'bg-secondary'}`}
+            className="rounded-2xl border bg-secondary p-3 sm:p-4"
             role="note"
           >
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="font-bold">
-                  {priceDifference !== 0
-                    ? `Atenção: venda ${formatPriceDifference(priceDifference)} dos preços cadastrados`
-                    : 'Aparelhos desta venda'}
-                </p>
-                <p
-                  className={`flow-stage-support mt-1 text-sm ${priceDifference === 0 ? 'text-muted-foreground' : ''}`}
-                >
-                  {priceDifference !== 0
-                    ? 'A diferença é permitida. O pagamento usará o valor praticado.'
-                    : 'Cada SN é um aparelho. O pagamento será do total da venda.'}
+                <p className="font-bold">Aparelhos desta venda</p>
+                <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
+                  Cada SN é um aparelho. O pagamento será do total da venda.
                 </p>
               </div>
               <Badge className="shrink-0" variant="secondary">
@@ -1296,11 +1458,6 @@ function SaleItemsStage({
                   <strong className="block text-sm">
                     {formatMoney(item.priceCents)}
                   </strong>
-                  <p
-                    className={`flow-stage-support text-[11px] ${item.defaultPriceCents > 0 && item.priceCents !== item.defaultPriceCents ? 'font-semibold text-amber-800 dark:text-amber-200' : 'text-muted-foreground'}`}
-                  >
-                    {getItemPriceReference(item)}
-                  </p>
                 </div>
                 <Button
                   aria-label={`Remover ${item.product}, SN ${item.serial.normalizedValue}`}
@@ -1427,10 +1584,11 @@ function PaymentStage({
           </div>
 
           {payments.length === 0 && (
-            <div className="rounded-xl border border-dashed bg-muted/25 p-3 text-center">
+            <div className="rounded-xl border border-amber-500/35 bg-amber-50 p-3 text-center text-amber-950 dark:bg-amber-500/10 dark:text-amber-100">
               <p className="font-bold">Nenhum pagamento adicionado</p>
-              <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
-                Dinheiro só aparecerá se você escolher essa opção.
+              <p className="flow-stage-support mt-1 text-sm">
+                Você pode continuar sem informar um valor. A venda ficará com
+                pagamento pendente e poderá ser completada depois.
               </p>
             </div>
           )}
@@ -1647,7 +1805,11 @@ function PaymentStage({
           <ArrowLeft /> Voltar
         </Button>
         <Button className="h-12 rounded-xl" disabled={!ready} onClick={onNext}>
-          {remaining !== 0 && paid > 0 ? 'Continuar com aviso' : 'Comprovante'}{' '}
+          {payments.length === 0
+            ? 'Continuar sem pagamento'
+            : remaining !== 0 && paid > 0
+              ? 'Continuar com aviso'
+              : 'Comprovante'}{' '}
           <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
@@ -1817,7 +1979,6 @@ function SaleReview({
   onConfirm: () => void;
   saving: boolean;
 }) {
-  const priceDifference = getItemsPriceDifference(items);
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
@@ -1840,35 +2001,20 @@ function SaleReview({
             />
           </div>
 
-          {priceDifference !== 0 && (
-            <div
-              className="mt-4 rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
-              role="alert"
-            >
-              <p className="font-bold">
-                Venda {formatPriceDifference(priceDifference)} dos preços
-                cadastrados
-              </p>
-              <p className="mt-0.5 text-xs">
-                A diferença não bloqueia a conclusão. Os pagamentos usam o total
-                praticado de {formatMoney(total)}.
-              </p>
-            </div>
-          )}
-
           {paid !== total && (
             <div
               className="mt-4 rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
               role="alert"
             >
               <p className="font-bold">
-                Recebido {paid > total ? 'acima' : 'abaixo'} do total dos
-                produtos
+                {payments.length === 0
+                  ? 'Pagamento não informado'
+                  : `Recebido ${paid > total ? 'acima' : 'abaixo'} do total dos produtos`}
               </p>
               <p className="mt-0.5 text-xs">
-                Produtos: {formatMoney(total)} · Recebido: {formatMoney(paid)} ·
-                Diferença: {formatMoney(Math.abs(paid - total))}. A venda será
-                salva com este aviso.
+                {payments.length === 0
+                  ? `A venda será salva com ${formatMoney(total)} pendentes e poderá receber pagamentos depois.`
+                  : `Produtos: ${formatMoney(total)} · Recebido: ${formatMoney(paid)} · Diferença: ${formatMoney(Math.abs(paid - total))}. A venda será salva com este aviso.`}
               </p>
             </div>
           )}
@@ -1900,11 +2046,6 @@ function SaleReview({
                     <strong className="block text-sm">
                       {formatMoney(item.priceCents)}
                     </strong>
-                    <p
-                      className={`text-xs ${item.defaultPriceCents > 0 && item.priceCents !== item.defaultPriceCents ? 'font-semibold text-amber-800 dark:text-amber-200' : 'text-muted-foreground'}`}
-                    >
-                      {getItemPriceReference(item)}
-                    </p>
                   </div>
                 </div>
               ))}
@@ -1920,11 +2061,16 @@ function SaleReview({
           </section>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-success/10 p-4 text-sm">
+            <div
+              className={`rounded-2xl p-4 text-sm ${payments.length === 0 ? 'bg-amber-500/10' : 'bg-success/10'}`}
+            >
               <div className="flex items-center justify-between gap-3">
-                <span className="font-semibold text-success">
-                  {payments.length}{' '}
-                  {payments.length === 1 ? 'pagamento' : 'pagamentos'}
+                <span
+                  className={`font-semibold ${payments.length === 0 ? 'text-amber-900 dark:text-amber-100' : 'text-success'}`}
+                >
+                  {payments.length === 0
+                    ? 'Pagamento pendente'
+                    : `${payments.length} ${payments.length === 1 ? 'pagamento' : 'pagamentos'}`}
                 </span>
                 <strong>{formatMoney(paid)}</strong>
               </div>
@@ -2035,11 +2181,13 @@ function ProductDetailVisual({
 
 function SaleCompletion({
   customer,
-  total,
+  productsTotal,
+  receivedTotal,
   onReset,
 }: {
   customer: string;
-  total: number;
+  productsTotal: number;
+  receivedTotal: number;
   onReset: () => void;
 }) {
   return (
@@ -2052,11 +2200,14 @@ function SaleCompletion({
           Venda concluída
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Cliente {customer} · total de {formatMoney(total)}.
+          Cliente {customer} · produtos de {formatMoney(productsTotal)}.
         </p>
-        <p className="mt-3 rounded-xl bg-success/10 px-4 py-3 text-sm font-semibold text-success">
-          A venda foi salva, os pagamentos foram registrados e o estoque foi
-          atualizado.
+        <p
+          className={`mt-3 rounded-xl px-4 py-3 text-sm font-semibold ${receivedTotal === 0 ? 'bg-amber-500/10 text-amber-900 dark:text-amber-100' : 'bg-success/10 text-success'}`}
+        >
+          {receivedTotal === 0
+            ? 'A venda foi salva com pagamento pendente e o estoque foi atualizado.'
+            : `Recebimento de ${formatMoney(receivedTotal)} registrado e estoque atualizado.`}
         </p>
         <Button className="mt-5 h-12 rounded-xl px-6" onClick={onReset}>
           <RotateCcw /> Fazer nova venda
@@ -2105,32 +2256,13 @@ function serialCandidateValues(candidate: ScanCandidate) {
   );
 }
 
+function comparablePhone(value: string) {
+  return value.replace(/\D/g, '');
+}
+
 function getDefaultPriceInput(product: SaleProduct | null | undefined) {
   if (!product || product.defaultPriceCents <= 0) return '';
   return formatMoneyInput(product.defaultPriceCents);
-}
-
-function getItemsPriceDifference(items: SaleItem[]) {
-  return items.reduce(
-    (sum, item) =>
-      sum +
-      (item.defaultPriceCents > 0
-        ? item.priceCents - item.defaultPriceCents
-        : 0),
-    0,
-  );
-}
-
-function getItemPriceReference(item: SaleItem) {
-  if (item.defaultPriceCents <= 0) return 'Sem preço padrão';
-  const difference = item.priceCents - item.defaultPriceCents;
-  return difference === 0
-    ? 'Igual ao preço padrão'
-    : `${formatPriceDifference(difference)} do padrão`;
-}
-
-function formatPriceDifference(difference: number) {
-  return `${formatMoney(Math.abs(difference))} ${difference < 0 ? 'abaixo' : 'acima'}`;
 }
 
 function formatMoney(cents: number) {

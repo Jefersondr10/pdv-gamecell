@@ -99,18 +99,25 @@ function emptySalesPage(): SalesPage {
 export function SalesProductionView({
   data,
   onChanged,
+  openSaleId = null,
+  onOpenSaleHandled,
 }: {
   data: BootstrapData;
   onChanged: () => Promise<void>;
+  openSaleId?: string | null;
+  onOpenSaleHandled?: () => void;
 }) {
   const [queryDraft, setQueryDraft] = useState('');
   const [query, setQuery] = useState('');
-  const [period, setPeriod] = useState<PeriodFilter>('today');
+  const [period, setPeriod] = useState<PeriodFilter>(() =>
+    openSaleId ? 'all' : 'today',
+  );
   const [selectedDay, setSelectedDay] = useState(() => dateKey(Date.now()));
   const [selectedMonth, setSelectedMonth] = useState(() =>
     dateKey(Date.now()).slice(0, 7),
   );
   const [grouping, setGrouping] = useState<Grouping>('sale');
+  const [alertOnly, setAlertOnly] = useState(false);
   const [sellerRanking, setSellerRanking] = useState<SellerRanking>('items');
   const [selectedGroup, setSelectedGroup] = useState<SelectedGroup | null>(
     null,
@@ -127,11 +134,13 @@ export function SalesProductionView({
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [listError, setListError] = useState('');
   const [analyticsError, setAnalyticsError] = useState('');
+  const [targetNotice, setTargetNotice] = useState('');
   const listRequestIdRef = useRef(0);
   const analyticsRequestIdRef = useRef(0);
   const listDataKeyRef = useRef('');
   const listPendingKeyRef = useRef('');
   const analyticsPendingKeyRef = useRef('');
+  const openedTargetRef = useRef('');
   const analyticsCacheRef = useRef(
     new Map<string, { loadedAt: number; value: SalesAnalytics }>(),
   );
@@ -141,8 +150,10 @@ export function SalesProductionView({
     if (period === 'day') params.set('day', selectedDay);
     if (period === 'month') params.set('month', selectedMonth);
     if (query) params.set('q', query);
+    if (alertOnly) params.set('alert', '1');
+    if (openSaleId) params.set('saleId', openSaleId);
     return params.toString();
-  }, [period, query, selectedDay, selectedMonth]);
+  }, [alertOnly, openSaleId, period, query, selectedDay, selectedMonth]);
   const filterKey = filterParams;
 
   useEffect(() => {
@@ -252,6 +263,34 @@ export function SalesProductionView({
     return () => window.clearTimeout(timer);
   }, [grouping, loadAnalytics, loadSales]);
 
+  useEffect(() => {
+    if (!openSaleId || openedTargetRef.current === openSaleId) return;
+    if (listLoading || listError || listDataKeyRef.current !== filterKey) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const target = page.items.find((sale) => sale.id === openSaleId);
+      if (target) {
+        openedTargetRef.current = openSaleId;
+        setTargetNotice('');
+        setReportSale(target);
+      } else {
+        setTargetNotice(
+          'A venda vinculada a este SN não foi encontrada. Todas as vendas foram exibidas.',
+        );
+      }
+      onOpenSaleHandled?.();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    filterKey,
+    listError,
+    listLoading,
+    onOpenSaleHandled,
+    openSaleId,
+    page.items,
+  ]);
+
   const analytics =
     analyticsState?.key === filterKey ? analyticsState.value : null;
   const groupRows = useMemo(() => {
@@ -304,12 +343,30 @@ export function SalesProductionView({
       </div>
       <div className="mb-3 grid shrink-0 grid-cols-3 gap-2">
         <Metric
+          active={grouping === 'sale' && !alertOnly}
           label="Montante vendido"
+          onClick={() => {
+            setAlertOnly(false);
+            setGrouping('sale');
+          }}
           value={formatMoney(activeAggregates.amountCents)}
         />
-        <Metric label="Aparelhos" value={String(activeAggregates.itemCount)} />
         <Metric
-          label="Com diferença"
+          active={grouping === 'model' && !alertOnly}
+          label="Aparelhos"
+          onClick={() => {
+            setAlertOnly(false);
+            setGrouping('model');
+          }}
+          value={String(activeAggregates.itemCount)}
+        />
+        <Metric
+          active={alertOnly}
+          label="Avisos"
+          onClick={() => {
+            setAlertOnly(true);
+            setGrouping('sale');
+          }}
           value={String(activeAggregates.alertCount)}
         />
       </div>
@@ -325,19 +382,20 @@ export function SalesProductionView({
                 value={queryDraft}
               />
             </div>
-            <div className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1 sm:grid-cols-7">
+            <NativeSelect
+              aria-label="Período das vendas"
+              className="h-10 w-full rounded-xl xl:w-48 [&_select]:h-10"
+              onChange={(event) =>
+                setPeriod(event.target.value as PeriodFilter)
+              }
+              value={period}
+            >
               {PERIOD_OPTIONS.map((option) => (
-                <Button
-                  className="h-8 px-1.5 text-[.68rem] sm:px-2 sm:text-xs"
-                  key={option.value}
-                  onClick={() => setPeriod(option.value)}
-                  size="sm"
-                  variant={period === option.value ? 'default' : 'ghost'}
-                >
+                <NativeSelectOption key={option.value} value={option.value}>
                   {option.label}
-                </Button>
+                </NativeSelectOption>
               ))}
-            </div>
+            </NativeSelect>
           </div>
           <div className="grid gap-2 md:grid-cols-[auto_1fr]">
             {(period === 'day' || period === 'month') && (
@@ -367,7 +425,10 @@ export function SalesProductionView({
                 <Button
                   className="h-9 px-1 text-[.7rem] sm:px-3 sm:text-sm"
                   key={value}
-                  onClick={() => setGrouping(value)}
+                  onClick={() => {
+                    setGrouping(value);
+                    if (value !== 'sale') setAlertOnly(false);
+                  }}
                   size="sm"
                   variant={grouping === value ? 'secondary' : 'ghost'}
                 >
@@ -397,6 +458,15 @@ export function SalesProductionView({
               </Button>
             </div>
           )}
+          {targetNotice && (
+            <button
+              className="rounded-lg bg-amber-500/10 px-3 py-2 text-left text-xs font-semibold text-amber-950 dark:text-amber-100"
+              onClick={() => setTargetNotice('')}
+              type="button"
+            >
+              {targetNotice} Toque para fechar.
+            </button>
+          )}
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 overscroll-contain">
           {activeError ? (
@@ -417,7 +487,13 @@ export function SalesProductionView({
             </div>
           ) : activeCount === 0 ? (
             <Empty
-              hasAny={Boolean(query) || period !== 'all' || activeTotal > 0}
+              hasAny={
+                Boolean(query) ||
+                period !== 'all' ||
+                alertOnly ||
+                Boolean(openSaleId) ||
+                activeTotal > 0
+              }
             />
           ) : grouping === 'sale' ? (
             <>
@@ -571,15 +647,14 @@ function SaleList({
                 {sale.orderStatus && (
                   <OrderStatusBadge status={sale.orderStatus} />
                 )}
-                {sale.receivedDifferenceCents !== 0 && (
-                  <WarningBadge
-                    text={`${sale.receivedDifferenceCents > 0 ? 'Recebido acima' : 'Recebido abaixo'} em ${formatMoney(Math.abs(sale.receivedDifferenceCents))}`}
-                  />
-                )}
-                {sale.priceDifferenceCents !== 0 && (
-                  <WarningBadge
-                    text={`${sale.priceDifferenceCents > 0 ? 'Preço acima' : 'Preço abaixo'} do cadastrado`}
-                  />
+                {sale.status === 'completed' &&
+                  sale.receivedDifferenceCents !== 0 && (
+                    <WarningBadge
+                      text={`${sale.receivedDifferenceCents > 0 ? 'Recebido acima' : 'Recebido abaixo'} em ${formatMoney(Math.abs(sale.receivedDifferenceCents))}`}
+                    />
+                  )}
+                {sale.status === 'completed' && sale.receipts.length === 0 && (
+                  <WarningBadge text="Sem comprovante" />
                 )}
                 {sale.status === 'cancelled' && sale.cancellationReason && (
                   <span className="text-xs font-semibold text-destructive">
@@ -813,11 +888,6 @@ function GroupDetailsDialog({
                             Vendido
                           </p>
                           <strong>{formatMoney(item.soldPriceCents)}</strong>
-                          {item.referencePriceCents !== item.soldPriceCents && (
-                            <p className="text-[.68rem] font-semibold text-amber-800">
-                              Cadastrado {formatMoney(item.referencePriceCents)}
-                            </p>
-                          )}
                         </div>
                       </div>
                     </article>
@@ -1789,19 +1859,25 @@ function SaleReport({
                   <section className="report-section mt-5">
                     <h3 className="font-extrabold">Formas de pagamento</h3>
                     <div className="mt-2 space-y-2">
-                      {sale.payments.map((payment) => (
-                        <div
-                          className="report-row flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                          key={payment.id}
-                        >
-                          <span>
-                            {payment.method === 'pix'
-                              ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                              : 'Dinheiro'}
-                          </span>
-                          <strong>{formatMoney(payment.amountCents)}</strong>
+                      {sale.payments.length === 0 ? (
+                        <div className="report-row rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-950">
+                          Pagamento não informado — pendente
                         </div>
-                      ))}
+                      ) : (
+                        sale.payments.map((payment) => (
+                          <div
+                            className="report-row flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            key={payment.id}
+                          >
+                            <span>
+                              {payment.method === 'pix'
+                                ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                : 'Dinheiro'}
+                            </span>
+                            <strong>{formatMoney(payment.amountCents)}</strong>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </section>
                 )}
@@ -2057,9 +2133,26 @@ function WarningBadge({ text }: { text: string }) {
     </span>
   );
 }
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <Card size="sm">
+function Metric({
+  label,
+  value,
+  active = false,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  const content = (
+    <Card
+      className={cn(
+        'h-full transition-colors',
+        onClick && 'hover:border-primary/45 hover:bg-secondary/35',
+        active && 'border-primary bg-primary/5 ring-1 ring-primary/30',
+      )}
+      size="sm"
+    >
       <CardContent className="p-2.5 sm:p-3">
         <p className="truncate text-[.62rem] font-bold uppercase text-muted-foreground sm:text-xs">
           {label}
@@ -2069,6 +2162,17 @@ function Metric({ label, value }: { label: string; value: string }) {
         </p>
       </CardContent>
     </Card>
+  );
+  if (!onClick) return content;
+  return (
+    <button
+      aria-pressed={active}
+      className="min-w-0 rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      onClick={onClick}
+      type="button"
+    >
+      {content}
+    </button>
   );
 }
 function ReportMetric({ label, value }: { label: string; value: string }) {
@@ -2102,6 +2206,7 @@ function groupModels(sale: SaleRecord | null) {
   return Array.from(groups.values());
 }
 function paymentLabel(sale: SaleRecord) {
+  if (sale.payments.length === 0) return 'Pagamento não informado';
   return sale.payments
     .map((payment) =>
       payment.method === 'pix'

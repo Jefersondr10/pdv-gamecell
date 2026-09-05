@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.05-confirmacao-pagamentos-v4';
+export const GUIDE_VERSION = '2026.09.05-leitura-estoque-vendas-v5';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
@@ -59,6 +59,8 @@ export type InventoryDetailRecord = {
   productDetail: string;
   serial: string;
   status: 'available' | 'sold';
+  saleId: string | null;
+  saleNumber: number | null;
   createdAt: number;
   photos: AttachmentRecord[];
 };

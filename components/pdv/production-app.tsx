@@ -30,6 +30,7 @@ import {
 import {
   SellWizard,
   type CompletedSalePayload,
+  type SaleCustomer,
   type SaleSerialMatch,
 } from '@/components/pdv/sell-wizard';
 import { Badge } from '@/components/ui/badge';
@@ -54,6 +55,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { messageOf, requestJson } from '@/lib/client-api';
 import { displayCommercialCode } from '@/lib/commercial-code';
 import type { BootstrapData } from '@/lib/pdv-types';
+import { preloadScannerDecoder } from '@/lib/scanner';
 
 type View =
   | 'sell'
@@ -123,6 +125,7 @@ const mobileViews = new Set<View>([
   'stock',
   'sales',
   'catalog',
+  'entries',
 ]);
 const mobileNavigation = navigation.filter(({ view }) => mobileViews.has(view));
 
@@ -286,6 +289,7 @@ function CloudPdv({
       typeof window !== 'undefined' &&
       window.matchMedia('(display-mode: standalone)').matches,
   );
+  const [saleToOpen, setSaleToOpen] = useState<string | null>(null);
   const reloadRequestRef = useRef(0);
   const dataRef = useRef<BootstrapData | null>(null);
   const lastReloadAtRef = useRef(0);
@@ -355,19 +359,25 @@ function CloudPdv({
   }, []);
 
   useEffect(() => {
-    const unlock = () => unlockScannerAudio();
+    const unlock = () => {
+      unlockScannerAudio();
+      preloadScannerDecoder();
+    };
+    const warmupTimer = window.setTimeout(preloadScannerDecoder, 600);
     window.addEventListener('pointerdown', unlock, {
       capture: true,
       once: true,
     });
     window.addEventListener('keydown', unlock, { capture: true, once: true });
     return () => {
+      window.clearTimeout(warmupTimer);
       window.removeEventListener('pointerdown', unlock, { capture: true });
       window.removeEventListener('keydown', unlock, { capture: true });
     };
   }, []);
 
   const changeView = (view: View) => {
+    if (view !== 'sales') setSaleToOpen(null);
     setActiveView(view);
     setRun((value) => value + 1);
     if (Date.now() - lastReloadAtRef.current >= 5_000) void reload(true);
@@ -417,6 +427,36 @@ function CloudPdv({
     });
     void reload(true);
     return { added: result.added, duplicates: 0, capacityReached: false };
+  };
+
+  const createSaleCustomer = async (input: {
+    operationId: string;
+    name: string;
+    phone: string;
+  }): Promise<SaleCustomer> => {
+    const result = await requestJson<{ id: string }>('/api/clients', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-csrf-token': data!.csrfToken,
+      },
+      body: JSON.stringify(input),
+    });
+    const created = {
+      id: result.id,
+      name: input.name,
+      phone: input.phone || null,
+      email: null,
+      notes: null,
+      active: true,
+    };
+    setData((current) => {
+      if (!current) return current;
+      const next = { ...current, clients: [...current.clients, created] };
+      dataRef.current = next;
+      return next;
+    });
+    return { id: created.id, name: created.name, phone: created.phone };
   };
 
   const saveSale = async (sale: CompletedSalePayload) => {
@@ -534,9 +574,10 @@ function CloudPdv({
             <SellWizard
               customers={data.clients
                 .filter((client) => client.active)
-                .map(({ id, name }) => ({ id, name }))}
+                .map(({ id, name, phone }) => ({ id, name, phone }))}
               key={`sell-${run}`}
               onComplete={saveSale}
+              onCreateCustomer={createSaleCustomer}
               pixAccounts={data.pixAccounts
                 .filter((account) => account.active)
                 .map(({ id, name }) => ({ id, name }))}
@@ -552,13 +593,22 @@ function CloudPdv({
             />
           )}
           {activeView === 'stock' && (
-            <StockProductionView data={data} key={`stock-${run}`} />
+            <StockProductionView
+              data={data}
+              key={`stock-${run}`}
+              onOpenSale={(saleId) => {
+                setSaleToOpen(saleId);
+                changeView('sales');
+              }}
+            />
           )}
           {activeView === 'sales' && (
             <SalesProductionView
               data={data}
               key={`sales-${run}`}
               onChanged={() => reload(true)}
+              onOpenSaleHandled={() => setSaleToOpen(null)}
+              openSaleId={saleToOpen}
             />
           )}
           {activeView === 'catalog' && (
@@ -1259,21 +1309,24 @@ function GuideDialog({
           <GuideStep number="2" title="Dê entrada">
             Abra Entrada. Bipe o UPC/EAN, confirme o produto, bipe somente os
             SNs e fotografe o recebimento. O zero técnico do leitor e o prefixo
-            S do SN são reconhecidos automaticamente.
+            S do SN são reconhecidos automaticamente. Um bip agudo confirma a
+            leitura; dois bips graves avisam quando ela não pode ser usada.
           </GuideStep>
           <GuideStep number="3" title="Venda por etapas">
-            Pesquise o cliente, bipe um ou mais SNs, adicione fotos, confira ou
-            altere o preço, informe os pagamentos e anexe ou pule o comprovante.
+            Pesquise ou cadastre o cliente, bipe um ou mais SNs, adicione fotos,
+            confira ou altere o preço e anexe ou pule o comprovante. Também é
+            possível salvar sem informar pagamento e completar depois.
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
             mostra um aviso na venda, na listagem e no relatório.
           </GuideStep>
           <GuideStep number="5" title="Relatórios e histórico">
-            Toque em um produto no estoque para ver seus SNs e as fotos da
-            entrada. Baixe o relatório em PDF. Em Vendas, consulte por venda,
-            modelo, cliente ou vendedor e veja o ranking no período escolhido. O
-            menu Histórico preserva cada entrada.
+            O estoque abre somente com variações disponíveis. Nos detalhes,
+            alterne entre SNs disponíveis e vendidos; um SN vendido abre sua
+            venda. O relatório ignora estoque zerado. Em Vendas, use os cards e
+            o período compacto como filtros. O menu Histórico preserva cada
+            entrada.
           </GuideStep>
           <GuideStep
             number="6"
@@ -1382,7 +1435,7 @@ function MobileNavigation({
       className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-1 pb-[max(.45rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur-xl lg:hidden"
       aria-label="Navegação principal"
     >
-      <div className="mx-auto grid max-w-none grid-cols-5 lg:max-w-2xl">
+      <div className="mx-auto grid max-w-none grid-cols-6 lg:max-w-2xl">
         {mobileNavigation.map(({ view, short, icon: Icon }) => (
           <button
             className={`mx-0.5 flex min-h-[4.15rem] min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-0.5 text-xs font-bold transition-colors ${active === view ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
