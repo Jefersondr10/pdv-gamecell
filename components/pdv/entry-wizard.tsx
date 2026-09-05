@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -39,6 +39,28 @@ type SerialItem = {
   normalized: string;
 };
 
+export type LocalTestEntryRecord = {
+  gtin14: string;
+  displayCode: string;
+  productName: string;
+  productDetail: string;
+  serials: string[];
+};
+
+export type LocalTestEntryCommitResult = {
+  added: number;
+  duplicates: number;
+  capacityReached: boolean;
+};
+
+type EntryWizardProps = {
+  existingTestSerials?: readonly string[];
+  onConfirmTestEntry?: (
+    entry: LocalTestEntryRecord,
+  ) => LocalTestEntryCommitResult;
+  storageMode?: 'browser' | 'session';
+};
+
 const ENTRY_STEPS = ['Produto', 'Seriais', 'Fotos', 'Revisão'] as const;
 
 const PRODUCTS_BY_CODE: Record<string, Product> = {
@@ -62,6 +84,11 @@ const PRODUCTS_BY_CODE: Record<string, Product> = {
     detail: 'Black · 128 GB',
     code: '195949035913',
   },
+  '00195949035937': {
+    name: 'iPhone 15',
+    detail: 'Black · 128 GB',
+    code: '195949035937',
+  },
   '04549995649161': {
     name: 'iPhone 17',
     detail: 'White · 256 GB',
@@ -78,19 +105,35 @@ const STEP_INDEX: Record<EntryStep, number> = {
   done: 3,
 };
 
-export function EntryWizard() {
+export function EntryWizard({
+  existingTestSerials = [],
+  onConfirmTestEntry,
+  storageMode = 'browser',
+}: EntryWizardProps) {
   const [step, setStep] = useState<EntryStep>('product-scan');
-  const [commercialCode, setCommercialCode] = useState<ScanCandidate | null>(null);
+  const [commercialCode, setCommercialCode] = useState<ScanCandidate | null>(
+    null,
+  );
   const [product, setProduct] = useState<Product | null>(null);
   const [serials, setSerials] = useState<SerialItem[]>([]);
-  const [photoCount, setPhotoCount] = useState(0);
+  const [photos, setPhotos] = useState<File[]>([]);
+  const [savedCount, setSavedCount] = useState(0);
+  const [ignoredCount, setIgnoredCount] = useState(0);
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Leia o UPC ou EAN do produto.',
   );
+  const committedRef = useRef(false);
+  const serialsRef = useRef<SerialItem[]>([]);
+  const existingSerialSet = useMemo(
+    () => new Set(existingTestSerials),
+    [existingTestSerials],
+  );
 
   const description = useMemo(() => {
-    if (step === 'product-scan') return 'A câmera já está pronta para o UPC ou EAN.';
-    if (step === 'product-confirm') return 'Confira o produto antes de avançar.';
+    if (step === 'product-scan')
+      return 'A câmera já está pronta para o UPC ou EAN.';
+    if (step === 'product-confirm')
+      return 'Confira o produto antes de avançar.';
     if (step === 'serials') return 'Bipe somente o SN de cada aparelho.';
     if (step === 'photos') return 'Fotografe o recebimento desta entrada.';
     if (step === 'review') return 'Revise tudo antes de confirmar.';
@@ -102,32 +145,56 @@ export function EntryWizard() {
     setCommercialCode(null);
     setProduct(null);
     setSerials([]);
-    setPhotoCount(0);
+    serialsRef.current = [];
+    setPhotos([]);
+    setSavedCount(0);
+    setIgnoredCount(0);
+    committedRef.current = false;
     setAnnouncement('Nova entrada. Leia o UPC ou EAN do produto.');
   };
 
   const acceptProductCode = (candidate: ScanCandidate) => {
     const matchedProduct = PRODUCTS_BY_CODE[candidate.normalizedValue] ?? null;
+    serialsRef.current = [];
+    setSerials([]);
+    setPhotos([]);
+    setSavedCount(0);
+    setIgnoredCount(0);
+    committedRef.current = false;
     setCommercialCode(candidate);
     setProduct(matchedProduct);
     setStep('product-confirm');
     setAnnouncement(
       matchedProduct
         ? `${matchedProduct.name} encontrado. Confirme o produto.`
-        : 'Código ainda não cadastrado. Faça uma nova leitura.',
+        : 'Código não cadastrado. Você pode continuar em modo de teste local.',
     );
   };
 
   const acceptSerial = (candidate: ScanCandidate) => {
-    if (serials.some((item) => item.normalized === candidate.normalizedValue)) {
-      setAnnouncement(`SN ${candidate.normalizedValue} já foi bipado e foi ignorado.`);
+    if (existingSerialSet.has(candidate.normalizedValue)) {
+      setAnnouncement(
+        `SN ${candidate.normalizedValue} já existe nas entradas de teste e foi ignorado.`,
+      );
+      return;
+    }
+    if (
+      serialsRef.current.some(
+        (item) => item.normalized === candidate.normalizedValue,
+      )
+    ) {
+      setAnnouncement(
+        `SN ${candidate.normalizedValue} já foi bipado e foi ignorado.`,
+      );
       return;
     }
 
-    setSerials((current) => [
-      ...current,
+    const nextSerials = [
+      ...serialsRef.current,
       { raw: candidate.rawValue, normalized: candidate.normalizedValue },
-    ]);
+    ];
+    serialsRef.current = nextSerials;
+    setSerials(nextSerials);
     setAnnouncement(`SN ${candidate.normalizedValue} adicionado.`);
   };
 
@@ -161,8 +228,27 @@ export function EntryWizard() {
           onRescan={() => {
             setCommercialCode(null);
             setProduct(null);
+            serialsRef.current = [];
+            setSerials([]);
+            setPhotos([]);
+            setSavedCount(0);
+            setIgnoredCount(0);
+            committedRef.current = false;
             setStep('product-scan');
             setAnnouncement('Faça uma nova leitura do UPC ou EAN.');
+          }}
+          onUseLocalTest={() => {
+            setProduct({
+              name: 'Produto não cadastrado',
+              detail: 'Entrada de teste local',
+              code:
+                commercialCode.rawValue.replace(/\D/g, '') ||
+                commercialCode.normalizedValue,
+            });
+            setStep('serials');
+            setAnnouncement(
+              'Teste local ativado. Etapa 2. Bipe somente o número de série.',
+            );
           }}
           product={product}
         />
@@ -175,12 +261,16 @@ export function EntryWizard() {
           onBack={() => setStep('product-confirm')}
           onNext={() => {
             setStep('photos');
-            setAnnouncement('Etapa 3. Adicione ao menos uma foto do recebimento.');
+            setAnnouncement(
+              'Etapa 3. Adicione ao menos uma foto do recebimento.',
+            );
           }}
           onRemove={(serial) => {
-            setSerials((current) =>
-              current.filter((item) => item.normalized !== serial),
+            const nextSerials = serialsRef.current.filter(
+              (item) => item.normalized !== serial,
             );
+            serialsRef.current = nextSerials;
+            setSerials(nextSerials);
             setAnnouncement(`SN ${serial} removido.`);
           }}
           product={product}
@@ -191,15 +281,17 @@ export function EntryWizard() {
       {step === 'photos' && product && (
         <PhotoStage
           onBack={() => setStep('serials')}
-          onFiles={(count) => {
-            setPhotoCount(count);
-            setAnnouncement(`${count} ${count === 1 ? 'foto adicionada' : 'fotos adicionadas'}.`);
+          onFiles={(files) => {
+            setPhotos(files);
+            setAnnouncement(
+              `${files.length} ${files.length === 1 ? 'foto adicionada' : 'fotos adicionadas'}.`,
+            );
           }}
           onNext={() => {
             setStep('review');
             setAnnouncement('Etapa 4. Revise e confirme a entrada.');
           }}
-          photoCount={photoCount}
+          photoCount={photos.length}
           product={product}
           serialCount={serials.length}
         />
@@ -209,12 +301,38 @@ export function EntryWizard() {
         <EntryReview
           onBack={() => setStep('photos')}
           onConfirm={() => {
+            if (committedRef.current || !commercialCode) return;
+            committedRef.current = true;
+            let result: LocalTestEntryCommitResult;
+            try {
+              result = onConfirmTestEntry?.({
+                gtin14: commercialCode.normalizedValue,
+                displayCode: product.code,
+                productName: product.name,
+                productDetail: product.detail,
+                serials: serials.map((serial) => serial.normalized),
+              }) ?? {
+                added: serials.length,
+                duplicates: 0,
+                capacityReached: false,
+              };
+            } catch {
+              committedRef.current = false;
+              setAnnouncement(
+                'Não foi possível salvar a entrada de teste. Tente novamente.',
+              );
+              return;
+            }
+            setSavedCount(result.added);
+            setIgnoredCount(Math.max(serials.length - result.added, 0));
             setStep('done');
             setAnnouncement(
-              `Entrada concluída com ${serials.length} ${serials.length === 1 ? 'aparelho' : 'aparelhos'}.`,
+              result.added > 0
+                ? `Entrada de teste salva com ${result.added} ${result.added === 1 ? 'aparelho' : 'aparelhos'}.`
+                : 'Nenhuma unidade nova foi salva porque os SNs já estavam registrados.',
             );
           }}
-          photoCount={photoCount}
+          photoCount={photos.length}
           product={product}
           serials={serials}
         />
@@ -222,9 +340,11 @@ export function EntryWizard() {
 
       {step === 'done' && (
         <CompletionStage
-          count={serials.length}
+          count={savedCount}
+          ignoredCount={ignoredCount}
           onReset={reset}
           productName={product?.name ?? 'Produto'}
+          storageMode={storageMode}
         />
       )}
     </FlowFrame>
@@ -236,19 +356,25 @@ function ProductConfirmation({
   product,
   onConfirm,
   onRescan,
+  onUseLocalTest,
 }: {
   candidate: ScanCandidate;
   product: Product | null;
   onConfirm: () => void;
   onRescan: () => void;
+  onUseLocalTest: () => void;
 }) {
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center p-5 text-center sm:p-8">
+      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-start overflow-y-auto p-5 text-center overscroll-contain sm:justify-center sm:p-8">
         <span
           className={`grid size-16 place-items-center rounded-2xl ${product ? 'bg-success/10 text-success' : 'bg-amber-500/10 text-amber-700'}`}
         >
-          {product ? <PackageCheck className="size-8" /> : <RotateCcw className="size-8" />}
+          {product ? (
+            <PackageCheck className="size-8" />
+          ) : (
+            <RotateCcw className="size-8" />
+          )}
         </span>
         <p className="eyebrow mt-5">Código lido</p>
         <p className="mt-1 font-mono text-sm font-bold sm:text-base">
@@ -263,23 +389,34 @@ function ProductConfirmation({
               </span>
               <div className="min-w-0">
                 <p className="truncate font-bold">{product.name}</p>
-                <p className="truncate text-sm text-muted-foreground">{product.detail}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  {product.detail}
+                </p>
               </div>
             </div>
           </div>
         ) : (
           <div className="mt-5 max-w-md rounded-2xl bg-amber-500/10 p-4 text-sm text-amber-900">
-            Este código ainda não está vinculado a um produto. Faça outra leitura ou cadastre-o em Configurações.
+            Este código ainda não está vinculado a um produto. Para testar o
+            fluxo, você pode continuar sem alterar o estoque real.
           </div>
         )}
       </CardContent>
 
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3 sm:p-4">
-        <Button className="h-12 rounded-xl" onClick={onRescan} variant="outline">
+        <Button
+          className="h-12 rounded-xl"
+          onClick={onRescan}
+          variant="outline"
+        >
           <ArrowLeft /> Ler novamente
         </Button>
-        <Button className="h-12 rounded-xl" disabled={!product} onClick={onConfirm}>
-          Confirmar produto <ArrowRight />
+        <Button
+          className="h-12 rounded-xl"
+          onClick={product ? onConfirm : onUseLocalTest}
+        >
+          {product ? 'Confirmar produto' : 'Continuar como TESTE LOCAL'}{' '}
+          <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
     </Card>
@@ -363,7 +500,8 @@ function SerialStage({
           <div className="mb-2 flex min-w-0 items-center justify-between gap-3 md:hidden">
             <div className="min-w-0">
               <p className="text-sm font-bold">
-                {serials.length} {serials.length === 1 ? 'SN registrado' : 'SNs registrados'}
+                {serials.length}{' '}
+                {serials.length === 1 ? 'SN registrado' : 'SNs registrados'}
               </p>
               <p className="truncate text-xs text-muted-foreground">
                 {latest ? `Último: ${latest.normalized}` : announcement}
@@ -382,10 +520,19 @@ function SerialStage({
             )}
           </div>
           <div className="grid grid-cols-[auto_1fr] gap-2">
-            <Button aria-label="Voltar" className="h-11 rounded-xl" onClick={onBack} variant="outline">
+            <Button
+              aria-label="Voltar"
+              className="h-11 rounded-xl"
+              onClick={onBack}
+              variant="outline"
+            >
               <ArrowLeft />
             </Button>
-            <Button className="h-11 rounded-xl" disabled={serials.length === 0} onClick={onNext}>
+            <Button
+              className="h-11 rounded-xl"
+              disabled={serials.length === 0}
+              onClick={onNext}
+            >
               Finalizar bipagem <ArrowRight />
             </Button>
           </div>
@@ -406,28 +553,33 @@ function PhotoStage({
   product: Product;
   serialCount: number;
   photoCount: number;
-  onFiles: (count: number) => void;
+  onFiles: (files: File[]) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center p-4 text-center sm:p-8">
+      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-start overflow-y-auto p-4 text-center overscroll-contain sm:justify-center sm:p-8">
         <div className="mb-4 flex flex-wrap justify-center gap-2">
           <Badge variant="secondary">{product.name}</Badge>
-          <Badge variant="outline">{serialCount} {serialCount === 1 ? 'aparelho' : 'aparelhos'}</Badge>
+          <Badge variant="outline">
+            {serialCount} {serialCount === 1 ? 'aparelho' : 'aparelhos'}
+          </Badge>
         </div>
         <label className="flex w-full max-w-xl cursor-pointer flex-col items-center rounded-3xl border-2 border-dashed bg-muted/30 p-6 transition hover:bg-muted/55 sm:p-10">
           <span className="grid size-16 place-items-center rounded-2xl bg-card text-primary shadow-sm">
             <Camera className="size-7" />
           </span>
-          <span className="mt-4 text-base font-bold">Fotografar recebimento</span>
+          <span className="mt-4 text-base font-bold">
+            Fotografar recebimento
+          </span>
           <span className="mt-1 text-sm text-muted-foreground">
             Selecione uma ou mais fotos da entrada.
           </span>
           {photoCount > 0 && (
             <span className="mt-4 inline-flex items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success">
-              <Check className="size-4" /> {photoCount} {photoCount === 1 ? 'foto pronta' : 'fotos prontas'}
+              <Check className="size-4" /> {photoCount}{' '}
+              {photoCount === 1 ? 'foto pronta' : 'fotos prontas'}
             </span>
           )}
           <input
@@ -436,8 +588,8 @@ function PhotoStage({
             className="sr-only"
             multiple
             onChange={(event) => {
-              const count = event.target.files?.length ?? 0;
-              if (count > 0) onFiles(count);
+              const files = Array.from(event.target.files ?? []);
+              if (files.length > 0) onFiles(files);
             }}
             type="file"
           />
@@ -447,7 +599,11 @@ function PhotoStage({
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
-        <Button className="h-12 rounded-xl" disabled={photoCount === 0} onClick={onNext}>
+        <Button
+          className="h-12 rounded-xl"
+          disabled={photoCount === 0}
+          onClick={onNext}
+        >
           Revisar entrada <ArrowRight />
         </Button>
       </div>
@@ -471,6 +627,12 @@ function EntryReview({
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden">
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
+        <div className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-amber-500/10 px-4 py-2 text-center text-xs font-bold text-amber-900">
+          <Badge className="bg-amber-600 text-white hover:bg-amber-600">
+            TESTE LOCAL
+          </Badge>
+          Não é estoque real
+        </div>
         <div className="grid gap-4 md:grid-cols-2">
           <section className="rounded-2xl border bg-background p-4">
             <p className="eyebrow">Produto</p>
@@ -480,17 +642,30 @@ function EntryReview({
               </span>
               <div className="min-w-0">
                 <p className="truncate font-bold">{product.name}</p>
-                <p className="truncate text-sm text-muted-foreground">{product.detail}</p>
-                <p className="mt-1 font-mono text-xs text-muted-foreground">UPC/EAN {product.code}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  {product.detail}
+                </p>
+                <p className="mt-1 font-mono text-xs text-muted-foreground">
+                  UPC/EAN {product.code}
+                </p>
               </div>
             </div>
           </section>
           <section className="rounded-2xl border bg-background p-4">
             <p className="eyebrow">Resumo</p>
             <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Aparelhos</dt><dd className="font-bold">{serials.length}</dd></div>
-              <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Fotos</dt><dd className="font-bold">{photoCount}</dd></div>
-              <div className="flex justify-between gap-4"><dt className="text-muted-foreground">Situação</dt><dd className="font-bold text-success">Pronta</dd></div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Aparelhos</dt>
+                <dd className="font-bold">{serials.length}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Fotos</dt>
+                <dd className="font-bold">{photoCount}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Situação</dt>
+                <dd className="font-bold text-success">Pronta</dd>
+              </div>
             </dl>
           </section>
         </div>
@@ -502,9 +677,16 @@ function EntryReview({
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {serials.map((serial, index) => (
-              <div className="flex items-center gap-2 rounded-xl bg-muted/55 px-3 py-2.5" key={serial.normalized}>
-                <span className="text-xs font-bold text-muted-foreground">{index + 1}</span>
-                <span className="truncate font-mono text-sm font-semibold">{serial.normalized}</span>
+              <div
+                className="flex items-center gap-2 rounded-xl bg-muted/55 px-3 py-2.5"
+                key={serial.normalized}
+              >
+                <span className="text-xs font-bold text-muted-foreground">
+                  {index + 1}
+                </span>
+                <span className="truncate font-mono text-sm font-semibold">
+                  {serial.normalized}
+                </span>
               </div>
             ))}
           </div>
@@ -525,29 +707,47 @@ function EntryReview({
 
 function CompletionStage({
   count,
+  ignoredCount,
   productName,
+  storageMode,
   onReset,
 }: {
   count: number;
+  ignoredCount: number;
   productName: string;
+  storageMode: 'browser' | 'session';
   onReset: () => void;
 }) {
   return (
-    <Card className="grid h-full place-items-center overflow-hidden">
-      <CardContent className="max-w-lg p-6 text-center sm:p-10">
-        <span className="mx-auto grid size-20 place-items-center rounded-full bg-success/10 text-success">
-          <CheckCircle2 className="size-10" />
-        </span>
-        <h2 className="mt-5 text-2xl font-bold tracking-tight">Entrada preparada</h2>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {count} {count === 1 ? 'unidade de' : 'unidades de'} {productName} passaram por todas as etapas.
-        </p>
-        <p className="mt-3 rounded-xl bg-amber-500/10 px-4 py-3 text-sm text-amber-900">
-          Esta é uma demonstração: nenhum estoque real foi alterado.
-        </p>
-        <Button className="mt-5 h-12 rounded-xl px-6" onClick={onReset}>
-          <RotateCcw /> Fazer nova entrada
-        </Button>
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+      <CardContent className="grid min-h-0 flex-1 place-items-center overflow-y-auto p-6 text-center overscroll-contain sm:p-10">
+        <div className="max-w-lg">
+          <span className="mx-auto grid size-20 place-items-center rounded-full bg-success/10 text-success">
+            <CheckCircle2 className="size-10" />
+          </span>
+          <h2 className="mt-5 text-2xl font-bold tracking-tight">
+            {count > 0 ? 'Entrada de teste salva' : 'Nenhuma unidade nova'}
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {count > 0
+              ? `${count} ${count === 1 ? 'unidade de' : 'unidades de'} ${productName} foram adicionadas ao teste local.`
+              : 'Os números de série informados já estavam registrados ou o limite local foi atingido.'}
+          </p>
+          {ignoredCount > 0 && (
+            <p className="mt-2 text-xs font-semibold text-amber-800">
+              {ignoredCount}{' '}
+              {ignoredCount === 1 ? 'SN foi ignorado' : 'SNs foram ignorados'}.
+            </p>
+          )}
+          <p className="mt-3 rounded-xl bg-amber-500/10 px-4 py-3 text-sm text-amber-900">
+            {storageMode === 'browser'
+              ? 'Ela aparece no Estoque somente neste navegador. Nenhum estoque real foi alterado.'
+              : 'O navegador bloqueou o armazenamento. A entrada ficará disponível somente nesta sessão.'}
+          </p>
+          <Button className="mt-5 h-12 rounded-xl px-6" onClick={onReset}>
+            <RotateCcw /> Fazer nova entrada
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
