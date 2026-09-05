@@ -43,6 +43,7 @@ import {
   sumFileBytes,
   type PreparedMediaSelection,
 } from '@/lib/client-media';
+import { createOperationId } from '@/lib/client-operation-id';
 import { parseMoneyInput } from '@/lib/money';
 import { normalizeCandidate, type ScanCandidate } from '@/lib/scanner';
 
@@ -92,6 +93,7 @@ type SalePayment = {
 };
 
 export type CompletedSalePayload = {
+  operationId: string;
   customerId: string;
   customer: string;
   items: Array<{
@@ -190,6 +192,7 @@ export function SellWizard({
   const [receiptProgress, setReceiptProgress] = useState('');
   const [receiptError, setReceiptError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [serialWarning, setSerialWarning] = useState(
     initialSerial && initialUnavailable
       ? `O SN ${initialSerial.normalizedValue} já foi vendido e não está disponível. Cancele a venda anterior para liberá-lo.`
@@ -203,6 +206,7 @@ export function SellWizard({
   );
   const itemsRef = useRef<SaleItem[]>([]);
   const completionSentRef = useRef(false);
+  const operationIdRef = useRef(createOperationId());
   const checkingSerialRef = useRef(false);
 
   const total = useMemo(
@@ -261,8 +265,10 @@ export function SellWizard({
     setReceiptProgress('');
     setReceiptError('');
     setSaving(false);
+    setSubmitError('');
     setSerialWarning('');
     completionSentRef.current = false;
+    operationIdRef.current = createOperationId();
     setAnnouncement('Nova venda. Pesquise o cliente para começar.');
   };
 
@@ -748,6 +754,7 @@ export function SellWizard({
       {step === 'review' && (
         <SaleReview
           customer={customer}
+          error={submitError}
           items={items}
           onEditItems={() => {
             setStep('items');
@@ -758,8 +765,10 @@ export function SellWizard({
             if (!completionSentRef.current) {
               completionSentRef.current = true;
               setSaving(true);
+              setSubmitError('');
               try {
                 await onComplete?.({
+                  operationId: operationIdRef.current,
                   customerId,
                   customer,
                   items: items.map((item) => ({
@@ -783,11 +792,12 @@ export function SellWizard({
               } catch (error) {
                 completionSentRef.current = false;
                 setSaving(false);
-                setAnnouncement(
+                const message =
                   error instanceof Error
                     ? error.message
-                    : 'Não foi possível salvar a venda.',
-                );
+                    : 'Não foi possível salvar a venda.';
+                setSubmitError(message);
+                setAnnouncement(message);
                 return;
               }
             }
@@ -1782,6 +1792,7 @@ function ReceiptStage({
 
 function SaleReview({
   customer,
+  error,
   items,
   payments,
   receiptCount,
@@ -1794,6 +1805,7 @@ function SaleReview({
   saving,
 }: {
   customer: string;
+  error: string;
   items: SaleItem[];
   payments: SalePayment[];
   receiptCount: number;
@@ -1931,6 +1943,14 @@ function SaleReview({
         </div>
       </CardContent>
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
+        {error && (
+          <p
+            className="col-span-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive"
+            role="alert"
+          >
+            {error}
+          </p>
+        )}
         <Button
           className="h-12 rounded-xl"
           disabled={saving}
@@ -2047,10 +2067,7 @@ function SaleCompletion({
 }
 
 function createLocalId(prefix: string) {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${createOperationId()}`;
 }
 
 function mediaReadyAnnouncement(

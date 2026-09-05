@@ -44,10 +44,13 @@ import {
   MEDIA_LIMITS,
   prepareMediaSelection,
 } from '@/lib/client-media';
+import { createOperationId } from '@/lib/client-operation-id';
 import { downloadReportPdf } from '@/lib/download-report-pdf';
+import { parseMoneyInput } from '@/lib/money';
 import { cn } from '@/lib/utils';
 import type {
   BootstrapData,
+  SalePaymentRecord,
   SaleRecord,
   SalesAnalytics,
   SalesGroupDetailPage,
@@ -882,6 +885,20 @@ function EditSaleDialog({
   const [itemFiles, setItemFiles] = useState<Record<string, File[]>>({});
   const [preparing, setPreparing] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'cash' | ''>('');
+  const [paymentPixAccountId, setPaymentPixAccountId] = useState(
+    () => data.pixAccounts.find((account) => account.active)?.id ?? '',
+  );
+  const [paymentAmount, setPaymentAmount] = useState(() =>
+    formatMoneyInput(Math.max(0, -(sale?.receivedDifferenceCents ?? 0))),
+  );
+  const paymentOperationIdRef = useRef(createOperationId());
+  const [visiblePayments, setVisiblePayments] = useState<SalePaymentRecord[]>(
+    () => sale?.payments ?? [],
+  );
+  const [pendingPaymentCents, setPendingPaymentCents] = useState(() =>
+    Math.max(0, -(sale?.receivedDifferenceCents ?? 0)),
+  );
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -910,6 +927,15 @@ function EditSaleDialog({
   const availableStatuses = data.orderStatuses.filter(
     (status) => status.active || status.id === currentStatusId,
   );
+  const activePixAccounts = data.pixAccounts.filter(
+    (account) => account.active,
+  );
+  const additionalPaymentCents = parseMoneyInput(paymentAmount);
+  const paymentReady =
+    paymentMethod !== '' &&
+    additionalPaymentCents > 0 &&
+    additionalPaymentCents <= pendingPaymentCents &&
+    (paymentMethod !== 'pix' || Boolean(paymentPixAccountId));
 
   const prepareReceipts = async (incoming: File[]) => {
     if (!sale || incoming.length === 0) return;
@@ -986,8 +1012,9 @@ function EditSaleDialog({
                 Editar venda #{String(sale.number).padStart(5, '0')}
               </DialogTitle>
               <DialogDescription>
-                Altere o acompanhamento do pedido ou acrescente anexos. Cliente,
-                produtos e valores permanecem protegidos.
+                Altere o acompanhamento, complete um pagamento pendente ou
+                acrescente anexos. Cliente, produtos e preços permanecem
+                protegidos.
               </DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 overscroll-contain sm:p-5">
@@ -1042,6 +1069,145 @@ function EditSaleDialog({
                   </p>
                 )}
               </section>
+
+              {pendingPaymentCents > 0 && (
+                <section className="rounded-2xl border border-amber-500/35 bg-amber-50/60 p-4 dark:bg-amber-500/5">
+                  <div className="flex items-start gap-3">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-900 dark:text-amber-200">
+                      <WalletCards className="size-5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-extrabold">Completar pagamento</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Os pagamentos anteriores permanecem registrados. O saldo
+                        pendente é {formatMoney(pendingPaymentCents)}.
+                      </p>
+                    </div>
+                  </div>
+
+                  {visiblePayments.length > 0 && (
+                    <div className="mt-3 space-y-1 rounded-xl bg-background/80 p-3 text-xs">
+                      {visiblePayments.map((payment) => (
+                        <div
+                          className="flex items-center justify-between gap-3"
+                          key={payment.id}
+                        >
+                          <span className="truncate text-muted-foreground">
+                            {payment.method === 'pix'
+                              ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                              : 'Dinheiro'}
+                          </span>
+                          <strong>{formatMoney(payment.amountCents)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="text-sm font-semibold"
+                        htmlFor={`sale-${sale.id}-payment-method`}
+                      >
+                        Forma do novo pagamento
+                      </label>
+                      <NativeSelect
+                        className="mt-1 h-11 w-full [&_select]:h-11"
+                        id={`sale-${sale.id}-payment-method`}
+                        onChange={(event) =>
+                          setPaymentMethod(
+                            event.target.value as 'pix' | 'cash' | '',
+                          )
+                        }
+                        value={paymentMethod}
+                      >
+                        <NativeSelectOption value="">
+                          Selecione
+                        </NativeSelectOption>
+                        <NativeSelectOption
+                          disabled={activePixAccounts.length === 0}
+                          value="pix"
+                        >
+                          Pix
+                        </NativeSelectOption>
+                        <NativeSelectOption value="cash">
+                          Dinheiro
+                        </NativeSelectOption>
+                      </NativeSelect>
+                    </div>
+                    <div>
+                      <label
+                        className="text-sm font-semibold"
+                        htmlFor={`sale-${sale.id}-payment-amount`}
+                      >
+                        Valor a acrescentar
+                      </label>
+                      <Input
+                        aria-describedby={
+                          paymentMethod && !paymentReady
+                            ? `sale-${sale.id}-payment-error`
+                            : undefined
+                        }
+                        aria-invalid={Boolean(paymentMethod && !paymentReady)}
+                        className="mt-1 h-11 text-right font-bold"
+                        id={`sale-${sale.id}-payment-amount`}
+                        inputMode="decimal"
+                        onChange={(event) =>
+                          setPaymentAmount(event.target.value)
+                        }
+                        value={paymentAmount}
+                      />
+                    </div>
+                  </div>
+
+                  {paymentMethod === 'pix' && (
+                    <div className="mt-2">
+                      <label
+                        className="text-sm font-semibold"
+                        htmlFor={`sale-${sale.id}-payment-account`}
+                      >
+                        Conta Pix
+                      </label>
+                      <NativeSelect
+                        className="mt-1 h-11 w-full [&_select]:h-11"
+                        id={`sale-${sale.id}-payment-account`}
+                        onChange={(event) =>
+                          setPaymentPixAccountId(event.target.value)
+                        }
+                        value={paymentPixAccountId}
+                      >
+                        {activePixAccounts.length === 0 && (
+                          <NativeSelectOption value="">
+                            Cadastre uma conta Pix ativa
+                          </NativeSelectOption>
+                        )}
+                        {activePixAccounts.map((account) => (
+                          <NativeSelectOption
+                            key={account.id}
+                            value={account.id}
+                          >
+                            {account.name}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </div>
+                  )}
+
+                  {paymentMethod && !paymentReady && (
+                    <p
+                      aria-live="polite"
+                      className="mt-2 text-xs font-semibold text-destructive"
+                      id={`sale-${sale.id}-payment-error`}
+                    >
+                      Informe um valor entre R$ 0,01 e{' '}
+                      {formatMoney(pendingPaymentCents)}
+                      {paymentMethod === 'pix' && !paymentPixAccountId
+                        ? ' e selecione uma conta Pix.'
+                        : '.'}
+                    </p>
+                  )}
+                </section>
+              )}
 
               <section className="rounded-2xl border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1211,15 +1377,55 @@ function EditSaleDialog({
                   disabled={
                     preparing ||
                     uploadBusy ||
+                    (paymentMethod !== '' && !paymentReady) ||
                     (selectedFiles.length === 0 &&
-                      selectedStatusId === currentStatusId)
+                      selectedStatusId === currentStatusId &&
+                      paymentMethod === '')
                   }
                   onClick={async () => {
                     setUploadBusy(true);
                     setError('');
                     setNotice('');
                     let statusSaved = false;
+                    let paymentSaved = false;
                     try {
+                      if (paymentMethod && paymentReady) {
+                        const result = await requestJson<{
+                          payment: SalePaymentRecord;
+                          sale: { receivedDifferenceCents: number };
+                        }>(`/api/sales/${sale.id}/payments`, {
+                          method: 'POST',
+                          headers: {
+                            'content-type': 'application/json',
+                            'x-csrf-token': data.csrfToken,
+                          },
+                          body: JSON.stringify({
+                            operationId: paymentOperationIdRef.current,
+                            method: paymentMethod,
+                            pixAccountId:
+                              paymentMethod === 'pix'
+                                ? paymentPixAccountId
+                                : null,
+                            amountCents: additionalPaymentCents,
+                          }),
+                        });
+                        paymentSaved = true;
+                        const nextPending = Math.max(
+                          0,
+                          -result.sale.receivedDifferenceCents,
+                        );
+                        setVisiblePayments((current) =>
+                          current.some(
+                            (payment) => payment.id === result.payment.id,
+                          )
+                            ? current
+                            : [...current, result.payment],
+                        );
+                        setPendingPaymentCents(nextPending);
+                        setPaymentAmount(formatMoneyInput(nextPending));
+                        setPaymentMethod('');
+                        paymentOperationIdRef.current = createOperationId();
+                      }
                       if (selectedStatusId !== currentStatusId) {
                         await requestJson(
                           `/api/sales/${sale.id}/order-status`,
@@ -1253,12 +1459,17 @@ function EditSaleDialog({
                           body: form,
                         });
                       }
-                      await onChanged();
+                      void onChanged();
                       onOpenChange(false);
                     } catch (caught) {
+                      const savedParts = [
+                        paymentSaved ? 'o pagamento' : '',
+                        statusSaved ? 'o status' : '',
+                      ].filter(Boolean);
+                      if (savedParts.length > 0) void onChanged();
                       setError(
-                        statusSaved
-                          ? `O status foi salvo, mas os anexos não foram enviados: ${messageOf(caught)}`
+                        savedParts.length > 0
+                          ? `${savedParts.join(' e ')} ${savedParts.length === 1 ? 'foi salvo' : 'foram salvos'}, mas faltou concluir o restante: ${messageOf(caught)}`
                           : messageOf(caught),
                       );
                     } finally {
@@ -1910,6 +2121,13 @@ function formatMoney(cents: number) {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
     currency: 'BRL',
+  }).format(cents / 100);
+}
+
+function formatMoneyInput(cents: number) {
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(cents / 100);
 }
 function dateKey(value: number) {

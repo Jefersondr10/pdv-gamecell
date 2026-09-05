@@ -370,6 +370,7 @@ function CloudPdv({
   const changeView = (view: View) => {
     setActiveView(view);
     setRun((value) => value + 1);
+    if (Date.now() - lastReloadAtRef.current >= 5_000) void reload(true);
   };
 
   const productsByCode = useMemo<Record<string, EntryProduct>>(() => {
@@ -402,6 +403,7 @@ function CloudPdv({
     form.set(
       'payload',
       JSON.stringify({
+        operationId: entry.operationId,
         productId: entry.productId,
         gtin14: entry.gtin14,
         serials: entry.serials,
@@ -413,7 +415,7 @@ function CloudPdv({
       headers: { 'x-csrf-token': data!.csrfToken },
       body: form,
     });
-    await reload(true);
+    void reload(true);
     return { added: result.added, duplicates: 0, capacityReached: false };
   };
 
@@ -422,6 +424,7 @@ function CloudPdv({
     form.set(
       'payload',
       JSON.stringify({
+        operationId: sale.operationId,
         customerId: sale.customerId,
         items: sale.items.map((item) => ({
           serial: item.serial,
@@ -445,7 +448,7 @@ function CloudPdv({
       headers: { 'x-csrf-token': data!.csrfToken },
       body: form,
     });
-    await reload(true);
+    void reload(true);
   };
 
   const logout = async () => {
@@ -1226,9 +1229,19 @@ function GuideDialog({
   onAcknowledge: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="flex max-h-[92dvh] max-w-2xl flex-col overflow-hidden">
+    <Dialog
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && !required) setError('');
+        onOpenChange(nextOpen);
+      }}
+      open={open}
+    >
+      <DialogContent
+        className="flex max-h-[92dvh] max-w-2xl flex-col overflow-hidden"
+        showCloseButton={!required}
+      >
         <DialogHeader>
           <DialogTitle>Como usar o sistema</DialogTitle>
           <DialogDescription>
@@ -1262,10 +1275,14 @@ function GuideDialog({
             modelo, cliente ou vendedor e veja o ranking no período escolhido. O
             menu Histórico preserva cada entrada.
           </GuideStep>
-          <GuideStep number="6" title="Status e anexos depois da venda">
-            Em Ajustes, crie os Status do pedido que sua loja usa. Em Vendas,
-            toque em Editar para mudar esse status e acrescentar comprovantes ou
-            fotos ao SN correto. Os dados originais da venda não são alterados.
+          <GuideStep
+            number="6"
+            title="Pagamento, status e anexos depois da venda"
+          >
+            Em Vendas, toque em Editar para completar um pagamento pendente sem
+            apagar os pagamentos anteriores, mudar o status do pedido ou
+            acrescentar comprovantes e fotos ao SN correto. Produtos e preços
+            originais permanecem protegidos.
           </GuideStep>
           <GuideStep number="7" title="Usuários e lojas">
             Cada loja é isolada. O proprietário cria funcionários e senhas;
@@ -1273,19 +1290,31 @@ function GuideDialog({
           </GuideStep>
         </div>
         <DialogFooter>
+          {error && (
+            <p
+              className="w-full rounded-xl bg-destructive/10 px-3 py-2 text-left text-sm font-semibold text-destructive"
+              role="alert"
+            >
+              {error}
+            </p>
+          )}
           <Button
             className="h-11 rounded-xl"
             disabled={busy}
             onClick={async () => {
               setBusy(true);
+              setError('');
               try {
                 await onAcknowledge();
+              } catch (caught) {
+                setError(messageOf(caught));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            {required ? 'Li e quero acessar' : 'Fechar'}
+            {busy && <LoaderCircle className="animate-spin" />}
+            {busy ? 'Confirmando…' : required ? 'Li e quero acessar' : 'Fechar'}
           </Button>
         </DialogFooter>
       </DialogContent>

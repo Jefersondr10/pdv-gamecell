@@ -27,6 +27,7 @@ import {
   prepareMediaSelection,
   sumFileBytes,
 } from '@/lib/client-media';
+import { createOperationId } from '@/lib/client-operation-id';
 import type { ScanCandidate } from '@/lib/scanner';
 
 type EntryStep =
@@ -54,6 +55,7 @@ type SerialItem = {
 };
 
 export type EntrySubmission = {
+  operationId: string;
   productId: string;
   gtin14: string;
   displayCode: string;
@@ -112,12 +114,14 @@ export function EntryWizard({
   const [photoProgress, setPhotoProgress] = useState('');
   const [photoError, setPhotoError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [savedCount, setSavedCount] = useState(0);
   const [ignoredCount, setIgnoredCount] = useState(0);
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Leia o UPC ou EAN do produto.',
   );
   const committedRef = useRef(false);
+  const operationIdRef = useRef(createOperationId());
   const serialsRef = useRef<SerialItem[]>([]);
   const pendingSerialKeysRef = useRef(new Map<string, number>());
   const serialGenerationRef = useRef(0);
@@ -150,9 +154,11 @@ export function EntryWizard({
     setPhotoProgress('');
     setPhotoError('');
     setSaving(false);
+    setSubmitError('');
     setSavedCount(0);
     setIgnoredCount(0);
     committedRef.current = false;
+    operationIdRef.current = createOperationId();
     setAnnouncement('Nova entrada. Leia o UPC ou EAN do produto.');
   };
 
@@ -398,14 +404,17 @@ export function EntryWizard({
 
       {step === 'review' && product && (
         <EntryReview
+          error={submitError}
           onBack={() => setStep('photos')}
           onConfirm={async () => {
             if (committedRef.current || !commercialCode) return;
             committedRef.current = true;
             setSaving(true);
+            setSubmitError('');
             let result: EntryCommitResult;
             try {
               result = (await onConfirmEntry?.({
+                operationId: operationIdRef.current,
                 productId: product.id,
                 gtin14: commercialCode.normalizedValue,
                 displayCode: product.code,
@@ -421,11 +430,12 @@ export function EntryWizard({
             } catch (error) {
               committedRef.current = false;
               setSaving(false);
-              setAnnouncement(
+              const message =
                 error instanceof Error
                   ? error.message
-                  : 'Não foi possível salvar a entrada. Tente novamente.',
-              );
+                  : 'Não foi possível salvar a entrada. Tente novamente.';
+              setSubmitError(message);
+              setAnnouncement(message);
               return;
             }
             setSavedCount(result.added);
@@ -785,6 +795,7 @@ function EntryReview({
   serials,
   photoCount,
   saving,
+  error,
   onBack,
   onConfirm,
 }: {
@@ -792,6 +803,7 @@ function EntryReview({
   serials: SerialItem[];
   photoCount: number;
   saving: boolean;
+  error: string;
   onBack: () => void;
   onConfirm: () => void;
 }) {
@@ -902,6 +914,14 @@ function EntryReview({
       </CardContent>
 
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
+        {error && (
+          <p
+            className="col-span-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive"
+            role="alert"
+          >
+            {error}
+          </p>
+        )}
         <Button
           className="h-12 rounded-xl"
           disabled={saving}

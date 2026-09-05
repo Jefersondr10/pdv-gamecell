@@ -1,12 +1,24 @@
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.PDV_TEST_ORIGIN ?? 'http://127.0.0.1:3004';
+const targetHost = new URL(baseUrl).hostname;
+const localTarget =
+  targetHost === 'localhost' ||
+  targetHost === '127.0.0.1' ||
+  targetHost === '::1';
+assert.ok(
+  localTarget || process.env.PDV_TEST_ALLOW_REMOTE === '1',
+  'O teste cria dados. Para uma origem remota, defina PDV_TEST_ALLOW_REMOTE=1 explicitamente.',
+);
 const maintenanceBypass = process.env.PDV_TEST_BYPASS;
 const primaryStoreToken = process.env.PDV_TEST_PRIMARY_TOKEN;
 const passwordSignupToken =
   process.env.PDV_TEST_SIGNUP_TOKEN ?? primaryStoreToken;
 assert.ok(passwordSignupToken, 'Informe PDV_TEST_SIGNUP_TOKEN para o teste.');
 const runId = Date.now().toString(36);
+const testSourceIp =
+  process.env.PDV_TEST_SOURCE_IP ??
+  `198.51.100.${((Date.now() % 200) + 1).toString()}`;
 let ownerCookie = '';
 let ownerCsrf = '';
 
@@ -14,22 +26,23 @@ type JsonValue = Record<string, unknown>;
 
 async function call(
   path: string,
-  options: RequestInit & { cookie?: string; expected?: number } = {},
+  options: RequestInit & { cookie?: string; expected?: number | number[] } = {},
 ) {
   const headers = new Headers(options.headers);
   headers.set('origin', baseUrl);
   if (maintenanceBypass) {
     headers.set('x-production-maintenance-bypass', maintenanceBypass);
   }
+  headers.set('cf-connecting-ip', testSourceIp);
   if (options.cookie) headers.set('cookie', options.cookie);
   const response = await fetch(`${baseUrl}${path}`, { ...options, headers });
   const text = await response.text();
   const body = text ? (JSON.parse(text) as JsonValue) : {};
   const expected = options.expected ?? 200;
-  assert.equal(
-    response.status,
-    expected,
-    `${path}: esperado ${expected}, recebido ${response.status}: ${text}`,
+  const acceptedStatuses = Array.isArray(expected) ? expected : [expected];
+  assert.ok(
+    acceptedStatuses.includes(response.status),
+    `${path}: esperado ${acceptedStatuses.join(' ou ')}, recebido ${response.status}: ${text}`,
   );
   return { response, body };
 }
@@ -48,9 +61,15 @@ function jsonBody(value: unknown) {
 }
 
 function tinyPhoto() {
-  return new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], {
-    type: 'image/png',
-  });
+  return new Blob(
+    [
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    ],
+    { type: 'image/png' },
+  );
 }
 
 function tinyPdf() {
@@ -288,23 +307,50 @@ const orderStatuses = await call('/api/order-statuses', {
 });
 assert.equal((orderStatuses.body.items as unknown[]).length, 1);
 
+const entryOperationId = crypto.randomUUID();
+const entryPayload = {
+  operationId: entryOperationId,
+  productId,
+  gtin14: '00036000291452',
+  serials: ['HC9P06R095', 'SHC9P06R096'],
+};
 const entryForm = new FormData();
-entryForm.set(
-  'payload',
-  JSON.stringify({
-    productId,
-    gtin14: '00036000291452',
-    serials: ['HC9P06R095', 'SHC9P06R096'],
-  }),
-);
+entryForm.set('payload', JSON.stringify(entryPayload));
 entryForm.append('photos', tinyPhoto(), 'entrada.png');
-await call('/api/entries', {
+const entry = await call('/api/entries', {
   method: 'POST',
   cookie: ownerCookie,
   expected: 201,
   headers: { 'x-csrf-token': ownerCsrf },
   body: entryForm,
 });
+const entryId = String(entry.body.id);
+const replayEntryForm = new FormData();
+replayEntryForm.set('payload', JSON.stringify(entryPayload));
+const replayedEntry = await call('/api/entries', {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: replayEntryForm,
+});
+assert.equal(replayedEntry.body.id, entryId);
+assert.equal(replayedEntry.body.replayed, true);
+const conflictingEntryForm = new FormData();
+conflictingEntryForm.set(
+  'payload',
+  JSON.stringify({
+    ...entryPayload,
+    serials: ['HC9P06R095', 'HC9P06R097'],
+  }),
+);
+const conflictingEntry = await call('/api/entries', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: conflictingEntryForm,
+});
+assert.equal(conflictingEntry.body.code, 'OPERATION_ALREADY_USED');
 
 const duplicateForm = new FormData();
 duplicateForm.set(
@@ -336,6 +382,13 @@ assert.equal(
   (availableLookup.body.matches as Array<{ status: string }>)[0].status,
   'available',
 );
+const prefixedLookup = await call('/api/inventory/lookup?serial=SHC9P06R096', {
+  cookie: ownerCookie,
+});
+assert.equal(
+  (prefixedLookup.body.matches as Array<{ status: string }>)[0].status,
+  'available',
+);
 const availableStock = await call('/api/inventory?view=summary', {
   cookie: ownerCookie,
 });
@@ -349,18 +402,18 @@ const inventoryPage = await call('/api/inventory?limit=50&includePhotos=1', {
 assert.equal(inventoryPage.body.total, 2);
 assert.equal((inventoryPage.body.items as unknown[]).length, 2);
 
+const saleOperationId = crypto.randomUUID();
+const salePayload = {
+  operationId: saleOperationId,
+  customerId: clientId,
+  items: [
+    { serial: 'HC9P06R095', priceCents: 450_000 },
+    { serial: 'HC9P06R096', priceCents: 450_000 },
+  ],
+  payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 850_000 }],
+};
 const saleForm = new FormData();
-saleForm.set(
-  'payload',
-  JSON.stringify({
-    customerId: clientId,
-    items: [
-      { serial: 'HC9P06R095', priceCents: 450_000 },
-      { serial: 'HC9P06R096', priceCents: 450_000 },
-    ],
-    payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 850_000 }],
-  }),
-);
+saleForm.set('payload', JSON.stringify(salePayload));
 saleForm.append('itemPhotos:0', tinyPhoto(), 'aparelho-1.png');
 saleForm.append('itemPhotos:1', tinyPhoto(), 'aparelho-2.png');
 const sale = await call('/api/sales', {
@@ -372,6 +425,36 @@ const sale = await call('/api/sales', {
 });
 assert.equal(sale.body.number, 1);
 const saleId = String(sale.body.id);
+const replaySaleForm = new FormData();
+replaySaleForm.set('payload', JSON.stringify(salePayload));
+const replayedSale = await call('/api/sales', {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: replaySaleForm,
+});
+assert.equal(replayedSale.body.id, saleId);
+assert.equal(replayedSale.body.number, 1);
+assert.equal(replayedSale.body.replayed, true);
+const conflictingSaleForm = new FormData();
+conflictingSaleForm.set(
+  'payload',
+  JSON.stringify({
+    ...salePayload,
+    items: [
+      { serial: 'HC9P06R095', priceCents: 449_999 },
+      { serial: 'HC9P06R096', priceCents: 450_001 },
+    ],
+  }),
+);
+const conflictingSale = await call('/api/sales', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: conflictingSaleForm,
+});
+assert.equal(conflictingSale.body.code, 'OPERATION_ALREADY_USED');
 
 const soldLookup = await call('/api/inventory/lookup?serial=HC9P06R095', {
   cookie: ownerCookie,
@@ -428,6 +511,159 @@ const listedSale = (
   }>
 )[0];
 assert.equal(listedSale.orderStatus, null);
+
+const partialPaymentOperationId = crypto.randomUUID();
+const partialPaymentPayload = {
+  operationId: partialPaymentOperationId,
+  method: 'cash',
+  pixAccountId: null,
+  amountCents: 25_000,
+};
+const partialPayment = await call(`/api/sales/${saleId}/payments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 201,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify(partialPaymentPayload),
+});
+assert.equal(
+  (partialPayment.body.sale as { receivedTotalCents: number })
+    .receivedTotalCents,
+  875_000,
+);
+assert.equal(
+  (partialPayment.body.sale as { receivedDifferenceCents: number })
+    .receivedDifferenceCents,
+  -25_000,
+);
+const replayedPayment = await call(`/api/sales/${saleId}/payments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify(partialPaymentPayload),
+});
+assert.equal(replayedPayment.body.replayed, true);
+assert.equal(
+  (replayedPayment.body.sale as { receivedTotalCents: number })
+    .receivedTotalCents,
+  875_000,
+);
+const conflictingPayment = await call(`/api/sales/${saleId}/payments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    ...partialPaymentPayload,
+    amountCents: 25_001,
+  }),
+});
+assert.equal(conflictingPayment.body.code, 'OPERATION_ALREADY_USED');
+const excessivePayment = await call(`/api/sales/${saleId}/payments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 400,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    method: 'cash',
+    pixAccountId: null,
+    amountCents: 25_001,
+  }),
+});
+assert.equal(excessivePayment.body.code, 'PAYMENT_EXCEEDS_BALANCE');
+const invalidPixPayment = await call(`/api/sales/${saleId}/payments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    method: 'pix',
+    pixAccountId: crypto.randomUUID(),
+    amountCents: 1,
+  }),
+});
+assert.equal(invalidPixPayment.body.code, 'PIX_ACCOUNT_INVALID');
+
+const concurrentPaymentOperationId = crypto.randomUUID();
+const [concurrentCash, concurrentPix] = await Promise.all([
+  call(`/api/sales/${saleId}/payments`, {
+    method: 'POST',
+    cookie: ownerCookie,
+    expected: [201, 409],
+    headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      operationId: concurrentPaymentOperationId,
+      method: 'cash',
+      pixAccountId: null,
+      amountCents: 25_000,
+    }),
+  }),
+  call(`/api/sales/${saleId}/payments`, {
+    method: 'POST',
+    cookie: ownerCookie,
+    expected: [201, 409],
+    headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      operationId: concurrentPaymentOperationId,
+      method: 'pix',
+      pixAccountId: pixId,
+      amountCents: 25_000,
+    }),
+  }),
+]);
+assert.deepEqual(
+  [concurrentCash.response.status, concurrentPix.response.status].sort(
+    (left, right) => left - right,
+  ),
+  [201, 409],
+);
+const concurrentConflict =
+  concurrentCash.response.status === 409 ? concurrentCash : concurrentPix;
+assert.equal(concurrentConflict.body.code, 'OPERATION_ALREADY_USED');
+const paidSales = await call('/api/sales?group=sale&limit=50&period=all', {
+  cookie: ownerCookie,
+});
+const paidSale = (
+  paidSales.body.items as Array<{
+    receivedTotalCents: number;
+    receivedDifferenceCents: number;
+    payments: unknown[];
+  }>
+)[0];
+assert.equal(paidSale.receivedTotalCents, 900_000);
+assert.equal(paidSale.receivedDifferenceCents, 0);
+assert.equal(paidSale.payments.length, 3);
+assert.equal(
+  (paidSales.body.aggregates as { alertCount: number }).alertCount,
+  1,
+);
+const alreadyPaid = await call(`/api/sales/${saleId}/payments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    method: 'cash',
+    pixAccountId: null,
+    amountCents: 1,
+  }),
+});
+assert.equal(alreadyPaid.body.code, 'SALE_ALREADY_PAID');
+const replayAfterPaymentForm = new FormData();
+replayAfterPaymentForm.set('payload', JSON.stringify(salePayload));
+const replayAfterPayment = await call('/api/sales', {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: replayAfterPaymentForm,
+});
+assert.equal(replayAfterPayment.body.id, saleId);
+assert.equal(replayAfterPayment.body.replayed, true);
+assert.equal(replayAfterPayment.body.receivedTotalCents, 850_000);
+assert.equal(replayAfterPayment.body.receivedDifferenceCents, -50_000);
 
 await call(`/api/sales/${saleId}/order-status`, {
   method: 'PATCH',
@@ -606,6 +842,19 @@ await call(`/api/sales/${saleId}/cancel`, {
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
   body: JSON.stringify({ reason: 'Cancelamento do ensaio local' }),
 });
+const cancelledPayment = await call(`/api/sales/${saleId}/payments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    method: 'cash',
+    pixAccountId: null,
+    amountCents: 1,
+  }),
+});
+assert.equal(cancelledPayment.body.code, 'SALE_CANCELLED');
 const cancelledAttachment = new FormData();
 cancelledAttachment.append('receipts', tinyPhoto(), 'cancelada.png');
 await call(`/api/sales/${saleId}/attachments`, {
@@ -684,7 +933,7 @@ activeSaleForm.set(
   JSON.stringify({
     customerId: clientId,
     items: [{ serial: 'HC9P06R095', priceCents: 500_000 }],
-    payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 500_000 }],
+    payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 450_000 }],
   }),
 );
 activeSaleForm.append('itemPhotos:0', tinyPhoto(), 'aparelho-ativo.png');

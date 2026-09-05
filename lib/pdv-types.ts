@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.05-status-anexos-v3';
+export const GUIDE_VERSION = '2026.09.05-confirmacao-pagamentos-v4';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 

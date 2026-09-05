@@ -13,6 +13,7 @@ import {
   HttpError,
   integerField,
   json,
+  operationIdField,
   parseJsonObject,
   stringField,
 } from '@/lib/server/http';
@@ -23,7 +24,7 @@ import {
 } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import { parseSalesFilters } from '@/lib/server/sales-filters';
-import { normalizeSerial } from '@/lib/server/security';
+import { normalizeAppleSerial, sha256 } from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import type {
   AttachmentRecord,
@@ -228,6 +229,7 @@ export async function POST(request: Request) {
   let reservationId: string | null = null;
   let saleId: string | null = null;
   let storeId: string | null = null;
+  let operationFingerprint: string | null = null;
   try {
     assertSameOrigin(request);
     const session = await requireSession(request);
@@ -249,12 +251,12 @@ export async function POST(request: Request) {
         {
           scope: `multipart:user:${session.id}`,
           windowMs: 60 * 1000,
-          max: 8,
+          max: 20,
         },
         {
           scope: `multipart:ip:${sourceIp}`,
           windowMs: 60 * 1000,
-          max: 16,
+          max: 40,
         },
         {
           scope: `multipart:store:${session.storeId}:minute`,
@@ -303,9 +305,38 @@ export async function POST(request: Request) {
       );
     }
     const payload = parseJsonObject(payloadValue, 'Dados da venda inválidos.');
+    saleId = operationIdField(payload.operationId);
     const customerId = stringField(payload.customerId, 'Cliente', { max: 80 });
     const items = parseItems(payload.items);
     const payments = parsePayments(payload.payments);
+    const productsTotalCents = items.reduce(
+      (sum, item) => sum + item.priceCents,
+      0,
+    );
+    const receivedTotalCents = payments.reduce(
+      (sum, payment) => sum + payment.amountCents,
+      0,
+    );
+    operationFingerprint = await saleFingerprint(customerId, items, payments);
+    const replay = await findSaleCommit(db, session.storeId!, saleId);
+    if (replay) {
+      assertSameSaleOperation(
+        replay,
+        operationFingerprint,
+        customerId,
+        items,
+        payments,
+      );
+      return json({
+        ok: true,
+        id: replay.id,
+        number: replay.number,
+        productsTotalCents: replay.productsTotalCents,
+        receivedTotalCents: replay.receivedTotalCents,
+        receivedDifferenceCents: replay.receivedDifferenceCents,
+        replayed: true,
+      });
+    }
     const customer = await db
       .prepare(
         'SELECT id, name FROM clients WHERE id = ? AND store_id = ? AND active = 1 LIMIT 1',
@@ -398,7 +429,6 @@ export async function POST(request: Request) {
       8 + items.length * 3 + payments.length + allFiles.length,
     );
     reservationId = await reserveUpload(session.storeId!, filesSizeBytes);
-    saleId = crypto.randomUUID();
     const itemIds = items.map(() => crypto.randomUUID());
     const itemUploads = itemFiles.flatMap((files, itemIndex) =>
       files.map((file) => ({
@@ -420,14 +450,6 @@ export async function POST(request: Request) {
 
     await uploadFiles(uploaded);
 
-    const productsTotalCents = items.reduce(
-      (sum, item) => sum + item.priceCents,
-      0,
-    );
-    const receivedTotalCents = payments.reduce(
-      (sum, payment) => sum + payment.amountCents,
-      0,
-    );
     const referenceTotalCents = items.reduce(
       (sum, item) => sum + unitBySerial.get(item.serial)!.referencePriceCents,
       0,
@@ -631,6 +653,7 @@ export async function POST(request: Request) {
           JSON.stringify({
             items: items.length,
             receivedDifferenceCents: receivedTotalCents - productsTotalCents,
+            operationFingerprint,
           }),
           now,
         ),
@@ -646,17 +669,22 @@ export async function POST(request: Request) {
         .bind(saleId, session.storeId),
     );
     const batchResults = await db.batch(statements);
+    reservationId = null;
     committed = true;
     const numberResult = batchResults.at(-1) as
       | D1Result<{ number: number }>
       | undefined;
-    const number = Number(numberResult?.results?.[0]?.number);
+    let number = Number(numberResult?.results?.[0]?.number);
     if (!Number.isSafeInteger(number) || number < 1) {
-      throw new HttpError(
-        500,
-        'A venda foi salva, mas o número não pôde ser exibido. Atualize a lista de vendas.',
-        'SALE_NUMBER_UNAVAILABLE',
-      );
+      const saved = await findSaleCommit(db, session.storeId!, saleId);
+      if (!saved) {
+        throw new HttpError(
+          500,
+          'A venda foi salva, mas o número não pôde ser exibido. Atualize a lista de vendas.',
+          'SALE_NUMBER_UNAVAILABLE',
+        );
+      }
+      number = saved.number;
     }
     return json(
       {
@@ -670,25 +698,54 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
-    if (uploaded.length && !committed) {
-      if (saleId && storeId) {
+    const recoverable =
+      !(error instanceof HttpError) || error.code === 'SALE_NUMBER_UNAVAILABLE';
+    if (recoverable && saleId && storeId && operationFingerprint) {
+      let recoveryLookupFailed = false;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let saved: Awaited<ReturnType<typeof findSaleCommit>> = null;
         try {
-          const saved = await runtime()
-            .DB.prepare(
-              'SELECT 1 FROM sales WHERE id = ? AND store_id = ? LIMIT 1',
-            )
-            .bind(saleId, storeId)
-            .first();
-          if (saved) committed = true;
-          else await cleanupFiles(uploaded);
+          saved = await findSaleCommit(runtime().DB, storeId, saleId);
+          recoveryLookupFailed = false;
         } catch {
-          // Preserve R2 objects when commit status is uncertain. Any reservation
-          // left behind expires automatically; deleting could break saved records.
-          committed = true;
+          recoveryLookupFailed = true;
+          continue;
         }
-      } else {
-        await cleanupFiles(uploaded);
+        if (!saved) break;
+        try {
+          assertSameSaleOperation(saved, operationFingerprint);
+        } catch (mismatch) {
+          await cleanupFiles(uploaded);
+          return apiError(mismatch);
+        }
+        if (!attemptFilesWereCommitted(uploaded, saved.attachmentIds)) {
+          await cleanupFiles(uploaded);
+        }
+        if (reservationId) {
+          await releaseUpload(reservationId);
+          reservationId = null;
+        }
+        committed = true;
+        return json({
+          ok: true,
+          id: saved.id,
+          number: saved.number,
+          productsTotalCents: saved.productsTotalCents,
+          receivedTotalCents: saved.receivedTotalCents,
+          receivedDifferenceCents: saved.receivedDifferenceCents,
+          replayed: true,
+        });
       }
+      if (uploaded.length) {
+        if (recoveryLookupFailed) {
+          // Não apagar anexos se o estado da transação não pôde ser consultado.
+          committed = true;
+        } else if (!committed) {
+          await cleanupFiles(uploaded);
+        }
+      }
+    } else if (uploaded.length && !committed) {
+      await cleanupFiles(uploaded);
     }
     if (
       error instanceof Error &&
@@ -744,8 +801,186 @@ export async function POST(request: Request) {
     }
     return apiError(error);
   } finally {
-    if (reservationId && !committed) await releaseUpload(reservationId);
+    if (reservationId) await releaseUpload(reservationId);
   }
+}
+
+async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
+  const sale = await db
+    .prepare(
+      `SELECT id, number, customer_id AS customerId,
+              products_total_cents AS productsTotalCents,
+              received_total_cents AS receivedTotalCents,
+              received_difference_cents AS receivedDifferenceCents,
+              status,
+              (SELECT details_json FROM audit_events audit
+               WHERE audit.store_id = sales.store_id
+                 AND audit.entity_id = sales.id
+                 AND audit.action = 'sale.created'
+               LIMIT 1) AS operationDetailsJson
+       FROM sales WHERE id = ? AND store_id = ? LIMIT 1`,
+    )
+    .bind(saleId, storeId)
+    .first<{
+      id: string;
+      number: number;
+      customerId: string | null;
+      productsTotalCents: number;
+      receivedTotalCents: number;
+      receivedDifferenceCents: number;
+      status: 'completed' | 'cancelled';
+      operationDetailsJson: string | null;
+    }>();
+  if (!sale) return null;
+  const [items, payments, attachments] = await Promise.all([
+    db
+      .prepare(
+        `SELECT serial, sold_price_cents AS priceCents
+         FROM sale_items WHERE sale_id = ? AND store_id = ? ORDER BY serial, id`,
+      )
+      .bind(saleId, storeId)
+      .all<SaleInputItem>(),
+    db
+      .prepare(
+        `SELECT method, pix_account_id AS pixAccountId,
+                amount_cents AS amountCents
+         FROM payments WHERE sale_id = ? AND store_id = ?
+         ORDER BY created_at, id`,
+      )
+      .bind(saleId, storeId)
+      .all<SaleInputPayment>(),
+    db
+      .prepare(
+        `SELECT id FROM attachments
+         WHERE sale_id = ? AND store_id = ? ORDER BY id`,
+      )
+      .bind(saleId, storeId)
+      .all<{ id: string }>(),
+  ]);
+  const details = saleOperationDetails(sale.operationDetailsJson);
+  const productsTotalCents = Number(sale.productsTotalCents);
+  const currentReceivedTotalCents = Number(sale.receivedTotalCents);
+  const currentReceivedDifferenceCents = Number(sale.receivedDifferenceCents);
+  const originalDifference = details.receivedDifferenceCents;
+  return {
+    ...sale,
+    number: Number(sale.number),
+    productsTotalCents,
+    receivedTotalCents:
+      originalDifference === null
+        ? currentReceivedTotalCents
+        : productsTotalCents + originalDifference,
+    receivedDifferenceCents:
+      originalDifference ?? currentReceivedDifferenceCents,
+    items: items.results.map((item) => ({
+      serial: item.serial,
+      priceCents: Number(item.priceCents),
+    })),
+    payments: payments.results.map((payment) => ({
+      method: payment.method,
+      pixAccountId: payment.pixAccountId,
+      amountCents: Number(payment.amountCents),
+    })),
+    attachmentIds: attachments.results.map((attachment) => attachment.id),
+    operationFingerprint: details.operationFingerprint,
+  };
+}
+
+async function saleFingerprint(
+  customerId: string,
+  items: SaleInputItem[],
+  payments: SaleInputPayment[],
+) {
+  return sha256(canonicalSaleOperation(customerId, items, payments));
+}
+
+function canonicalSaleOperation(
+  customerId: string,
+  items: SaleInputItem[],
+  payments: SaleInputPayment[],
+) {
+  const canonicalItems = items
+    .map((item) => [item.serial, item.priceCents] as const)
+    .sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right)),
+    );
+  const canonicalPayments = payments
+    .map(
+      (payment) =>
+        [
+          payment.method,
+          payment.pixAccountId ?? '',
+          payment.amountCents,
+        ] as const,
+    )
+    .sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right)),
+    );
+  return JSON.stringify({
+    customerId,
+    items: canonicalItems,
+    payments: canonicalPayments,
+  });
+}
+
+function assertSameSaleOperation(
+  saved: NonNullable<Awaited<ReturnType<typeof findSaleCommit>>>,
+  operationFingerprint: string,
+  customerId?: string,
+  items?: SaleInputItem[],
+  payments?: SaleInputPayment[],
+) {
+  const fallbackMatches =
+    customerId !== undefined &&
+    items !== undefined &&
+    payments !== undefined &&
+    canonicalSaleOperation(
+      saved.customerId ?? '',
+      saved.items,
+      saved.payments,
+    ) === canonicalSaleOperation(customerId, items, payments);
+  if (
+    saved.operationFingerprint
+      ? saved.operationFingerprint !== operationFingerprint
+      : !fallbackMatches
+  ) {
+    throw new HttpError(
+      409,
+      'Esta operação já foi usada em outra venda. Inicie uma nova venda.',
+      'OPERATION_ALREADY_USED',
+    );
+  }
+}
+
+function saleOperationDetails(detailsJson: string | null) {
+  if (!detailsJson) {
+    return { operationFingerprint: null, receivedDifferenceCents: null };
+  }
+  try {
+    const details = JSON.parse(detailsJson) as Record<string, unknown>;
+    return {
+      operationFingerprint:
+        typeof details.operationFingerprint === 'string'
+          ? details.operationFingerprint
+          : null,
+      receivedDifferenceCents:
+        typeof details.receivedDifferenceCents === 'number' &&
+        Number.isSafeInteger(details.receivedDifferenceCents)
+          ? details.receivedDifferenceCents
+          : null,
+    };
+  } catch {
+    return { operationFingerprint: null, receivedDifferenceCents: null };
+  }
+}
+
+function attemptFilesWereCommitted(
+  files: ReturnType<typeof prepareFile>[],
+  savedAttachmentIds: string[],
+) {
+  if (files.length === 0) return false;
+  const savedIds = new Set(savedAttachmentIds);
+  return files.every((file) => savedIds.has(file.id));
 }
 
 function parseItems(value: unknown): SaleInputItem[] {
@@ -757,7 +992,7 @@ function parseItems(value: unknown): SaleInputItem[] {
       throw new HttpError(400, 'Item inválido.', 'INVALID_ITEM');
     }
     const record = raw as Record<string, unknown>;
-    const serial = normalizeSerial(
+    const serial = normalizeAppleSerial(
       stringField(record.serial, 'SN', { min: 8, max: 24 }),
     );
     if (serial.length < 8 || serial.length > 18 || !/[A-Z]/.test(serial)) {

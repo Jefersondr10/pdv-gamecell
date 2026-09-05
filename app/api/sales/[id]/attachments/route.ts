@@ -66,12 +66,12 @@ export async function POST(
         {
           scope: `multipart:user:${session.id}`,
           windowMs: 60 * 1000,
-          max: 8,
+          max: 20,
         },
         {
           scope: `multipart:ip:${sourceIp}`,
           windowMs: 60 * 1000,
-          max: 16,
+          max: 40,
         },
         {
           scope: `multipart:store:${session.storeId}:minute`,

@@ -172,6 +172,26 @@ export function integerField(
   return Number(value);
 }
 
+export function operationIdField(value: unknown) {
+  if (value === undefined) return crypto.randomUUID();
+  const id = stringField(value, 'Identificador da operação', {
+    min: 36,
+    max: 36,
+  }).toLowerCase();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      id,
+    )
+  ) {
+    throw new HttpError(
+      400,
+      'Identificador da operação inválido.',
+      'INVALID_OPERATION_ID',
+    );
+  }
+  return id;
+}
+
 export function utf8Prefix(value: string, maxBytes: number) {
   const encoder = new TextEncoder();
   if (encoder.encode(value).byteLength <= maxBytes) return value;

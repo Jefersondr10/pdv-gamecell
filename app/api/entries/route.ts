@@ -12,6 +12,7 @@ import {
   assertSameOrigin,
   HttpError,
   json,
+  operationIdField,
   parseJsonObject,
   stringField,
   utf8Prefix,
@@ -26,6 +27,7 @@ import {
   normalizeAppleSerial,
   normalizeCommercialCode,
   serialAliases,
+  sha256,
 } from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import type {
@@ -171,6 +173,7 @@ export async function POST(request: Request) {
   let committed = false;
   let entryId: string | null = null;
   let storeId: string | null = null;
+  let operationFingerprint: string | null = null;
   try {
     assertSameOrigin(request);
     const session = await requireSession(request);
@@ -192,12 +195,12 @@ export async function POST(request: Request) {
         {
           scope: `multipart:user:${session.id}`,
           windowMs: 60 * 1000,
-          max: 8,
+          max: 20,
         },
         {
           scope: `multipart:ip:${sourceIp}`,
           windowMs: 60 * 1000,
-          max: 16,
+          max: 40,
         },
         {
           scope: `multipart:store:${session.storeId}:minute`,
@@ -243,6 +246,7 @@ export async function POST(request: Request) {
       payloadValue,
       'Dados da entrada inválidos.',
     );
+    entryId = operationIdField(payload.operationId);
     const productId = stringField(payload.productId, 'Produto', { max: 80 });
     const gtin14 = normalizeCommercialCode(
       stringField(payload.gtin14, 'UPC ou EAN', { min: 8, max: 18 }),
@@ -286,6 +290,22 @@ export async function POST(request: Request) {
         'Há SN inválido nesta entrada.',
         'INVALID_SERIALS',
       );
+    }
+    operationFingerprint = await entryFingerprint(productId, gtin14, serials);
+    const replay = await findEntryCommit(db, session.storeId!, entryId);
+    if (replay) {
+      assertSameEntryOperation(
+        replay,
+        operationFingerprint,
+        productId,
+        serials,
+      );
+      return json({
+        ok: true,
+        id: replay.id,
+        added: replay.quantity,
+        replayed: true,
+      });
     }
     const photos = validateFiles(form.getAll('photos'), {
       required: true,
@@ -346,7 +366,6 @@ export async function POST(request: Request) {
       );
     }
     reservationId = await reserveUpload(session.storeId!, filesSizeBytes);
-    entryId = crypto.randomUUID();
     uploaded.push(
       ...photos.map((file) =>
         prepareFile(session.storeId!, `entries/${entryId}`, file),
@@ -437,7 +456,10 @@ export async function POST(request: Request) {
           session.storeId,
           session.id,
           entryId,
-          JSON.stringify({ quantity: serials.length }),
+          JSON.stringify({
+            quantity: serials.length,
+            operationFingerprint,
+          }),
           now,
         ),
       db
@@ -446,31 +468,62 @@ export async function POST(request: Request) {
         )
         .bind(reservationId, session.storeId),
     ]);
+    reservationId = null;
     committed = true;
     return json(
       { ok: true, id: entryId, added: serials.length },
       { status: 201 },
     );
   } catch (error) {
-    if (uploaded.length && !committed) {
-      if (entryId && storeId) {
+    if (
+      !(error instanceof HttpError) &&
+      entryId &&
+      storeId &&
+      operationFingerprint
+    ) {
+      let recoveryLookupFailed = false;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let saved: Awaited<ReturnType<typeof findEntryCommit>> = null;
         try {
-          const saved = await runtime()
-            .DB.prepare(
-              'SELECT 1 FROM entries WHERE id = ? AND store_id = ? LIMIT 1',
-            )
-            .bind(entryId, storeId)
-            .first();
-          if (saved) committed = true;
-          else await cleanupFiles(uploaded);
+          saved = await findEntryCommit(runtime().DB, storeId, entryId);
+          recoveryLookupFailed = false;
         } catch {
-          // Preserve R2 objects when commit status is uncertain. Any reservation
-          // left behind expires automatically; deleting could break saved records.
-          committed = true;
+          recoveryLookupFailed = true;
+          continue;
         }
-      } else {
-        await cleanupFiles(uploaded);
+        if (!saved) break;
+        try {
+          assertSameEntryOperation(saved, operationFingerprint);
+        } catch (mismatch) {
+          await cleanupFiles(uploaded);
+          return apiError(mismatch);
+        }
+        if (!attemptFilesWereCommitted(uploaded, saved.attachmentIds)) {
+          await cleanupFiles(uploaded);
+        }
+        if (reservationId) {
+          await releaseUpload(reservationId);
+          reservationId = null;
+        }
+        committed = true;
+        return json({
+          ok: true,
+          id: saved.id,
+          added: saved.quantity,
+          replayed: true,
+        });
       }
+      if (uploaded.length) {
+        if (recoveryLookupFailed) {
+          // Se nem a confirmação pôde ser consultada, preservar os objetos é
+          // mais seguro do que apagar fotos que podem estar vinculadas à entrada.
+          committed = true;
+        } else {
+          await cleanupFiles(uploaded);
+        }
+      }
+    } else if (uploaded.length && !committed) {
+      await cleanupFiles(uploaded);
     }
     if (
       error instanceof Error &&
@@ -500,8 +553,123 @@ export async function POST(request: Request) {
     }
     return apiError(error);
   } finally {
-    if (reservationId && !committed) await releaseUpload(reservationId);
+    if (reservationId) await releaseUpload(reservationId);
   }
+}
+
+async function findEntryCommit(
+  db: D1Database,
+  storeId: string,
+  entryId: string,
+) {
+  const entry = await db
+    .prepare(
+      `SELECT id, product_id AS productId, quantity,
+              (SELECT details_json FROM audit_events audit
+               WHERE audit.store_id = entries.store_id
+                 AND audit.entity_id = entries.id
+                 AND audit.action = 'entry.created'
+               LIMIT 1) AS operationDetailsJson
+       FROM entries WHERE id = ? AND store_id = ? LIMIT 1`,
+    )
+    .bind(entryId, storeId)
+    .first<{
+      id: string;
+      productId: string;
+      quantity: number;
+      operationDetailsJson: string | null;
+    }>();
+  if (!entry) return null;
+  const [units, attachments] = await Promise.all([
+    db
+      .prepare(
+        `SELECT serial FROM inventory_units
+         WHERE entry_id = ? AND store_id = ? ORDER BY serial`,
+      )
+      .bind(entryId, storeId)
+      .all<{ serial: string }>(),
+    db
+      .prepare(
+        `SELECT id FROM attachments
+         WHERE entry_id = ? AND store_id = ? ORDER BY id`,
+      )
+      .bind(entryId, storeId)
+      .all<{ id: string }>(),
+  ]);
+  return {
+    id: entry.id,
+    productId: entry.productId,
+    quantity: Number(entry.quantity),
+    serials: units.results.map((unit) => unit.serial),
+    attachmentIds: attachments.results.map((attachment) => attachment.id),
+    operationFingerprint: operationFingerprintFromDetails(
+      entry.operationDetailsJson,
+    ),
+  };
+}
+
+async function entryFingerprint(
+  productId: string,
+  gtin14: string,
+  serials: string[],
+) {
+  return sha256(
+    JSON.stringify({ productId, gtin14, serials: [...serials].sort() }),
+  );
+}
+
+function assertSameEntryOperation(
+  saved: NonNullable<Awaited<ReturnType<typeof findEntryCommit>>>,
+  operationFingerprint: string,
+  productId?: string,
+  serials?: string[],
+) {
+  const fallbackMatches =
+    productId !== undefined &&
+    serials !== undefined &&
+    saved.productId === productId &&
+    sameSortedStrings(saved.serials, serials);
+  if (
+    saved.operationFingerprint
+      ? saved.operationFingerprint !== operationFingerprint
+      : !fallbackMatches
+  ) {
+    throw new HttpError(
+      409,
+      'Esta operação já foi usada em outra entrada. Inicie uma nova entrada.',
+      'OPERATION_ALREADY_USED',
+    );
+  }
+}
+
+function sameSortedStrings(left: string[], right: string[]) {
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return (
+    sortedLeft.length === sortedRight.length &&
+    sortedLeft.every((value, index) => value === sortedRight[index])
+  );
+}
+
+function operationFingerprintFromDetails(detailsJson: string | null) {
+  if (!detailsJson) return null;
+  try {
+    const details = JSON.parse(detailsJson) as Record<string, unknown>;
+    return typeof details.operationFingerprint === 'string'
+      ? details.operationFingerprint
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function attemptFilesWereCommitted(
+  files: ReturnType<typeof prepareFile>[],
+  savedAttachmentIds: string[],
+) {
+  if (files.length === 0) return false;
+  const savedIds = new Set(savedAttachmentIds);
+  return files.every((file) => savedIds.has(file.id));
 }
 
 function chunk<T>(values: T[], size: number) {
