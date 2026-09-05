@@ -20,6 +20,14 @@ import { FlowFrame } from '@/components/pdv/flow-frame';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import type { ScanCandidate } from '@/lib/scanner';
 
 type EntryStep =
@@ -30,26 +38,31 @@ type EntryStep =
   | 'review'
   | 'done';
 
-type Product = {
+export type EntryProduct = {
+  id: string;
   name: string;
   detail: string;
   code: string;
 };
+
+type Product = EntryProduct;
 
 type SerialItem = {
   raw: string;
   normalized: string;
 };
 
-export type LocalTestEntryRecord = {
+export type EntrySubmission = {
+  productId: string;
   gtin14: string;
   displayCode: string;
   productName: string;
   productDetail: string;
   serials: string[];
+  photos: File[];
 };
 
-export type LocalTestEntryCommitResult = {
+export type EntryCommitResult = {
   added: number;
   duplicates: number;
   capacityReached: boolean;
@@ -57,49 +70,20 @@ export type LocalTestEntryCommitResult = {
 
 type EntryWizardProps = {
   existingTestSerials?: readonly string[];
-  onConfirmTestEntry?: (
-    entry: LocalTestEntryRecord,
-  ) => LocalTestEntryCommitResult;
+  productsByCode?: Record<string, EntryProduct>;
+  onConfirmEntry?: (
+    entry: EntrySubmission,
+  ) => EntryCommitResult | Promise<EntryCommitResult>;
   storageMode?: 'browser' | 'session';
+  lookupSerials?: (
+    serials: string[],
+  ) => Promise<Array<{ serial: string; status: 'available' | 'sold' }>>;
 };
 
 const ENTRY_STEPS = ['Produto', 'Seriais', 'Fotos', 'Revisão'] as const;
 
 const ENTRY_STAGE_CARD_CLASS =
   'flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
-
-const PRODUCTS_BY_CODE: Record<string, Product> = {
-  '00195950638011': {
-    name: 'iPhone 17 Pro Max',
-    detail: 'Deep Blue · 256 GB',
-    code: '195950638011',
-  },
-  '00195950637151': {
-    name: 'iPhone 17 Pro Max',
-    detail: 'Silver · 256 GB',
-    code: '195950637151',
-  },
-  '00195949822193': {
-    name: 'iPhone 16',
-    detail: 'Pink · 128 GB',
-    code: '195949822193',
-  },
-  '00195949035913': {
-    name: 'iPhone 15',
-    detail: 'Black · 128 GB',
-    code: '195949035913',
-  },
-  '00195949035937': {
-    name: 'iPhone 15',
-    detail: 'Black · 128 GB',
-    code: '195949035937',
-  },
-  '04549995649161': {
-    name: 'iPhone 17',
-    detail: 'White · 256 GB',
-    code: '4549995649161',
-  },
-};
 
 const STEP_INDEX: Record<EntryStep, number> = {
   'product-scan': 0,
@@ -112,8 +96,9 @@ const STEP_INDEX: Record<EntryStep, number> = {
 
 export function EntryWizard({
   existingTestSerials = [],
-  onConfirmTestEntry,
-  storageMode = 'browser',
+  productsByCode = {},
+  onConfirmEntry,
+  lookupSerials,
 }: EntryWizardProps) {
   const [step, setStep] = useState<EntryStep>('product-scan');
   const [commercialCode, setCommercialCode] = useState<ScanCandidate | null>(
@@ -124,6 +109,8 @@ export function EntryWizard({
   const [photos, setPhotos] = useState<File[]>([]);
   const [savedCount, setSavedCount] = useState(0);
   const [ignoredCount, setIgnoredCount] = useState(0);
+  const [serialPrefixChoice, setSerialPrefixChoice] =
+    useState<ScanCandidate | null>(null);
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Leia o UPC ou EAN do produto.',
   );
@@ -154,12 +141,13 @@ export function EntryWizard({
     setPhotos([]);
     setSavedCount(0);
     setIgnoredCount(0);
+    setSerialPrefixChoice(null);
     committedRef.current = false;
     setAnnouncement('Nova entrada. Leia o UPC ou EAN do produto.');
   };
 
   const acceptProductCode = (candidate: ScanCandidate) => {
-    const matchedProduct = PRODUCTS_BY_CODE[candidate.normalizedValue] ?? null;
+    const matchedProduct = productsByCode[candidate.normalizedValue] ?? null;
     serialsRef.current = [];
     setSerials([]);
     setPhotos([]);
@@ -172,25 +160,54 @@ export function EntryWizard({
     setAnnouncement(
       matchedProduct
         ? `${matchedProduct.name} encontrado. Confirme o produto.`
-        : 'Código não cadastrado. Você pode continuar em modo de teste local.',
+        : 'Código não cadastrado. Cadastre o produto antes de continuar.',
     );
   };
 
-  const acceptSerial = (candidate: ScanCandidate) => {
-    if (existingSerialSet.has(candidate.normalizedValue)) {
+  const addSerial = async (candidate: ScanCandidate) => {
+    const candidateValues = serialCandidateValues(candidate);
+    const existingValue = candidateValues.find((value) =>
+      existingSerialSet.has(value),
+    );
+    if (existingValue) {
       setAnnouncement(
-        `SN ${candidate.normalizedValue} já existe nas entradas de teste e foi ignorado.`,
+        `SN ${existingValue} já existe no estoque e foi ignorado.`,
       );
       return;
     }
-    if (
-      serialsRef.current.some(
-        (item) => item.normalized === candidate.normalizedValue,
-      )
-    ) {
+    if (lookupSerials) {
+      try {
+        const matches = await lookupSerials(candidateValues);
+        const registered = candidateValues
+          .map((value) => matches.find((match) => match.serial === value))
+          .find(Boolean);
+        if (registered) {
+          setAnnouncement(
+            `SN ${registered.serial} já está cadastrado e foi ignorado.`,
+          );
+          return;
+        }
+      } catch {
+        setAnnouncement(
+          'Não foi possível verificar este SN. Confira a conexão e bipe novamente.',
+        );
+        return;
+      }
+    }
+    const repeatedAfterLookup = candidateValues.find((value) =>
+      serialsRef.current.some((item) => item.normalized === value),
+    );
+    if (repeatedAfterLookup) {
       setAnnouncement(
-        `SN ${candidate.normalizedValue} já foi bipado e foi ignorado.`,
+        `SN ${repeatedAfterLookup} já foi bipado e foi ignorado.`,
       );
+      return;
+    }
+    const repeatedValue = candidateValues.find((value) =>
+      serialsRef.current.some((item) => item.normalized === value),
+    );
+    if (repeatedValue) {
+      setAnnouncement(`SN ${repeatedValue} já foi bipado e foi ignorado.`);
       return;
     }
 
@@ -201,6 +218,15 @@ export function EntryWizard({
     serialsRef.current = nextSerials;
     setSerials(nextSerials);
     setAnnouncement(`SN ${candidate.normalizedValue} adicionado.`);
+  };
+
+  const acceptSerial = (candidate: ScanCandidate) => {
+    if (candidate.prefixStripped && candidate.alternateValue) {
+      setSerialPrefixChoice(candidate);
+      setAnnouncement('Confirme se o S faz parte do número de série.');
+      return;
+    }
+    void addSerial(candidate);
   };
 
   return (
@@ -242,19 +268,6 @@ export function EntryWizard({
             setStep('product-scan');
             setAnnouncement('Faça uma nova leitura do UPC ou EAN.');
           }}
-          onUseLocalTest={() => {
-            setProduct({
-              name: 'Produto não cadastrado',
-              detail: 'Entrada de teste local',
-              code:
-                commercialCode.rawValue.replace(/\D/g, '') ||
-                commercialCode.normalizedValue,
-            });
-            setStep('serials');
-            setAnnouncement(
-              'Teste local ativado. Etapa 2. Bipe somente o número de série.',
-            );
-          }}
           product={product}
         />
       )}
@@ -287,7 +300,9 @@ export function EntryWizard({
         <PhotoStage
           onBack={() => setStep('serials')}
           onFiles={(files) => {
-            setPhotos(files);
+            setPhotos((current) =>
+              mergeUniqueFiles(current, files).slice(0, 8),
+            );
             setAnnouncement(
               `${files.length} ${files.length === 1 ? 'foto adicionada' : 'fotos adicionadas'}.`,
             );
@@ -305,26 +320,30 @@ export function EntryWizard({
       {step === 'review' && product && (
         <EntryReview
           onBack={() => setStep('photos')}
-          onConfirm={() => {
+          onConfirm={async () => {
             if (committedRef.current || !commercialCode) return;
             committedRef.current = true;
-            let result: LocalTestEntryCommitResult;
+            let result: EntryCommitResult;
             try {
-              result = onConfirmTestEntry?.({
+              result = (await onConfirmEntry?.({
+                productId: product.id,
                 gtin14: commercialCode.normalizedValue,
                 displayCode: product.code,
                 productName: product.name,
                 productDetail: product.detail,
                 serials: serials.map((serial) => serial.normalized),
-              }) ?? {
+                photos,
+              })) ?? {
                 added: serials.length,
                 duplicates: 0,
                 capacityReached: false,
               };
-            } catch {
+            } catch (error) {
               committedRef.current = false;
               setAnnouncement(
-                'Não foi possível salvar a entrada de teste. Tente novamente.',
+                error instanceof Error
+                  ? error.message
+                  : 'Não foi possível salvar a entrada. Tente novamente.',
               );
               return;
             }
@@ -333,7 +352,7 @@ export function EntryWizard({
             setStep('done');
             setAnnouncement(
               result.added > 0
-                ? `Entrada de teste salva com ${result.added} ${result.added === 1 ? 'aparelho' : 'aparelhos'}.`
+                ? `Entrada salva com ${result.added} ${result.added === 1 ? 'aparelho' : 'aparelhos'}.`
                 : 'Nenhuma unidade nova foi salva porque os SNs já estavam registrados.',
             );
           }}
@@ -349,9 +368,59 @@ export function EntryWizard({
           ignoredCount={ignoredCount}
           onReset={reset}
           productName={product?.name ?? 'Produto'}
-          storageMode={storageMode}
         />
       )}
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) setSerialPrefixChoice(null);
+        }}
+        open={Boolean(serialPrefixChoice)}
+      >
+        <DialogContent className="max-w-md">
+          {serialPrefixChoice && (
+            <>
+              <DialogHeader>
+                <DialogTitle>O S faz parte do SN?</DialogTitle>
+                <DialogDescription>
+                  Algumas etiquetas usam S apenas como prefixo. Confira o número
+                  impresso ao lado do código antes de salvar.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-2 rounded-xl bg-muted p-3 font-mono text-sm">
+                <span>Sem prefixo: {serialPrefixChoice.normalizedValue}</span>
+                <span>Com S: {serialPrefixChoice.alternateValue}</span>
+              </div>
+              <DialogFooter className="grid grid-cols-2 gap-2 sm:grid-cols-2">
+                <Button
+                  onClick={() => {
+                    void addSerial(serialPrefixChoice);
+                    setSerialPrefixChoice(null);
+                  }}
+                >
+                  Remover o S
+                </Button>
+                <Button
+                  onClick={() => {
+                    const value = serialPrefixChoice.alternateValue!;
+                    void addSerial({
+                      ...serialPrefixChoice,
+                      normalizedValue: value,
+                      key: `SERIAL:${value}`,
+                      alternateValue: serialPrefixChoice.normalizedValue,
+                      prefixStripped: undefined,
+                    });
+                    setSerialPrefixChoice(null);
+                  }}
+                  variant="outline"
+                >
+                  Manter o S
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </FlowFrame>
   );
 }
@@ -361,13 +430,11 @@ function ProductConfirmation({
   product,
   onConfirm,
   onRescan,
-  onUseLocalTest,
 }: {
   candidate: ScanCandidate;
   product: Product | null;
   onConfirm: () => void;
   onRescan: () => void;
-  onUseLocalTest: () => void;
 }) {
   return (
     <Card className={ENTRY_STAGE_CARD_CLASS}>
@@ -402,8 +469,8 @@ function ProductConfirmation({
           </div>
         ) : (
           <div className="mt-5 max-w-md rounded-2xl bg-amber-500/10 p-4 text-sm text-amber-900">
-            Este código ainda não está vinculado a um produto. Para testar o
-            fluxo, você pode continuar sem alterar o estoque real.
+            Este código ainda não está vinculado a um produto. Cadastre o
+            modelo, cor, memória e UPC/EAN em Configurações.
           </div>
         )}
       </CardContent>
@@ -420,13 +487,14 @@ function ProductConfirmation({
         </Button>
         <Button
           className="h-12 rounded-xl"
-          onClick={product ? onConfirm : onUseLocalTest}
+          disabled={!product}
+          onClick={onConfirm}
         >
           <span className="sm:hidden">
-            {product ? 'Confirmar' : 'Usar teste'}
+            {product ? 'Confirmar' : 'Não cadastrado'}
           </span>
           <span className="hidden sm:inline">
-            {product ? 'Confirmar produto' : 'Continuar como TESTE LOCAL'}
+            {product ? 'Confirmar produto' : 'Produto não cadastrado'}
           </span>{' '}
           <ArrowRight className="hidden sm:block" />
         </Button>
@@ -453,6 +521,12 @@ function SerialStage({
   onRemove: (serial: string) => void;
 }) {
   const latest = serials.at(-1);
+  const duplicateWarning =
+    /(?:já (?:existe|está cadastrado|foi bipado)|não foi possível)/i.test(
+      announcement,
+    )
+      ? announcement
+      : '';
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 md:grid-cols-[minmax(0,1fr)_18rem] md:grid-rows-1">
@@ -509,6 +583,14 @@ function SerialStage({
         </CardContent>
 
         <div className="shrink-0 border-t p-2.5 sm:p-3">
+          {duplicateWarning && (
+            <p
+              className="mb-2 rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
+              role="alert"
+            >
+              {duplicateWarning}
+            </p>
+          )}
           <div className="mb-2 flex min-w-0 items-center justify-between gap-3 md:hidden">
             <div className="min-w-0">
               <p className="text-sm font-bold">
@@ -516,7 +598,11 @@ function SerialStage({
                 {serials.length === 1 ? 'SN registrado' : 'SNs registrados'}
               </p>
               <p className="truncate text-xs text-muted-foreground">
-                {latest ? `Último: ${latest.normalized}` : announcement}
+                {duplicateWarning
+                  ? duplicateWarning
+                  : latest
+                    ? `Último: ${latest.normalized}`
+                    : announcement}
               </p>
             </div>
             {latest && (
@@ -648,12 +734,6 @@ function EntryReview({
   return (
     <Card className={ENTRY_STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-5">
-        <div className="mb-2 flex items-center justify-center gap-2 rounded-xl bg-amber-500/10 px-3 py-1.5 text-center text-xs font-bold text-amber-900 sm:mb-3">
-          <Badge className="bg-amber-600 text-white hover:bg-amber-600">
-            TESTE LOCAL
-          </Badge>
-          Não é estoque real
-        </div>
         <div className="grid grid-cols-2 gap-2 sm:gap-3">
           <section className="rounded-xl border bg-background p-3 sm:rounded-2xl sm:p-4">
             <p className="eyebrow">Produto</p>
@@ -762,13 +842,11 @@ function CompletionStage({
   count,
   ignoredCount,
   productName,
-  storageMode,
   onReset,
 }: {
   count: number;
   ignoredCount: number;
   productName: string;
-  storageMode: 'browser' | 'session';
   onReset: () => void;
 }) {
   return (
@@ -779,12 +857,12 @@ function CompletionStage({
             <CheckCircle2 className="size-10" />
           </span>
           <h2 className="mt-5 text-2xl font-bold tracking-tight">
-            {count > 0 ? 'Entrada de teste salva' : 'Nenhuma unidade nova'}
+            {count > 0 ? 'Entrada salva' : 'Nenhuma unidade nova'}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {count > 0
-              ? `${count} ${count === 1 ? 'unidade de' : 'unidades de'} ${productName} foram adicionadas ao teste local.`
-              : 'Os números de série informados já estavam registrados ou o limite local foi atingido.'}
+              ? `${count} ${count === 1 ? 'unidade de' : 'unidades de'} ${productName} foram adicionadas ao estoque.`
+              : 'Os números de série informados já estavam registrados.'}
           </p>
           {ignoredCount > 0 && (
             <p className="mt-2 text-xs font-semibold text-amber-800">
@@ -792,10 +870,9 @@ function CompletionStage({
               {ignoredCount === 1 ? 'SN foi ignorado' : 'SNs foram ignorados'}.
             </p>
           )}
-          <p className="mt-3 rounded-xl bg-amber-500/10 px-4 py-3 text-sm text-amber-900">
-            {storageMode === 'browser'
-              ? 'Ela aparece no Estoque somente neste navegador. Nenhum estoque real foi alterado.'
-              : 'O navegador bloqueou o armazenamento. A entrada ficará disponível somente nesta sessão.'}
+          <p className="mt-3 rounded-xl bg-success/10 px-4 py-3 text-sm text-success">
+            Entrada registrada na nuvem e disponível para os usuários desta
+            loja.
           </p>
           <Button className="mt-5 h-12 rounded-xl px-6" onClick={onReset}>
             <RotateCcw /> Fazer nova entrada
@@ -803,5 +880,28 @@ function CompletionStage({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function mergeUniqueFiles(current: File[], incoming: File[]) {
+  const byIdentity = new Map(
+    current.map((file) => [
+      `${file.name}:${file.size}:${file.lastModified}`,
+      file,
+    ]),
+  );
+  for (const file of incoming) {
+    byIdentity.set(`${file.name}:${file.size}:${file.lastModified}`, file);
+  }
+  return [...byIdentity.values()];
+}
+
+function serialCandidateValues(candidate: ScanCandidate) {
+  return Array.from(
+    new Set(
+      [candidate.normalizedValue, candidate.alternateValue].filter(
+        (value): value is string => Boolean(value),
+      ),
+    ),
   );
 }

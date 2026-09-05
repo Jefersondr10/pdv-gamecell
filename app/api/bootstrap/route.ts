@@ -1,0 +1,160 @@
+import { requireSession } from '@/lib/server/auth';
+import { apiError, json } from '@/lib/server/http';
+import { GUIDE_VERSION } from '@/lib/pdv-types';
+import type {
+  BootstrapData,
+  ClientRecord,
+  PixAccountRecord,
+  ProductRecord,
+  UserRecord,
+} from '@/lib/pdv-types';
+import { runtime } from '@/lib/server/runtime';
+import { consumeStoreReadBudget } from '@/lib/server/rate-limit';
+
+export const dynamic = 'force-dynamic';
+
+type ProductRow = Omit<ProductRecord, 'detail' | 'active' | 'codes'> & {
+  active: number;
+};
+type CodeRow = { id: string; productId: string; code: string; kind: string };
+type ClientRow = Omit<ClientRecord, 'active'> & { active: number };
+type PixAccountRow = Omit<PixAccountRecord, 'active'> & { active: number };
+type UserRow = Omit<UserRecord, 'active' | 'mustChangePassword'> & {
+  active: number;
+  mustChangePassword: number;
+};
+
+export async function GET(request: Request) {
+  try {
+    const session = await requireSession(request);
+    const storeId = session.storeId!;
+    const db = runtime().DB;
+    await consumeStoreReadBudget(db, Date.now(), storeId, 20);
+    const includeUsers = session.role === 'owner' || session.role === 'admin';
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    const todayStart = new Date(`${today}T00:00:00-03:00`).getTime();
+    const tomorrowStart = todayStart + 24 * 60 * 60 * 1000;
+    const results = await db.batch([
+      db
+        .prepare(
+          `SELECT id, model, color, memory,
+                  default_price_cents AS defaultPriceCents, active
+           FROM products WHERE store_id = ?
+           ORDER BY active DESC, model, color, memory`,
+        )
+        .bind(storeId),
+      db
+        .prepare(
+          `SELECT id, product_id AS productId, code, kind
+           FROM product_codes WHERE store_id = ? ORDER BY created_at`,
+        )
+        .bind(storeId),
+      db
+        .prepare(
+          `SELECT id, name, phone, email, notes, active
+           FROM clients WHERE store_id = ? ORDER BY active DESC, name`,
+        )
+        .bind(storeId),
+      db
+        .prepare(
+          `SELECT id, name, details, active
+           FROM pix_accounts WHERE store_id = ? ORDER BY active DESC, name`,
+        )
+        .bind(storeId),
+      includeUsers
+        ? db
+            .prepare(
+              `SELECT id, display_name AS displayName,
+                      username_normalized AS username, email, role,
+                      auth_kind AS authKind, active,
+                      must_change_password AS mustChangePassword,
+                      last_login_at AS lastLoginAt
+               FROM users WHERE store_id = ?
+               ORDER BY active DESC, display_name`,
+            )
+            .bind(storeId)
+        : db.prepare('SELECT id FROM users WHERE 0'),
+      db
+        .prepare(
+          'SELECT 1 AS acknowledged FROM guide_reads WHERE user_id = ? AND version = ? LIMIT 1',
+        )
+        .bind(session.id, GUIDE_VERSION),
+      db
+        .prepare(
+          `SELECT COUNT(si.id) AS soldTodayItems
+           FROM sales s
+           JOIN sale_items si ON si.sale_id = s.id AND si.store_id = s.store_id
+           WHERE s.store_id = ? AND s.status = 'completed'
+             AND s.created_at >= ? AND s.created_at < ?`,
+        )
+        .bind(storeId, todayStart, tomorrowStart),
+    ]);
+
+    const productRows = rows<ProductRow>(results[0]);
+    const codeRows = rows<CodeRow>(results[1]);
+    const products: ProductRecord[] = productRows.map((product) => ({
+      ...product,
+      detail: `${product.color} · ${product.memory}`,
+      active: Boolean(product.active),
+      codes: codeRows
+        .filter((code) => code.productId === product.id)
+        .map(({ id, code, kind }) => ({ id, code, kind })),
+    }));
+    const clients = rows<ClientRow>(results[2]).map((client) => ({
+      ...client,
+      active: Boolean(client.active),
+    }));
+    const pixAccounts = rows<PixAccountRow>(results[3]).map((account) => ({
+      ...account,
+      active: Boolean(account.active),
+    }));
+    const users = rows<UserRow>(results[4]).map((user) => ({
+      ...user,
+      active: Boolean(user.active),
+      mustChangePassword: Boolean(user.mustChangePassword),
+    }));
+    const data: BootstrapData = {
+      csrfToken: session.csrfToken,
+      user: {
+        id: session.id,
+        displayName: session.displayName,
+        username: session.username,
+        email: session.email,
+        role: session.role,
+        authKind: session.authKind,
+        active: true,
+        mustChangePassword: session.mustChangePassword,
+        lastLoginAt: null,
+        photoUrl: session.photoUrl,
+      },
+      store: {
+        id: storeId,
+        name: session.storeName!,
+        code: session.storeCode!,
+      },
+      products,
+      clients,
+      pixAccounts,
+      metrics: {
+        soldTodayItems: Number(
+          rows<{ soldTodayItems: number }>(results[6])[0]?.soldTodayItems ?? 0,
+        ),
+      },
+      users,
+      guideRequired: rows(results[5]).length === 0,
+      guideVersion: GUIDE_VERSION,
+    };
+    return json(data);
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
+function rows<T = Record<string, unknown>>(result: D1Result<unknown>) {
+  return (result.results ?? []) as T[];
+}

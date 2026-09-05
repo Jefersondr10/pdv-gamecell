@@ -12,6 +12,7 @@ import {
   ChevronRight,
   CircleUserRound,
   FileCheck2,
+  LoaderCircle,
   Paperclip,
   Plus,
   RotateCcw,
@@ -34,6 +35,7 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import { parseMoneyInput } from '@/lib/money';
 import { normalizeCandidate, type ScanCandidate } from '@/lib/scanner';
 
 type SaleStep =
@@ -62,7 +64,15 @@ type SaleProduct = {
   defaultPriceCents: number;
 };
 
+export type SaleSerialMatch = SaleProduct & {
+  serial: string;
+  status: 'available' | 'sold';
+};
+
 export type SaleProductLookup = Record<string, SaleProduct>;
+
+export type SaleCustomer = { id: string; name: string };
+export type SalePixAccount = { id: string; name: string };
 
 type PaymentMethod = 'pix' | 'cash';
 
@@ -74,6 +84,7 @@ type SalePayment = {
 };
 
 export type CompletedSalePayload = {
+  customerId: string;
   customer: string;
   items: Array<{
     serial: string;
@@ -89,7 +100,9 @@ export type CompletedSalePayload = {
     amountCents: number;
   }>;
   receipts: File[];
-  totalCents: number;
+  productsTotalCents: number;
+  receivedTotalCents: number;
+  receivedDifferenceCents: number;
 };
 
 const SALE_STEPS = [
@@ -106,15 +119,6 @@ const SALE_STEPS = [
 const STAGE_CARD_CLASS =
   'flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
 
-const CUSTOMER_DIRECTORY = [
-  'Rafael Martins',
-  'Camila Souza',
-  'Bruno Lima',
-  'Fernanda Alves',
-  'Mariana Costa',
-  'Lucas Oliveira',
-];
-
 const STEP_INDEX: Record<SaleStep, number> = {
   customer: 0,
   serial: 1,
@@ -130,13 +134,19 @@ const STEP_INDEX: Record<SaleStep, number> = {
 export function SellWizard({
   stagedSerial = '',
   productsBySerial = {},
+  customers = [],
+  pixAccounts = [],
   onComplete,
   unavailableSerials,
+  resolveSerials,
 }: {
   stagedSerial?: string;
   productsBySerial?: SaleProductLookup;
-  onComplete?: (sale: CompletedSalePayload) => void;
+  customers?: SaleCustomer[];
+  pixAccounts?: SalePixAccount[];
+  onComplete?: (sale: CompletedSalePayload) => void | Promise<void>;
   unavailableSerials?: ReadonlySet<string>;
+  resolveSerials?: (serials: string[]) => Promise<SaleSerialMatch[]>;
 }) {
   const initialSerial = stagedSerial
     ? normalizeCandidate(stagedSerial, 'manual_code_128', 'apple_serial')
@@ -149,6 +159,7 @@ export function SellWizard({
       ? productsBySerial[initialSerial.normalizedValue]
       : null;
   const [step, setStep] = useState<SaleStep>('customer');
+  const [customerId, setCustomerId] = useState('');
   const [customer, setCustomer] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
   const [pendingSerial, setPendingSerial] = useState<ScanCandidate | null>(
@@ -164,18 +175,21 @@ export function SellWizard({
   const [items, setItems] = useState<SaleItem[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
+  const [saving, setSaving] = useState(false);
   const [serialWarning, setSerialWarning] = useState(
     initialSerial && initialUnavailable
       ? `O SN ${initialSerial.normalizedValue} já foi vendido e não está disponível. Cancele a venda anterior para liberá-lo.`
       : initialSerial && !initialProduct
-        ? `O SN ${initialSerial.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`
+        ? `O SN ${initialSerial.normalizedValue} não foi encontrado no estoque da loja. Faça a entrada primeiro.`
         : '',
   );
+  const [checkingSerial, setCheckingSerial] = useState(false);
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Pesquise o cliente para começar.',
   );
   const itemsRef = useRef<SaleItem[]>([]);
   const completionSentRef = useRef(false);
+  const checkingSerialRef = useRef(false);
 
   const total = useMemo(
     () => items.reduce((sum, item) => sum + item.priceCents, 0),
@@ -183,7 +197,10 @@ export function SellWizard({
   );
   const paid = useMemo(
     () =>
-      payments.reduce((sum, payment) => sum + parseMoney(payment.amount), 0),
+      payments.reduce(
+        (sum, payment) => sum + parseMoneyInput(payment.amount),
+        0,
+      ),
     [payments],
   );
   const remaining = total - paid;
@@ -191,7 +208,7 @@ export function SellWizard({
     payments.length > 0 &&
     payments.every(
       (payment) =>
-        parseMoney(payment.amount) > 0 &&
+        parseMoneyInput(payment.amount) > 0 &&
         (payment.method !== 'pix' || Boolean(payment.bank)),
     );
 
@@ -212,6 +229,7 @@ export function SellWizard({
 
   const reset = () => {
     setStep('customer');
+    setCustomerId('');
     setCustomer('');
     setCustomerQuery('');
     setPendingSerial(null);
@@ -234,13 +252,14 @@ export function SellWizard({
     return hadCheckout;
   };
 
-  const acceptSerial = (candidate: ScanCandidate) => {
-    if (
-      itemsRef.current.some(
-        (item) => item.serial.normalizedValue === candidate.normalizedValue,
-      )
-    ) {
-      const warning = `O SN ${candidate.normalizedValue} já está nesta venda. Bipe outro SN.`;
+  const acceptSerial = async (candidate: ScanCandidate) => {
+    if (checkingSerialRef.current) return;
+    const candidateValues = serialCandidateValues(candidate);
+    const repeatedValue = candidateValues.find((value) =>
+      itemsRef.current.some((item) => item.serial.normalizedValue === value),
+    );
+    if (repeatedValue) {
+      const warning = `O SN ${repeatedValue} já está nesta venda. Bipe outro SN.`;
       setPendingSerial(null);
       setPendingProduct(null);
       setPrice('');
@@ -248,8 +267,50 @@ export function SellWizard({
       navigator.vibrate?.([120, 80, 120]);
       return;
     }
-    if (unavailableSerials?.has(candidate.normalizedValue)) {
-      const warning = `O SN ${candidate.normalizedValue} já foi vendido e não está disponível. Cancele a venda anterior para liberá-lo.`;
+    let availableValue = candidateValues.find(
+      (value) =>
+        Boolean(productsBySerial[value]) && !unavailableSerials?.has(value),
+    );
+    let unavailableValue = candidateValues.find((value) =>
+      unavailableSerials?.has(value),
+    );
+    let product = availableValue ? productsBySerial[availableValue] : null;
+    if (resolveSerials) {
+      checkingSerialRef.current = true;
+      setCheckingSerial(true);
+      setSerialWarning('');
+      try {
+        const matches = await resolveSerials(candidateValues);
+        const available = candidateValues
+          .map((value) =>
+            matches.find(
+              (match) => match.serial === value && match.status === 'available',
+            ),
+          )
+          .find(Boolean);
+        const unavailable = candidateValues
+          .map((value) =>
+            matches.find(
+              (match) => match.serial === value && match.status === 'sold',
+            ),
+          )
+          .find(Boolean);
+        availableValue = available?.serial;
+        unavailableValue = unavailable?.serial;
+        product = available ?? null;
+      } catch {
+        setSerialWarning(
+          'Não foi possível consultar este SN agora. Confira a conexão e tente novamente.',
+        );
+        navigator.vibrate?.([120, 80, 120]);
+        return;
+      } finally {
+        checkingSerialRef.current = false;
+        setCheckingSerial(false);
+      }
+    }
+    if (!availableValue && unavailableValue) {
+      const warning = `O SN ${unavailableValue} já foi vendido e não está disponível. Cancele a venda anterior para liberá-lo.`;
       setPendingSerial(null);
       setPendingProduct(null);
       setPhotoFiles([]);
@@ -259,9 +320,8 @@ export function SellWizard({
       return;
     }
     setPhotoFiles([]);
-    const product = productsBySerial[candidate.normalizedValue];
-    if (!product) {
-      const warning = `O SN ${candidate.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`;
+    if (!product || !availableValue) {
+      const warning = `O SN ${candidate.normalizedValue} não foi encontrado no estoque da loja. Faça a entrada primeiro.`;
       setPendingSerial(null);
       setPendingProduct(null);
       setPrice('');
@@ -269,16 +329,24 @@ export function SellWizard({
       navigator.vibrate?.([120, 80, 120]);
       return;
     }
+    const resolvedCandidate =
+      availableValue === candidate.normalizedValue
+        ? candidate
+        : {
+            ...candidate,
+            normalizedValue: availableValue,
+            key: `SERIAL:${availableValue}`,
+          };
     setSerialWarning('');
-    setPendingSerial(candidate);
+    setPendingSerial(resolvedCandidate);
     setPendingProduct(product);
     setPrice(getDefaultPriceInput(product));
-    setAnnouncement(`SN ${candidate.normalizedValue} localizado e disponível.`);
+    setAnnouncement(`SN ${availableValue} localizado e disponível.`);
   };
 
   const addPendingItem = () => {
     if (!pendingSerial || !pendingProduct) return;
-    const priceCents = parseMoney(price);
+    const priceCents = parseMoneyInput(price);
     if (priceCents <= 0) return;
     if (
       itemsRef.current.some(
@@ -361,7 +429,7 @@ export function SellWizard({
       {
         id: createLocalId('payment'),
         method,
-        bank: method === 'pix' ? 'nubank' : '',
+        bank: method === 'pix' ? (pixAccounts[0]?.id ?? '') : '',
         amount: formatMoneyInput(suggestedAmount),
       },
     ]);
@@ -420,18 +488,23 @@ export function SellWizard({
       {step === 'customer' && (
         <CustomerStage
           customer={customer}
+          customers={customers}
           onNext={() => {
             setStep('serial');
             setAnnouncement('Etapa 2. Bipe o número de série do aparelho.');
           }}
           onQueryChange={(value) => {
             setCustomerQuery(value);
-            if (customer && value.trim() !== customer) setCustomer('');
+            if (customer && value.trim() !== customer) {
+              setCustomer('');
+              setCustomerId('');
+            }
           }}
-          onSelect={(name) => {
-            setCustomer(name);
-            setCustomerQuery(name);
-            setAnnouncement(`${name} selecionado.`);
+          onSelect={(selected) => {
+            setCustomerId(selected.id);
+            setCustomer(selected.name);
+            setCustomerQuery(selected.name);
+            setAnnouncement(`${selected.name} selecionado.`);
           }}
           query={customerQuery}
         />
@@ -440,6 +513,7 @@ export function SellWizard({
       {step === 'serial' && (
         <SaleSerialStage
           candidate={pendingSerial}
+          checking={checkingSerial}
           onAccepted={acceptSerial}
           onBack={() => setStep(items.length > 0 ? 'items' : 'customer')}
           onConfirm={() => {
@@ -464,7 +538,9 @@ export function SellWizard({
           candidate={pendingSerial}
           onBack={() => setStep('serial')}
           onFiles={(files) => {
-            setPhotoFiles(files);
+            setPhotoFiles((current) =>
+              mergeUniqueFiles(current, files).slice(0, 6),
+            );
             setAnnouncement(
               `${files.length} ${files.length === 1 ? 'foto vinculada' : 'fotos vinculadas'} ao aparelho.`,
             );
@@ -523,7 +599,8 @@ export function SellWizard({
           onUpdate={updatePayment}
           paid={paid}
           payments={payments}
-          ready={paymentsValid && remaining === 0}
+          pixAccounts={pixAccounts}
+          ready={paymentsValid}
           remaining={remaining}
           total={total}
         />
@@ -553,42 +630,59 @@ export function SellWizard({
             setAnnouncement('Revise os aparelhos antes de finalizar a venda.');
           }}
           onBack={() => setStep('receipt')}
-          onConfirm={() => {
+          onConfirm={async () => {
             if (!completionSentRef.current) {
               completionSentRef.current = true;
-              onComplete?.({
-                customer,
-                items: items.map((item) => ({
-                  serial: item.serial.normalizedValue,
-                  product: item.product,
-                  detail: item.detail,
-                  photos: item.photos,
-                  defaultPriceCents: item.defaultPriceCents,
-                  priceCents: item.priceCents,
-                })),
-                payments: payments.map((payment) => ({
-                  method: payment.method === 'pix' ? 'Pix' : 'Dinheiro',
-                  bank: payment.bank,
-                  amountCents: parseMoney(payment.amount),
-                })),
-                receipts: receiptFiles,
-                totalCents: total,
-              });
+              setSaving(true);
+              try {
+                await onComplete?.({
+                  customerId,
+                  customer,
+                  items: items.map((item) => ({
+                    serial: item.serial.normalizedValue,
+                    product: item.product,
+                    detail: item.detail,
+                    photos: item.photos,
+                    defaultPriceCents: item.defaultPriceCents,
+                    priceCents: item.priceCents,
+                  })),
+                  payments: payments.map((payment) => ({
+                    method: payment.method === 'pix' ? 'Pix' : 'Dinheiro',
+                    bank: payment.bank,
+                    amountCents: parseMoneyInput(payment.amount),
+                  })),
+                  receipts: receiptFiles,
+                  productsTotalCents: total,
+                  receivedTotalCents: paid,
+                  receivedDifferenceCents: paid - total,
+                });
+              } catch (error) {
+                completionSentRef.current = false;
+                setSaving(false);
+                setAnnouncement(
+                  error instanceof Error
+                    ? error.message
+                    : 'Não foi possível salvar a venda.',
+                );
+                return;
+              }
             }
             setStep('done');
+            setSaving(false);
             setAnnouncement(
-              `Venda concluída no valor de ${formatMoney(total)}.`,
+              `Venda concluída com recebimento de ${formatMoney(paid)}.`,
             );
           }}
           paid={paid}
           payments={payments}
           receiptCount={receiptFiles.length}
           total={total}
+          saving={saving}
         />
       )}
 
       {step === 'done' && (
-        <SaleCompletion customer={customer} onReset={reset} total={total} />
+        <SaleCompletion customer={customer} onReset={reset} total={paid} />
       )}
     </FlowFrame>
   );
@@ -596,22 +690,24 @@ export function SellWizard({
 
 function CustomerStage({
   customer,
+  customers,
   query,
   onQueryChange,
   onSelect,
   onNext,
 }: {
   customer: string;
+  customers: SaleCustomer[];
   query: string;
   onQueryChange: (value: string) => void;
-  onSelect: (name: string) => void;
+  onSelect: (customer: SaleCustomer) => void;
   onNext: () => void;
 }) {
   const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR');
   const canSearch = normalizedQuery.length >= 2;
   const allMatches = canSearch
-    ? CUSTOMER_DIRECTORY.filter((name) =>
-        name.toLocaleLowerCase('pt-BR').includes(normalizedQuery),
+    ? customers.filter((entry) =>
+        entry.name.toLocaleLowerCase('pt-BR').includes(normalizedQuery),
       )
     : [];
   const matches = allMatches.slice(0, 4);
@@ -652,17 +748,17 @@ function CustomerStage({
               className="mt-3 grid grid-cols-2 gap-2 sm:mt-4"
               aria-label="Clientes encontrados"
             >
-              {matches.map((name) => (
+              {matches.map((entry) => (
                 <Button
-                  aria-pressed={customer === name}
+                  aria-pressed={customer === entry.name}
                   className="h-11 min-w-0 justify-start rounded-xl px-3 text-sm sm:h-12"
-                  key={name}
-                  onClick={() => onSelect(name)}
-                  variant={customer === name ? 'secondary' : 'outline'}
+                  key={entry.id}
+                  onClick={() => onSelect(entry)}
+                  variant={customer === entry.name ? 'secondary' : 'outline'}
                 >
                   <UserRound className="hidden size-4 sm:block" />
-                  <span className="truncate">{name}</span>
-                  {customer === name && (
+                  <span className="truncate">{entry.name}</span>
+                  {customer === entry.name && (
                     <Check className="ml-auto text-success" />
                   )}
                 </Button>
@@ -703,6 +799,7 @@ function CustomerStage({
 
 function SaleSerialStage({
   candidate,
+  checking,
   product,
   warning,
   onAccepted,
@@ -711,6 +808,7 @@ function SaleSerialStage({
   onRescan,
 }: {
   candidate: ScanCandidate | null;
+  checking: boolean;
   product: SaleProduct | null;
   warning: string;
   onAccepted: (candidate: ScanCandidate) => void;
@@ -718,6 +816,21 @@ function SaleSerialStage({
   onConfirm: () => void;
   onRescan: () => void;
 }) {
+  if (checking) {
+    return (
+      <Card className={STAGE_CARD_CLASS}>
+        <CardContent className="grid min-h-0 flex-1 place-items-center p-6 text-center">
+          <div>
+            <LoaderCircle className="mx-auto size-8 animate-spin text-primary" />
+            <p className="mt-3 font-bold">Consultando o SN…</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Confirmando a disponibilidade no estoque.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
   if (!candidate) {
     return (
       <div className="h-full min-h-0">
@@ -853,7 +966,7 @@ function PriceStage({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const priceCents = parseMoney(value);
+  const priceCents = parseMoneyInput(value);
   const valid = priceCents > 0;
   const hasDefaultPrice = product.defaultPriceCents > 0;
   const difference = hasDefaultPrice
@@ -1096,6 +1209,7 @@ function PaymentStage({
   paid,
   remaining,
   payments,
+  pixAccounts,
   ready,
   onAdd,
   onUpdate,
@@ -1108,6 +1222,7 @@ function PaymentStage({
   paid: number;
   remaining: number;
   payments: SalePayment[];
+  pixAccounts: SalePixAccount[];
   ready: boolean;
   onAdd: (method: PaymentMethod) => void;
   onUpdate: (id: string, patch: Partial<SalePayment>) => void;
@@ -1127,7 +1242,7 @@ function PaymentStage({
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
         <div className="mx-auto max-w-2xl space-y-2">
-          <div className="rounded-xl bg-secondary px-3 py-2.5 sm:rounded-2xl sm:px-4 sm:py-3">
+          <div className="payment-stage-summary rounded-xl bg-secondary px-3 py-2.5 sm:rounded-2xl sm:px-4 sm:py-3">
             <p className="font-bold">Pagamento da venda inteira</p>
             <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
               As formas de pagamento cobrem{' '}
@@ -1222,7 +1337,7 @@ function PaymentStage({
                       className="text-sm font-semibold"
                       htmlFor={`bank-${activePayment.id}`}
                     >
-                      Banco
+                      Conta Pix
                     </label>
                     <NativeSelect
                       className="mt-1 h-11 w-full [&_select]:h-11"
@@ -1234,13 +1349,16 @@ function PaymentStage({
                       }
                       value={activePayment.bank}
                     >
-                      <NativeSelectOption value="nubank">
-                        Nubank
-                      </NativeSelectOption>
-                      <NativeSelectOption value="itau">Itaú</NativeSelectOption>
-                      <NativeSelectOption value="inter">
-                        Inter
-                      </NativeSelectOption>
+                      {pixAccounts.length === 0 && (
+                        <NativeSelectOption value="">
+                          Cadastre uma conta Pix
+                        </NativeSelectOption>
+                      )}
+                      {pixAccounts.map((account) => (
+                        <NativeSelectOption key={account.id} value={account.id}>
+                          {account.name}
+                        </NativeSelectOption>
+                      ))}
                     </NativeSelect>
                   </div>
                 )}
@@ -1313,7 +1431,7 @@ function PaymentStage({
             </div>
           )}
 
-          <div className="rounded-xl bg-muted p-3">
+          <div className="payment-stage-totals rounded-xl bg-muted p-3">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Total da venda</span>
               <strong>{formatMoney(total)}</strong>
@@ -1335,6 +1453,20 @@ function PaymentStage({
               </strong>
             </div>
           </div>
+          {remaining !== 0 && paid > 0 && (
+            <div
+              className="payment-stage-warning rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
+              role="alert"
+            >
+              <p className="font-bold">
+                Recebimento {remaining < 0 ? 'acima' : 'abaixo'} dos produtos
+              </p>
+              <p className="mt-0.5 text-xs">
+                Diferença de {formatMoney(Math.abs(remaining))}. A venda pode
+                ser concluída e ficará sinalizada em Vendas e nos relatórios.
+              </p>
+            </div>
+          )}
         </div>
       </CardContent>
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
@@ -1342,7 +1474,8 @@ function PaymentStage({
           <ArrowLeft /> Voltar
         </Button>
         <Button className="h-12 rounded-xl" disabled={!ready} onClick={onNext}>
-          Comprovante <ArrowRight className="hidden sm:block" />
+          {remaining !== 0 && paid > 0 ? 'Continuar com aviso' : 'Comprovante'}{' '}
+          <ArrowRight className="hidden sm:block" />
         </Button>
       </div>
     </Card>
@@ -1454,6 +1587,7 @@ function SaleReview({
   onBack,
   onEditItems,
   onConfirm,
+  saving,
 }: {
   customer: string;
   items: SaleItem[];
@@ -1464,6 +1598,7 @@ function SaleReview({
   onBack: () => void;
   onEditItems: () => void;
   onConfirm: () => void;
+  saving: boolean;
 }) {
   const priceDifference = getItemsPriceDifference(items);
   return (
@@ -1482,8 +1617,8 @@ function SaleReview({
               icon={Smartphone}
             />
             <SummaryTile
-              label="Total"
-              value={formatMoney(total)}
+              label="Recebido"
+              value={formatMoney(paid)}
               icon={WalletCards}
             />
           </div>
@@ -1500,6 +1635,23 @@ function SaleReview({
               <p className="mt-0.5 text-xs">
                 A diferença não bloqueia a conclusão. Os pagamentos usam o total
                 praticado de {formatMoney(total)}.
+              </p>
+            </div>
+          )}
+
+          {paid !== total && (
+            <div
+              className="mt-4 rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
+              role="alert"
+            >
+              <p className="font-bold">
+                Recebido {paid > total ? 'acima' : 'abaixo'} do total dos
+                produtos
+              </p>
+              <p className="mt-0.5 text-xs">
+                Produtos: {formatMoney(total)} · Recebido: {formatMoney(paid)} ·
+                Diferença: {formatMoney(Math.abs(paid - total))}. A venda será
+                salva com este aviso.
               </p>
             </div>
           )}
@@ -1575,8 +1727,12 @@ function SaleReview({
         <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
           <ArrowLeft /> Voltar
         </Button>
-        <Button className="h-12 rounded-xl" onClick={onConfirm}>
-          <Check /> Finalizar venda
+        <Button
+          className="h-12 rounded-xl"
+          disabled={saving}
+          onClick={onConfirm}
+        >
+          <Check /> {saving ? 'Salvando…' : 'Finalizar venda'}
         </Button>
       </div>
     </Card>
@@ -1621,14 +1777,14 @@ function SaleCompletion({
           <CheckCircle2 className="size-10" />
         </span>
         <h2 className="mt-5 text-2xl font-bold tracking-tight">
-          Venda preparada
+          Venda concluída
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Cliente {customer} · total de {formatMoney(total)}.
         </p>
-        <p className="mt-3 rounded-xl bg-amber-500/10 px-4 py-3 text-sm text-amber-900">
-          Esta é uma demonstração: nenhum estoque ou pagamento real foi
-          alterado.
+        <p className="mt-3 rounded-xl bg-success/10 px-4 py-3 text-sm font-semibold text-success">
+          A venda foi salva, os pagamentos foram registrados e o estoque foi
+          atualizado.
         </p>
         <Button className="mt-5 h-12 rounded-xl px-6" onClick={onReset}>
           <RotateCcw /> Fazer nova venda
@@ -1658,12 +1814,14 @@ function mergeUniqueFiles(current: File[], incoming: File[]) {
   return [...byIdentity.values()];
 }
 
-function parseMoney(value: string) {
-  const normalized = value
-    .replace(/\./g, '')
-    .replace(',', '.')
-    .replace(/[^\d.]/g, '');
-  return Math.round((Number.parseFloat(normalized) || 0) * 100);
+function serialCandidateValues(candidate: ScanCandidate) {
+  return Array.from(
+    new Set(
+      [candidate.normalizedValue, candidate.alternateValue].filter(
+        (value): value is string => Boolean(value),
+      ),
+    ),
+  );
 }
 
 function getDefaultPriceInput(product: SaleProduct | null | undefined) {

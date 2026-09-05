@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788585519786,
+      "tag": "0000_grey_blockbuster",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788588240858,
+      "tag": "0001_clear_skullbuster",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788591642523,
+      "tag": "0002_storage_quota",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788593919863,
+      "tag": "0003_account_recovery_inventory_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788593930303,
+      "tag": "0004_production_reset",
+      "breakpoints": true
+    }
+  ]
+}

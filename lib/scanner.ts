@@ -60,6 +60,7 @@ export class ScannerService {
   private detector: Detector | null = null;
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
+  private scanRegion: HTMLElement | null = null;
   private canvas = document.createElement('canvas');
   private canvasContext = this.canvas.getContext('2d', {
     alpha: false,
@@ -69,7 +70,6 @@ export class ScannerService {
   private lastAttemptAt = 0;
   private detectionInFlight = false;
   private samples: TimedSample[] = [];
-  private acceptedKeys = new Set<string>();
   private lockedKey: string | null = null;
   private emptyFrames = 0;
   private active = false;
@@ -80,9 +80,11 @@ export class ScannerService {
     video: HTMLVideoElement,
     mode: ScannerMode,
     callbacks: ScannerCallbacks,
+    scanRegion?: HTMLElement | null,
   ) {
     await this.stop(false);
     this.video = video;
+    this.scanRegion = scanRegion ?? null;
     this.mode = mode;
     this.callbacks = callbacks;
     this.active = true;
@@ -115,7 +117,9 @@ export class ScannerService {
         barcodeLibrary.prepareZXingModule({
           overrides: {
             locateFile: (path: string, prefix: string) =>
-              path.endsWith('.wasm') ? '/wasm/zxing_reader.wasm' : prefix + path,
+              path.endsWith('.wasm')
+                ? '/wasm/zxing_reader.wasm'
+                : prefix + path,
           },
         });
         decoderConfigured = true;
@@ -123,12 +127,13 @@ export class ScannerService {
 
       this.detector = new barcodeLibrary.BarcodeDetector({
         formats:
-          mode === 'product'
-            ? [...PRODUCT_FORMATS]
-            : [...SERIAL_FORMATS],
+          mode === 'product' ? [...PRODUCT_FORMATS] : [...SERIAL_FORMATS],
       }) as Detector;
       callbacks.onStateChange?.('scanning');
-      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      document.addEventListener(
+        'visibilitychange',
+        this.handleVisibilityChange,
+      );
       this.queueNextFrame();
     } catch (error) {
       this.active = false;
@@ -144,17 +149,16 @@ export class ScannerService {
       cancelAnimationFrame(this.animationFrame);
       this.animationFrame = null;
     }
-    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    document.removeEventListener(
+      'visibilitychange',
+      this.handleVisibilityChange,
+    );
     this.stopTracks();
     if (this.video) this.video.srcObject = null;
     this.samples = [];
     this.lockedKey = null;
     this.emptyFrames = 0;
     if (updateState) this.callbacks?.onStateChange?.('stopped');
-  }
-
-  clearSessionDuplicates() {
-    this.acceptedKeys.clear();
   }
 
   private handleVisibilityChange = () => {
@@ -194,15 +198,22 @@ export class ScannerService {
     const video = this.video;
     const context = this.canvasContext;
     const detector = this.detector;
-    if (!video || !context || !detector || !video.videoWidth || !video.videoHeight) {
+    if (
+      !video ||
+      !context ||
+      !detector ||
+      !video.videoWidth ||
+      !video.videoHeight
+    ) {
       return;
     }
 
-    const sourceWidth = video.videoWidth * 0.92;
-    const sourceHeight =
-      video.videoHeight * (this.mode === 'apple_serial' ? 0.18 : 0.36);
-    const sourceX = (video.videoWidth - sourceWidth) / 2;
-    const sourceY = (video.videoHeight - sourceHeight) / 2;
+    const {
+      x: sourceX,
+      y: sourceY,
+      width: sourceWidth,
+      height: sourceHeight,
+    } = sourceRegionForObjectCover(video, this.scanRegion, this.mode);
     const targetWidth = Math.min(1100, Math.round(sourceWidth));
     const targetHeight = Math.max(
       this.mode === 'apple_serial' ? 128 : 220,
@@ -252,7 +263,7 @@ export class ScannerService {
         return;
       }
       this.emptyFrames = 0;
-      if (this.lockedKey === candidate.key || this.acceptedKeys.has(candidate.key)) return;
+      if (this.lockedKey === candidate.key) return;
 
       const at = performance.now();
       this.samples = [
@@ -260,16 +271,19 @@ export class ScannerService {
         { ...candidate, at },
       ].slice(-3);
 
-      const confirmations = this.samples.filter((sample) => sample.key === candidate.key);
+      const confirmations = this.samples.filter(
+        (sample) => sample.key === candidate.key,
+      );
       if (confirmations.length >= 2) {
         this.lockedKey = candidate.key;
-        this.acceptedKeys.add(candidate.key);
         this.samples = [];
         this.callbacks?.onAccepted(candidate);
       }
     } catch (error) {
       this.callbacks?.onError?.(
-        error instanceof Error ? error.message : 'Não foi possível analisar a imagem.',
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível analisar a imagem.',
       );
     }
   }
@@ -283,6 +297,43 @@ export class ScannerService {
       this.emptyFrames = 0;
     }
   }
+}
+
+function sourceRegionForObjectCover(
+  video: HTMLVideoElement,
+  scanRegion: HTMLElement | null,
+  mode: ScannerMode,
+): ScanBoundingBox {
+  const videoBox = video.getBoundingClientRect();
+  const regionBox = scanRegion?.getBoundingClientRect();
+  if (
+    !regionBox ||
+    videoBox.width <= 0 ||
+    videoBox.height <= 0 ||
+    video.videoWidth <= 0 ||
+    video.videoHeight <= 0
+  ) {
+    const width = video.videoWidth * 0.92;
+    const height = video.videoHeight * (mode === 'apple_serial' ? 0.18 : 0.36);
+    return {
+      x: (video.videoWidth - width) / 2,
+      y: (video.videoHeight - height) / 2,
+      width,
+      height,
+    };
+  }
+
+  const scale = Math.max(
+    videoBox.width / video.videoWidth,
+    videoBox.height / video.videoHeight,
+  );
+  const croppedX = (video.videoWidth * scale - videoBox.width) / 2;
+  const croppedY = (video.videoHeight * scale - videoBox.height) / 2;
+  const x = Math.max(0, (regionBox.left - videoBox.left + croppedX) / scale);
+  const y = Math.max(0, (regionBox.top - videoBox.top + croppedY) / scale);
+  const width = Math.min(regionBox.width / scale, video.videoWidth - x);
+  const height = Math.min(regionBox.height / scale, video.videoHeight - y);
+  return { x, y, width: Math.max(1, width), height: Math.max(1, height) };
 }
 
 export function normalizeCandidate(
@@ -311,8 +362,12 @@ export function normalizeCandidate(
   const upperValue = rawValue.toUpperCase().replace(/\s+/g, '');
   if (!/^[A-Z0-9]{8,18}$/.test(upperValue)) return null;
   const canStripApplePrefix =
-    upperValue.startsWith('S') && /^[A-Z0-9]{8,17}$/.test(upperValue.slice(1));
-  const normalizedValue = canStripApplePrefix ? upperValue.slice(1) : upperValue;
+    !format.startsWith('manual_') &&
+    upperValue.startsWith('S') &&
+    /^[A-Z0-9]{8,17}$/.test(upperValue.slice(1));
+  const normalizedValue = canStripApplePrefix
+    ? upperValue.slice(1)
+    : upperValue;
   if (!/[A-Z]/.test(normalizedValue)) return null;
 
   return {
@@ -347,8 +402,10 @@ export function selectCentralCandidate(
     }
   }
 
-  return [...bestByKey.values()].sort((left, right) => left.score - right.score)[0]
-    ?.candidate ?? null;
+  return (
+    [...bestByKey.values()].sort((left, right) => left.score - right.score)[0]
+      ?.candidate ?? null
+  );
 }
 
 function centralityScore(
@@ -356,7 +413,8 @@ function centralityScore(
   frameWidth: number,
   frameHeight: number,
 ) {
-  if (!box || frameWidth <= 0 || frameHeight <= 0) return Number.MAX_SAFE_INTEGER;
+  if (!box || frameWidth <= 0 || frameHeight <= 0)
+    return Number.MAX_SAFE_INTEGER;
 
   const centerX = box.x + box.width / 2;
   const centerY = box.y + box.height / 2;

@@ -288,6 +288,44 @@
   .scanner-camera {
     min-height: 6.5rem !important;
   }
+
+  .payment-stage-summary {
+    display: none;
+  }
+
+  .payment-stage-totals {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+
+  .payment-stage-totals > div {
+    display: block;
+    margin: 0;
+    border: 0;
+    padding: 0;
+    text-align: center;
+  }
+
+  .payment-stage-totals > div span,
+  .payment-stage-totals > div strong {
+    display: block;
+  }
+
+  .payment-stage-warning p:last-child {
+    display: none;
+  }
+}
+
+@media (max-height: 560px) {
+  .flow-header {
+    display: none;
+  }
+
+  .payment-stage-warning {
+    display: none;
+  }
 }
 
 @media print {

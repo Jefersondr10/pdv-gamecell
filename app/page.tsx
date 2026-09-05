@@ -1,5 +1,5 @@
-import { PdvApp } from '@/components/pdv/pdv-app';
+import { ProductionApp } from '@/components/pdv/production-app';
 
 export default function Home() {
-  return <PdvApp />;
+  return <ProductionApp />;
 }

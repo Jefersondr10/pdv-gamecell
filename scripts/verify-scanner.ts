@@ -38,17 +38,48 @@ assert.equal(serial?.rawValue, 'SHC9P06R095');
 assert.equal(serial?.normalizedValue, 'HC9P06R095');
 assert.equal(serial?.prefixStripped, true);
 assert.equal(serial?.key, 'SERIAL:HC9P06R095');
+const manualSerial = normalizeCandidate(
+  'SHC9P06R095',
+  'manual_code_128',
+  'apple_serial',
+);
+assert.equal(manualSerial?.normalizedValue, 'SHC9P06R095');
+assert.equal(manualSerial?.prefixStripped, undefined);
 assert.equal(
   normalizeCandidate('HC9P06R095', 'code_128', 'apple_serial')?.normalizedValue,
   'HC9P06R095',
 );
-assert.equal(normalizeCandidate('SN inválido!', 'code_128', 'apple_serial'), null);
-assert.equal(normalizeCandidate('353915104521117', 'code_128', 'apple_serial'), null);
-assert.equal(normalizeCandidate('S353915104521117', 'code_128', 'apple_serial'), null);
-assert.equal(normalizeCandidate('89049032004008882600000000000123', 'code_128', 'apple_serial'), null);
+assert.equal(
+  normalizeCandidate('SN inválido!', 'code_128', 'apple_serial'),
+  null,
+);
+assert.equal(
+  normalizeCandidate('353915104521117', 'code_128', 'apple_serial'),
+  null,
+);
+assert.equal(
+  normalizeCandidate('S353915104521117', 'code_128', 'apple_serial'),
+  null,
+);
+assert.equal(
+  normalizeCandidate(
+    '89049032004008882600000000000123',
+    'code_128',
+    'apple_serial',
+  ),
+  null,
+);
 
-const centeredSerial = normalizeCandidate('HC9P06R095', 'code_128', 'apple_serial');
-const upperSerial = normalizeCandidate('FC3Y91KL20', 'code_128', 'apple_serial');
+const centeredSerial = normalizeCandidate(
+  'HC9P06R095',
+  'code_128',
+  'apple_serial',
+);
+const upperSerial = normalizeCandidate(
+  'FC3Y91KL20',
+  'code_128',
+  'apple_serial',
+);
 assert.ok(centeredSerial);
 assert.ok(upperSerial);
 assert.equal(
