@@ -1,7 +1,10 @@
 import { requiredSecret } from '@/lib/server/runtime';
 
 const encoder = new TextEncoder();
-const PASSWORD_ITERATIONS = 600_000;
+// Cloudflare Workers limits a single Web Crypto PBKDF2 operation to 100,000
+// iterations. A deployment-only pepper and strict login throttling provide the
+// additional protection around this platform-compatible work factor.
+const PASSWORD_ITERATIONS = 100_000;
 const RECOVERY_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 export function randomToken(bytes = 32) {
