@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import {
+  AlertTriangle,
   ArrowDownToLine,
   ArrowRight,
   Building2,
@@ -82,10 +83,20 @@ type StockRow = {
   id: string;
   name: string;
   detail: string;
+  defaultPriceCents: number;
   available: number;
   received: number;
   codes: string[];
   serials?: string[];
+  testOnly?: boolean;
+};
+
+type ProductPriceOption = {
+  id: string;
+  name: string;
+  detail: string;
+  codes: string[];
+  priceCents: number;
   testOnly?: boolean;
 };
 
@@ -107,6 +118,7 @@ type SaleReportItem = {
   detail: string;
   serial: string;
   value: number;
+  referenceValue: number;
   photos: SaleAttachment[];
 };
 
@@ -133,6 +145,8 @@ type SaleRow = {
   time: string;
   status: SaleStatusValue;
   models: SaleModel[];
+  referenceTotal?: number;
+  priceDifference?: number;
   report?: SaleReportData;
   testOnly?: boolean;
   cancellationReason?: string;
@@ -163,8 +177,9 @@ type StockReportRow = {
 };
 
 const TEST_STOCK_KEY = 'pdv-apple:test-stock:v1';
+const PRODUCT_PRICES_KEY = 'pdv-apple:product-prices:v1';
 const GUIDE_STORAGE_KEY = 'pdv-apple:guide-version';
-const GUIDE_VERSION = '2026.09.05-onboarding-reports-v1';
+const GUIDE_VERSION = '2026.09.05-default-prices-v1';
 const TODAY = getSaoPauloDateKey(0);
 const YESTERDAY = getSaoPauloDateKey(-1);
 
@@ -191,6 +206,7 @@ const inventoryRows: StockRow[] = [
     id: 'iphone-17-pro-max-deep-blue-256',
     name: 'iPhone 17 Pro Max',
     detail: 'Deep Blue · 256 GB',
+    defaultPriceCents: 999900,
     available: 12,
     received: 18,
     codes: ['195950638011'],
@@ -199,6 +215,7 @@ const inventoryRows: StockRow[] = [
     id: 'iphone-17-pro-max-silver-256',
     name: 'iPhone 17 Pro Max',
     detail: 'Silver · 256 GB',
+    defaultPriceCents: 999900,
     available: 5,
     received: 8,
     codes: ['195950637151'],
@@ -207,6 +224,7 @@ const inventoryRows: StockRow[] = [
     id: 'iphone-16-pink-128',
     name: 'iPhone 16',
     detail: 'Pink · 128 GB',
+    defaultPriceCents: 789900,
     available: 3,
     received: 6,
     codes: ['195949822193'],
@@ -215,6 +233,7 @@ const inventoryRows: StockRow[] = [
     id: 'iphone-15-black-128',
     name: 'iPhone 15',
     detail: 'Black · 128 GB',
+    defaultPriceCents: 569900,
     available: 2,
     received: 9,
     codes: ['195949035913', '195949035937'],
@@ -223,6 +242,7 @@ const inventoryRows: StockRow[] = [
     id: 'iphone-17-white-256',
     name: 'iPhone 17',
     detail: 'White · 256 GB',
+    defaultPriceCents: 859900,
     available: 1,
     received: 4,
     codes: ['4549995649161'],
@@ -298,6 +318,15 @@ export function PdvApp() {
   const [testStorageReady, setTestStorageReady] = useState(false);
   const [testStorageMode, setTestStorageMode] =
     useState<StorageMode>('browser');
+  const [productPrices, setProductPrices] = useState<Record<string, number>>(
+    () =>
+      Object.fromEntries(
+        inventoryRows.map((row) => [row.id, row.defaultPriceCents]),
+      ),
+  );
+  const [priceStorageReady, setPriceStorageReady] = useState(false);
+  const [priceStorageMode, setPriceStorageMode] =
+    useState<StorageMode>('browser');
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideRequired, setGuideRequired] = useState(false);
   const testEntriesRef = useRef<LocalTestEntryRecord[]>([]);
@@ -307,18 +336,44 @@ export function PdvApp() {
     () => testEntries.flatMap((entry) => entry.serials),
     [testEntries],
   );
+  const productPriceOptions = useMemo<ProductPriceOption[]>(() => {
+    const options: ProductPriceOption[] = inventoryRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      detail: row.detail,
+      codes: row.codes,
+      priceCents: productPrices[row.id] ?? row.defaultPriceCents,
+    }));
+    for (const entry of testEntries) {
+      if (findCatalogRowByGtin(entry.gtin14)) continue;
+      const id = getTestVariationId(entry.gtin14);
+      options.push({
+        id,
+        name: entry.productName,
+        detail: entry.productDetail,
+        codes: [entry.displayCode],
+        priceCents: productPrices[id] ?? 0,
+        testOnly: true,
+      });
+    }
+    return options;
+  }, [productPrices, testEntries]);
   const saleProductsBySerial = useMemo<SaleProductLookup>(() => {
     const lookup: SaleProductLookup = {};
     for (const entry of testEntries) {
+      const catalogRow = findCatalogRowByGtin(entry.gtin14);
+      const variationId = catalogRow?.id ?? getTestVariationId(entry.gtin14);
       for (const serial of entry.serials) {
         lookup[serial.trim().toUpperCase()] = {
-          product: entry.productName,
-          detail: entry.productDetail,
+          product: catalogRow?.name ?? entry.productName,
+          detail: catalogRow?.detail ?? entry.productDetail,
+          defaultPriceCents:
+            productPrices[variationId] ?? catalogRow?.defaultPriceCents ?? 0,
         };
       }
     }
     return lookup;
-  }, [testEntries]);
+  }, [productPrices, testEntries]);
   const allSales = useMemo(
     () =>
       [...sessionSales, ...salesRows].map((sale) => {
@@ -368,6 +423,7 @@ export function PdvApp() {
       detail: item.detail,
       serial: item.serial,
       value: item.priceCents,
+      referenceValue: item.defaultPriceCents,
       photos: item.photos.map((file) =>
         createSaleAttachment(file, attachmentUrlsRef.current),
       ),
@@ -380,6 +436,15 @@ export function PdvApp() {
       bank: payment.method === 'Pix' ? formatBankName(payment.bank) : undefined,
       amount: payment.amountCents,
     }));
+    const referenceTotal = reportItems.reduce(
+      (sum, item) => sum + item.referenceValue,
+      0,
+    );
+    const priceDifference = reportItems.reduce(
+      (sum, item) =>
+        sum + (item.referenceValue > 0 ? item.value - item.referenceValue : 0),
+      0,
+    );
     const now = new Date();
     const sale: SaleRow = {
       number: `#TESTE-${String(testSaleSequenceRef.current).padStart(3, '0')}`,
@@ -401,6 +466,8 @@ export function PdvApp() {
       }).format(now),
       status: 'Concluída',
       models: groupCompletedItemsByModel(reportItems),
+      referenceTotal,
+      priceDifference,
       report: { items: reportItems, payments, receipts },
       testOnly: true,
     };
@@ -442,6 +509,21 @@ export function PdvApp() {
     };
   };
 
+  const saveProductPrice = (variationId: string, priceCents: number) => {
+    if (
+      !variationId ||
+      !Number.isSafeInteger(priceCents) ||
+      priceCents <= 0 ||
+      priceCents > 1_000_000_000
+    ) {
+      return;
+    }
+    setProductPrices((current) => ({
+      ...current,
+      [variationId]: priceCents,
+    }));
+  };
+
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -461,6 +543,27 @@ export function PdvApp() {
         setTestStorageMode('session');
       } finally {
         setTestStorageReady(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      try {
+        const stored = window.localStorage.getItem(PRODUCT_PRICES_KEY);
+        if (stored) {
+          const loadedPrices = parseStoredProductPrices(stored);
+          setProductPrices((current) => ({ ...current, ...loadedPrices }));
+        }
+      } catch {
+        setPriceStorageMode('session');
+      } finally {
+        setPriceStorageReady(true);
       }
     });
     return () => {
@@ -513,6 +616,24 @@ export function PdvApp() {
   }, [testEntries, testStorageMode, testStorageReady]);
 
   useEffect(() => {
+    if (!priceStorageReady || priceStorageMode !== 'browser') return;
+    let cancelled = false;
+    try {
+      window.localStorage.setItem(
+        PRODUCT_PRICES_KEY,
+        JSON.stringify({ version: 1, prices: productPrices }),
+      );
+    } catch {
+      queueMicrotask(() => {
+        if (!cancelled) setPriceStorageMode('session');
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [priceStorageMode, priceStorageReady, productPrices]);
+
+  useEffect(() => {
     const syncTestEntries = (event: StorageEvent) => {
       if (event.key !== TEST_STOCK_KEY || !event.newValue) return;
       const incoming = parseStoredTestEntries(event.newValue);
@@ -525,6 +646,16 @@ export function PdvApp() {
     };
     window.addEventListener('storage', syncTestEntries);
     return () => window.removeEventListener('storage', syncTestEntries);
+  }, []);
+
+  useEffect(() => {
+    const syncProductPrices = (event: StorageEvent) => {
+      if (event.key !== PRODUCT_PRICES_KEY || !event.newValue) return;
+      const incoming = parseStoredProductPrices(event.newValue);
+      setProductPrices((current) => ({ ...current, ...incoming }));
+    };
+    window.addEventListener('storage', syncProductPrices);
+    return () => window.removeEventListener('storage', syncProductPrices);
   }, []);
 
   useEffect(() => {
@@ -661,7 +792,12 @@ export function PdvApp() {
             />
           )}
           {activeView === 'settings' && (
-            <SettingsView key={`settings-${viewRun}`} />
+            <SettingsView
+              key={`settings-${viewRun}`}
+              onSaveProductPrice={saveProductPrice}
+              priceStorageMode={priceStorageMode}
+              products={productPriceOptions}
+            />
           )}
         </div>
       </section>
@@ -702,6 +838,7 @@ function StockView({
       id: `test:${entry.gtin14}`,
       name: catalogRow?.name ?? entry.productName,
       detail: catalogRow?.detail ?? entry.productDetail,
+      defaultPriceCents: catalogRow?.defaultPriceCents ?? 0,
       available: availableSerials.length,
       received: entry.serials.length,
       codes: [entry.displayCode],
@@ -1355,8 +1492,13 @@ function SalesView({
                           </TableCell>
                           <TableCell>{sale.seller}</TableCell>
                           <TableCell>{sale.payment}</TableCell>
-                          <TableCell className="font-semibold">
-                            {formatMoney(sale.total)}
+                          <TableCell>
+                            <p className="font-semibold">
+                              {formatMoney(sale.total)}
+                            </p>
+                            <SalePriceDifference
+                              difference={sale.priceDifference}
+                            />
                           </TableCell>
                           <TableCell>
                             <SaleStatus status={sale.status} />
@@ -1406,6 +1548,10 @@ function SalesView({
                           {formatMoney(sale.total)}
                         </p>
                       </div>
+                      <SalePriceDifference
+                        className="mt-2"
+                        difference={sale.priceDifference}
+                      />
                     </button>
                   ))}
                 </div>
@@ -1810,6 +1956,17 @@ function SaleReportDocument({
         />
       </dl>
 
+      {sale.priceDifference !== undefined && sale.priceDifference !== 0 && (
+        <div className="report-section mt-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <p className="font-semibold">
+            Venda realizada{' '}
+            {formatPriceDifference(sale.priceDifference, 'long')} em relação aos
+            preços cadastrados.
+          </p>
+        </div>
+      )}
+
       {sale.status === 'Cancelada' && (
         <div className="report-section mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
           <p className="font-semibold">
@@ -1900,7 +2057,18 @@ function SaleReportDocument({
                     SN {item.serial}
                   </p>
                 </div>
-                <strong>{formatMoney(item.value)}</strong>
+                <div className="text-right">
+                  <strong>{formatMoney(item.value)}</strong>
+                  {item.referenceValue > 0 &&
+                    item.value !== item.referenceValue && (
+                      <p className="mt-0.5 text-xs font-semibold text-amber-800">
+                        {formatPriceDifference(
+                          item.value - item.referenceValue,
+                          'short',
+                        )}
+                      </p>
+                    )}
+                </div>
               </div>
             ))}
           </div>
@@ -2204,7 +2372,7 @@ function SystemGuideDialog({
       icon: Smartphone,
       title: '1. Cadastre o produto',
       description:
-        'Crie cada variação com modelo, cor e capacidade. Depois, vincule a ela um ou mais códigos UPC, EAN ou JAN.',
+        'Crie cada variação com modelo, cor, capacidade e preço padrão. Depois, vincule a ela um ou mais códigos UPC, EAN ou JAN.',
     },
     {
       icon: Package,
@@ -2216,7 +2384,7 @@ function SystemGuideDialog({
       icon: ShoppingBag,
       title: '3. Faça a venda',
       description:
-        'Pesquise o cliente pelo nome, bipe o SN, fotografe o aparelho e informe o preço. Para a mesma venda, escolha Bipar outro SN.',
+        'Pesquise o cliente, bipe o SN e fotografe o aparelho. O preço padrão já vem preenchido, mas pode ser alterado; diferenças ficam sinalizadas sem bloquear a venda.',
     },
     {
       icon: WalletCards,
@@ -2267,9 +2435,9 @@ function SystemGuideDialog({
           <div className="mb-4 rounded-2xl border border-sky/30 bg-sky/10 p-4">
             <p className="font-bold text-primary">Novidades desta versão</p>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Etapas mais compactas, venda com vários aparelhos, comprovante por
-              foto ou arquivo, relatórios de venda e estoque e cancelamento com
-              motivo registrado.
+              Agora cada variação pode ter um preço padrão editável. Ele é
+              preenchido ao bipar o SN, e vendas acima ou abaixo desse valor
+              recebem um aviso sem serem bloqueadas.
             </p>
           </div>
 
@@ -2311,99 +2479,265 @@ function SystemGuideDialog({
   );
 }
 
-function SettingsView() {
+function SettingsView({
+  products,
+  priceStorageMode,
+  onSaveProductPrice,
+}: {
+  products: ProductPriceOption[];
+  priceStorageMode: StorageMode;
+  onSaveProductPrice: (variationId: string, priceCents: number) => void;
+}) {
+  const [pricesOpen, setPricesOpen] = useState(false);
   return (
-    <PageContainer>
-      <PageHeading
-        description="Cadastros usados nas entradas, vendas e relatórios."
-        eyebrow="Administração"
-        title="Configurações"
-      />
-      <Tabs
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
-        defaultValue="products"
-      >
-        <TabsList
-          className="mb-3 h-11 w-full shrink-0 justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit"
-          variant="default"
+    <>
+      <PageContainer>
+        <PageHeading
+          description="Cadastros usados nas entradas, vendas e relatórios."
+          eyebrow="Administração"
+          title="Configurações"
+        />
+        <Tabs
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          defaultValue="products"
         >
-          <TabsTrigger className="h-9 px-3" value="products">
-            Produtos
-          </TabsTrigger>
-          <TabsTrigger className="h-9 px-3" value="people">
-            Pessoas
-          </TabsTrigger>
-          <TabsTrigger className="h-9 px-3" value="finance">
-            Financeiro
-          </TabsTrigger>
-          <TabsTrigger className="h-9 px-3" value="system">
-            Sistema
-          </TabsTrigger>
-        </TabsList>
-        <SettingsTab value="products">
-          <SettingsCard
-            icon={Smartphone}
-            title="Produtos e variações"
-            detail="5 variações ativas"
-            description="Modelo, cor, capacidade e apresentação no estoque."
-          />
-          <SettingsCard
-            icon={ScanBarcode}
-            title="Códigos comerciais"
-            detail="6 códigos vinculados"
-            description="Uma variação pode aceitar vários UPCs, EANs ou JANs."
-          />
-        </SettingsTab>
-        <SettingsTab value="people">
-          <SettingsCard
-            icon={UsersRound}
-            title="Clientes"
-            detail="84 cadastrados"
-            description="Cadastro rápido com nome obrigatório."
-          />
-          <SettingsCard
-            icon={UserRound}
-            title="Vendedores"
-            detail="3 ativos"
-            description="Responsável comercial selecionado na venda."
-          />
-          <SettingsCard
-            icon={CircleUserRound}
-            title="Usuários"
-            detail="4 acessos"
-            description="Cada operador usa sua própria conta."
-          />
-        </SettingsTab>
-        <SettingsTab value="finance">
-          <SettingsCard
-            icon={Building2}
-            title="Bancos Pix"
-            detail="3 contas ativas"
-            description="Conta de recebimento exigida para cada Pix."
-          />
-          <SettingsCard
-            icon={WalletCards}
-            title="Formas de pagamento"
-            detail="Dinheiro e Pix"
-            description="Uma venda aceita vários lançamentos."
-          />
-        </SettingsTab>
-        <SettingsTab value="system">
-          <SettingsCard
-            icon={ArrowDownToLine}
-            title="Backups"
-            detail="A configurar"
-            description="Banco e imagens terão cópias separadas."
-          />
-          <SettingsCard
-            icon={RotateCcw}
-            title="Auditoria"
-            detail="Todas as operações"
-            description="Operador, data e alterações preservados."
-          />
-        </SettingsTab>
-      </Tabs>
-    </PageContainer>
+          <TabsList
+            className="mb-3 h-11 w-full shrink-0 justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit"
+            variant="default"
+          >
+            <TabsTrigger className="h-9 px-3" value="products">
+              Produtos
+            </TabsTrigger>
+            <TabsTrigger className="h-9 px-3" value="people">
+              Pessoas
+            </TabsTrigger>
+            <TabsTrigger className="h-9 px-3" value="finance">
+              Financeiro
+            </TabsTrigger>
+            <TabsTrigger className="h-9 px-3" value="system">
+              Sistema
+            </TabsTrigger>
+          </TabsList>
+          <SettingsTab value="products">
+            <SettingsCard
+              icon={Smartphone}
+              title="Produtos, variações e preços"
+              detail={`${products.length} ${products.length === 1 ? 'variação' : 'variações'}`}
+              description="Modelo, cor, capacidade e preço padrão usado na venda."
+              onManage={() => setPricesOpen(true)}
+            />
+            <SettingsCard
+              icon={ScanBarcode}
+              title="Códigos comerciais"
+              detail="6 códigos vinculados"
+              description="Uma variação pode aceitar vários UPCs, EANs ou JANs."
+            />
+          </SettingsTab>
+          <SettingsTab value="people">
+            <SettingsCard
+              icon={UsersRound}
+              title="Clientes"
+              detail="84 cadastrados"
+              description="Cadastro rápido com nome obrigatório."
+            />
+            <SettingsCard
+              icon={UserRound}
+              title="Vendedores"
+              detail="3 ativos"
+              description="Responsável comercial selecionado na venda."
+            />
+            <SettingsCard
+              icon={CircleUserRound}
+              title="Usuários"
+              detail="4 acessos"
+              description="Cada operador usa sua própria conta."
+            />
+          </SettingsTab>
+          <SettingsTab value="finance">
+            <SettingsCard
+              icon={Building2}
+              title="Bancos Pix"
+              detail="3 contas ativas"
+              description="Conta de recebimento exigida para cada Pix."
+            />
+            <SettingsCard
+              icon={WalletCards}
+              title="Formas de pagamento"
+              detail="Dinheiro e Pix"
+              description="Uma venda aceita vários lançamentos."
+            />
+          </SettingsTab>
+          <SettingsTab value="system">
+            <SettingsCard
+              icon={ArrowDownToLine}
+              title="Backups"
+              detail="A configurar"
+              description="Banco e imagens terão cópias separadas."
+            />
+            <SettingsCard
+              icon={RotateCcw}
+              title="Auditoria"
+              detail="Todas as operações"
+              description="Operador, data e alterações preservados."
+            />
+          </SettingsTab>
+        </Tabs>
+      </PageContainer>
+      {pricesOpen && (
+        <ProductPricesDialog
+          onOpenChange={setPricesOpen}
+          onSave={onSaveProductPrice}
+          open={pricesOpen}
+          products={products}
+          storageMode={priceStorageMode}
+        />
+      )}
+    </>
+  );
+}
+
+function ProductPricesDialog({
+  products,
+  storageMode,
+  open,
+  onOpenChange,
+  onSave,
+}: {
+  products: ProductPriceOption[];
+  storageMode: StorageMode;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSave: (variationId: string, priceCents: number) => void;
+}) {
+  const [selectedId, setSelectedId] = useState(products[0]?.id ?? '');
+  const selected =
+    products.find((product) => product.id === selectedId) ?? products[0];
+  const [price, setPrice] = useState(() =>
+    selected?.priceCents ? formatMoneyInput(selected.priceCents) : '',
+  );
+  const priceCents = parseMoneyInput(price);
+  const valid = Boolean(selected) && priceCents > 0;
+
+  const selectProduct = (variationId: string) => {
+    const product = products.find((option) => option.id === variationId);
+    setSelectedId(variationId);
+    setPrice(product?.priceCents ? formatMoneyInput(product.priceCents) : '');
+  };
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:max-w-xl sm:rounded-2xl">
+        <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12 sm:px-5">
+          <DialogTitle className="text-lg font-bold">
+            Preço padrão dos produtos
+          </DialogTitle>
+          <DialogDescription>
+            Escolha uma variação. Este preço será preenchido automaticamente ao
+            bipar o SN, mas continuará editável na venda.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-5">
+          {products.length > 0 ? (
+            <>
+              <label className="text-sm font-semibold" htmlFor="price-product">
+                Produto e variação
+              </label>
+              <NativeSelect
+                className="mt-1 h-12 w-full [&_select]:h-12 [&_select]:rounded-xl"
+                id="price-product"
+                onChange={(event) => selectProduct(event.target.value)}
+                value={selected?.id ?? ''}
+              >
+                {products.map((product) => (
+                  <NativeSelectOption key={product.id} value={product.id}>
+                    {product.name} · {product.detail}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+
+              {selected && (
+                <div className="mt-3 rounded-2xl border bg-muted/35 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-bold">{selected.name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {selected.detail}
+                      </p>
+                    </div>
+                    {selected.testOnly && (
+                      <Badge variant="secondary">TESTE LOCAL</Badge>
+                    )}
+                  </div>
+                  <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    UPC / EAN / JAN
+                  </p>
+                  <p className="mt-1 break-words font-mono text-sm font-semibold">
+                    {selected.codes.join(' · ')}
+                  </p>
+                </div>
+              )}
+
+              <label
+                className="mt-4 block text-sm font-semibold"
+                htmlFor="default-product-price"
+              >
+                Preço padrão
+              </label>
+              <div className="relative mt-1">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-muted-foreground">
+                  R$
+                </span>
+                <Input
+                  aria-invalid={price.length > 0 && !valid}
+                  className="h-14 rounded-xl pl-12 text-right text-xl font-extrabold"
+                  id="default-product-price"
+                  inputMode="decimal"
+                  onChange={(event) => setPrice(event.target.value)}
+                  placeholder="0,00"
+                  value={price}
+                />
+              </div>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                Você poderá vender acima ou abaixo deste valor. O sistema apenas
+                exibirá um aviso, sem impedir a conclusão.
+              </p>
+              <p className="mt-3 rounded-xl bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-950">
+                Neste ambiente, o preço fica salvo{' '}
+                {storageMode === 'browser'
+                  ? 'somente neste navegador.'
+                  : 'somente durante esta sessão.'}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Nenhuma variação disponível para configurar.
+            </p>
+          )}
+        </div>
+
+        <DialogFooter className="mx-0 mb-0 grid shrink-0 grid-cols-2 gap-2 rounded-none border-t bg-background p-3 sm:p-4">
+          <Button
+            className="h-12 rounded-xl"
+            onClick={() => onOpenChange(false)}
+            variant="outline"
+          >
+            Voltar
+          </Button>
+          <Button
+            className="h-12 rounded-xl"
+            disabled={!valid}
+            onClick={() => {
+              if (!selected || !valid) return;
+              onSave(selected.id, priceCents);
+              onOpenChange(false);
+            }}
+          >
+            Salvar preço
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -2643,11 +2977,13 @@ function SettingsCard({
   title,
   detail,
   description,
+  onManage,
 }: {
   icon: typeof Smartphone;
   title: string;
   detail: string;
   description: string;
+  onManage?: () => void;
 }) {
   return (
     <Card className="surface-card">
@@ -2663,7 +2999,7 @@ function SettingsCard({
           <span className="text-sm font-semibold text-muted-foreground">
             {detail}
           </span>
-          <Button size="sm" variant="ghost">
+          <Button onClick={onManage} size="sm" type="button" variant="ghost">
             Gerenciar <ArrowRight />
           </Button>
         </div>
@@ -2697,6 +3033,26 @@ function SaleStatus({ status }: { status: SaleStatusValue }) {
     <Badge className="bg-success/10 text-success hover:bg-success/10">
       Concluída
     </Badge>
+  );
+}
+
+function SalePriceDifference({
+  difference,
+  className = '',
+}: {
+  difference: number | undefined;
+  className?: string;
+}) {
+  if (difference === undefined || difference === 0) return null;
+  return (
+    <span
+      className={`inline-flex max-w-full items-center gap-1 rounded-md bg-amber-500/12 px-1.5 py-1 text-[0.68rem] font-bold leading-tight text-amber-900 ${className}`}
+    >
+      <AlertTriangle className="size-3 shrink-0" />
+      <span className="truncate">
+        {formatPriceDifference(difference, 'short')}
+      </span>
+    </span>
   );
 }
 
@@ -2772,6 +3128,35 @@ function parseStoredTestEntries(value: string) {
     return entries;
   } catch {
     return [];
+  }
+}
+
+function parseStoredProductPrices(value: string) {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isObject(parsed) || parsed.version !== 1 || !isObject(parsed.prices)) {
+      return {};
+    }
+    const prices: Record<string, number> = {};
+    for (const [variationId, cents] of Object.entries(parsed.prices).slice(
+      0,
+      200,
+    )) {
+      if (
+        variationId.length === 0 ||
+        variationId.length > 160 ||
+        !/^[a-zA-Z0-9:._-]+$/.test(variationId) ||
+        !Number.isSafeInteger(cents) ||
+        (cents as number) <= 0 ||
+        (cents as number) > 1_000_000_000
+      ) {
+        continue;
+      }
+      prices[variationId] = cents as number;
+    }
+    return prices;
+  } catch {
+    return {};
   }
 }
 
@@ -2952,4 +3337,35 @@ function formatMoney(cents: number) {
     style: 'currency',
     currency: 'BRL',
   }).format(cents / 100);
+}
+
+function parseMoneyInput(value: string) {
+  const normalized = value
+    .replace(/\./g, '')
+    .replace(',', '.')
+    .replace(/[^\d.]/g, '');
+  return Math.round((Number.parseFloat(normalized) || 0) * 100);
+}
+
+function formatMoneyInput(cents: number) {
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(cents / 100);
+}
+
+function formatPriceDifference(difference: number, length: 'short' | 'long') {
+  const direction = difference < 0 ? 'abaixo' : 'acima';
+  const reference = length === 'long' ? ' do preço cadastrado' : '';
+  return `${formatMoney(Math.abs(difference))} ${direction}${reference}`;
+}
+
+function findCatalogRowByGtin(gtin14: string) {
+  return inventoryRows.find((row) =>
+    row.codes.some((code) => code.padStart(14, '0') === gtin14),
+  );
+}
+
+function getTestVariationId(gtin14: string) {
+  return `test:${gtin14}`;
 }

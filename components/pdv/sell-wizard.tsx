@@ -52,12 +52,14 @@ type SaleItem = {
   product: string;
   detail: string;
   photos: File[];
+  defaultPriceCents: number;
   priceCents: number;
 };
 
 type SaleProduct = {
   product: string;
   detail: string;
+  defaultPriceCents: number;
 };
 
 export type SaleProductLookup = Record<string, SaleProduct>;
@@ -78,6 +80,7 @@ export type CompletedSalePayload = {
     product: string;
     detail: string;
     photos: File[];
+    defaultPriceCents: number;
     priceCents: number;
   }>;
   payments: Array<{
@@ -155,7 +158,9 @@ export function SellWizard({
     initialProduct,
   );
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
-  const [price, setPrice] = useState('9.999,00');
+  const [price, setPrice] = useState(() =>
+    getDefaultPriceInput(initialProduct),
+  );
   const [items, setItems] = useState<SaleItem[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
@@ -212,7 +217,7 @@ export function SellWizard({
     setPendingSerial(null);
     setPendingProduct(null);
     setPhotoFiles([]);
-    setPrice('9.999,00');
+    setPrice('');
     setItems([]);
     itemsRef.current = [];
     setPayments([]);
@@ -238,6 +243,7 @@ export function SellWizard({
       const warning = `O SN ${candidate.normalizedValue} já está nesta venda. Bipe outro SN.`;
       setPendingSerial(null);
       setPendingProduct(null);
+      setPrice('');
       setSerialWarning(warning);
       navigator.vibrate?.([120, 80, 120]);
       return;
@@ -247,6 +253,7 @@ export function SellWizard({
       setPendingSerial(null);
       setPendingProduct(null);
       setPhotoFiles([]);
+      setPrice('');
       setSerialWarning(warning);
       navigator.vibrate?.([120, 80, 120]);
       return;
@@ -257,6 +264,7 @@ export function SellWizard({
       const warning = `O SN ${candidate.normalizedValue} não foi encontrado no estoque de teste. Faça a entrada primeiro.`;
       setPendingSerial(null);
       setPendingProduct(null);
+      setPrice('');
       setSerialWarning(warning);
       navigator.vibrate?.([120, 80, 120]);
       return;
@@ -264,6 +272,7 @@ export function SellWizard({
     setSerialWarning('');
     setPendingSerial(candidate);
     setPendingProduct(product);
+    setPrice(getDefaultPriceInput(product));
     setAnnouncement(`SN ${candidate.normalizedValue} localizado e disponível.`);
   };
 
@@ -289,6 +298,7 @@ export function SellWizard({
         product: pendingProduct.product,
         detail: pendingProduct.detail,
         photos: photoFiles,
+        defaultPriceCents: pendingProduct.defaultPriceCents,
         priceCents,
       },
     ];
@@ -298,7 +308,7 @@ export function SellWizard({
     setPendingSerial(null);
     setPendingProduct(null);
     setPhotoFiles([]);
-    setPrice('9.999,00');
+    setPrice('');
     setSerialWarning('');
     setStep('items');
     setAnnouncement(
@@ -336,7 +346,7 @@ export function SellWizard({
     setPendingSerial(null);
     setPendingProduct(null);
     setPhotoFiles([]);
-    setPrice('9.999,00');
+    setPrice('');
     setSerialWarning('');
     setStep('serial');
     setAnnouncement('Bipe o SN do próximo aparelho.');
@@ -440,6 +450,7 @@ export function SellWizard({
             setPendingSerial(null);
             setPendingProduct(null);
             setPhotoFiles([]);
+            setPrice('');
             setSerialWarning('');
             setAnnouncement('Faça uma nova leitura do SN.');
           }}
@@ -552,6 +563,7 @@ export function SellWizard({
                   product: item.product,
                   detail: item.detail,
                   photos: item.photos,
+                  defaultPriceCents: item.defaultPriceCents,
                   priceCents: item.priceCents,
                 })),
                 payments: payments.map((payment) => ({
@@ -841,7 +853,13 @@ function PriceStage({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const valid = parseMoney(value) > 0;
+  const priceCents = parseMoney(value);
+  const valid = priceCents > 0;
+  const hasDefaultPrice = product.defaultPriceCents > 0;
+  const difference = hasDefaultPrice
+    ? priceCents - product.defaultPriceCents
+    : 0;
+  const hasDifference = valid && difference !== 0;
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="grid min-h-0 flex-1 place-items-center overflow-hidden p-4 sm:p-6">
@@ -871,12 +889,31 @@ function PriceStage({
               R$
             </span>
             <Input
+              aria-describedby="sale-price-guidance"
               className="h-14 pl-12 text-right text-2xl font-extrabold sm:h-16"
               id="sale-price"
               inputMode="decimal"
               onChange={(event) => onChange(event.target.value)}
               value={value}
             />
+          </div>
+          <div
+            className={`mt-3 rounded-xl border px-3 py-2 text-sm ${hasDifference ? 'border-amber-500/35 bg-amber-50 text-amber-950 dark:bg-amber-500/10 dark:text-amber-100' : 'border-border bg-muted/50 text-foreground'}`}
+            id="sale-price-guidance"
+            role="note"
+          >
+            <p className="font-bold">
+              {hasDifference
+                ? `Atenção: ${formatPriceDifference(difference)} do preço padrão`
+                : hasDefaultPrice
+                  ? `Preço padrão: ${formatMoney(product.defaultPriceCents)}`
+                  : 'Preço padrão ainda não configurado'}
+            </p>
+            <p className="flow-stage-support mt-0.5 text-xs">
+              {hasDifference
+                ? 'A venda será permitida e ficará sinalizada no histórico. O pagamento usará o valor digitado.'
+                : 'Você pode alterar este valor. Se houver diferença, a venda será permitida e ficará sinalizada.'}
+            </p>
           </div>
         </div>
       </CardContent>
@@ -917,17 +954,29 @@ function SaleItemsStage({
     safePage * pageSize,
     safePage * pageSize + pageSize,
   );
+  const priceDifference = getItemsPriceDifference(items);
 
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
         <div className="mx-auto max-w-2xl">
-          <div className="rounded-2xl bg-secondary p-3 sm:p-4">
+          <div
+            className={`rounded-2xl border p-3 sm:p-4 ${priceDifference !== 0 ? 'border-amber-500/35 bg-amber-50 text-amber-950 dark:bg-amber-500/10 dark:text-amber-100' : 'bg-secondary'}`}
+            role="note"
+          >
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="font-bold">Aparelhos desta venda</p>
-                <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
-                  Cada SN é um aparelho. O pagamento será do total da venda.
+                <p className="font-bold">
+                  {priceDifference !== 0
+                    ? `Atenção: venda ${formatPriceDifference(priceDifference)} dos preços cadastrados`
+                    : 'Aparelhos desta venda'}
+                </p>
+                <p
+                  className={`flow-stage-support mt-1 text-sm ${priceDifference === 0 ? 'text-muted-foreground' : ''}`}
+                >
+                  {priceDifference !== 0
+                    ? 'A diferença é permitida. O pagamento usará o valor praticado.'
+                    : 'Cada SN é um aparelho. O pagamento será do total da venda.'}
                 </p>
               </div>
               <Badge className="shrink-0" variant="secondary">
@@ -954,9 +1003,19 @@ function SaleItemsStage({
                     SN {item.serial.normalizedValue}
                   </p>
                 </div>
-                <strong className="shrink-0 text-sm">
-                  {formatMoney(item.priceCents)}
-                </strong>
+                <div className="shrink-0 text-right">
+                  <p className="text-[11px] font-semibold text-muted-foreground">
+                    Praticado
+                  </p>
+                  <strong className="block text-sm">
+                    {formatMoney(item.priceCents)}
+                  </strong>
+                  <p
+                    className={`flow-stage-support text-[11px] ${item.defaultPriceCents > 0 && item.priceCents !== item.defaultPriceCents ? 'font-semibold text-amber-800 dark:text-amber-200' : 'text-muted-foreground'}`}
+                  >
+                    {getItemPriceReference(item)}
+                  </p>
+                </div>
                 <Button
                   aria-label={`Remover ${item.product}, SN ${item.serial.normalizedValue}`}
                   className="size-11 shrink-0"
@@ -1406,6 +1465,7 @@ function SaleReview({
   onEditItems: () => void;
   onConfirm: () => void;
 }) {
+  const priceDifference = getItemsPriceDifference(items);
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
@@ -1428,6 +1488,22 @@ function SaleReview({
             />
           </div>
 
+          {priceDifference !== 0 && (
+            <div
+              className="mt-4 rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
+              role="alert"
+            >
+              <p className="font-bold">
+                Venda {formatPriceDifference(priceDifference)} dos preços
+                cadastrados
+              </p>
+              <p className="mt-0.5 text-xs">
+                A diferença não bloqueia a conclusão. Os pagamentos usam o total
+                praticado de {formatMoney(total)}.
+              </p>
+            </div>
+          )}
+
           <section className="mt-4 rounded-2xl border bg-background p-4">
             <div className="flex items-center justify-between">
               <h2 className="font-bold">Aparelhos</h2>
@@ -1447,9 +1523,19 @@ function SaleReview({
                       {item.photos.length === 1 ? 'foto' : 'fotos'}
                     </p>
                   </div>
-                  <strong className="text-sm">
-                    {formatMoney(item.priceCents)}
-                  </strong>
+                  <div className="shrink-0 text-right">
+                    <p className="text-xs font-semibold text-muted-foreground">
+                      Praticado
+                    </p>
+                    <strong className="block text-sm">
+                      {formatMoney(item.priceCents)}
+                    </strong>
+                    <p
+                      className={`text-xs ${item.defaultPriceCents > 0 && item.priceCents !== item.defaultPriceCents ? 'font-semibold text-amber-800 dark:text-amber-200' : 'text-muted-foreground'}`}
+                    >
+                      {getItemPriceReference(item)}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1578,6 +1664,34 @@ function parseMoney(value: string) {
     .replace(',', '.')
     .replace(/[^\d.]/g, '');
   return Math.round((Number.parseFloat(normalized) || 0) * 100);
+}
+
+function getDefaultPriceInput(product: SaleProduct | null | undefined) {
+  if (!product || product.defaultPriceCents <= 0) return '';
+  return formatMoneyInput(product.defaultPriceCents);
+}
+
+function getItemsPriceDifference(items: SaleItem[]) {
+  return items.reduce(
+    (sum, item) =>
+      sum +
+      (item.defaultPriceCents > 0
+        ? item.priceCents - item.defaultPriceCents
+        : 0),
+    0,
+  );
+}
+
+function getItemPriceReference(item: SaleItem) {
+  if (item.defaultPriceCents <= 0) return 'Sem preço padrão';
+  const difference = item.priceCents - item.defaultPriceCents;
+  return difference === 0
+    ? 'Igual ao preço padrão'
+    : `${formatPriceDifference(difference)} do padrão`;
+}
+
+function formatPriceDifference(difference: number) {
+  return `${formatMoney(Math.abs(difference))} ${difference < 0 ? 'abaixo' : 'acima'}`;
 }
 
 function formatMoney(cents: number) {
