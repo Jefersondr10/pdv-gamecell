@@ -21,13 +21,28 @@ export type ScanCandidate = {
 type ScannerCallbacks = {
   onAccepted: (candidate: ScanCandidate) => void;
   onStateChange?: (state: ScannerState) => void;
-  onAmbiguous?: () => void;
   onError?: (message: string) => void;
+};
+
+export type ScanBoundingBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type PositionedScanCandidate = {
+  candidate: ScanCandidate;
+  boundingBox?: ScanBoundingBox;
 };
 
 type Detector = {
   detect: (source: HTMLCanvasElement) => Promise<
-    Array<{ rawValue: string; format: string }>
+    Array<{
+      rawValue: string;
+      format: string;
+      boundingBox?: ScanBoundingBox;
+    }>
   >;
 };
 
@@ -183,13 +198,14 @@ export class ScannerService {
       return;
     }
 
-    const sourceWidth = video.videoWidth * 0.9;
-    const sourceHeight = video.videoHeight * 0.42;
+    const sourceWidth = video.videoWidth * 0.92;
+    const sourceHeight =
+      video.videoHeight * (this.mode === 'apple_serial' ? 0.18 : 0.36);
     const sourceX = (video.videoWidth - sourceWidth) / 2;
     const sourceY = (video.videoHeight - sourceHeight) / 2;
     const targetWidth = Math.min(1100, Math.round(sourceWidth));
     const targetHeight = Math.max(
-      220,
+      this.mode === 'apple_serial' ? 128 : 220,
       Math.round((sourceHeight / sourceWidth) * targetWidth),
     );
 
@@ -209,23 +225,32 @@ export class ScannerService {
 
     try {
       const results = await detector.detect(this.canvas);
-      const candidates = results
-        .map((result) => normalizeCandidate(result.rawValue, result.format, this.mode))
-        .filter((candidate): candidate is ScanCandidate => Boolean(candidate));
+      const candidates: PositionedScanCandidate[] = [];
+      for (const result of results) {
+        const candidate = normalizeCandidate(
+          result.rawValue,
+          result.format,
+          this.mode,
+        );
+        if (candidate) {
+          candidates.push({ candidate, boundingBox: result.boundingBox });
+        }
+      }
 
       if (candidates.length === 0) {
         this.handleEmptyFrame();
         return;
       }
 
-      const uniqueCandidates = new Map(candidates.map((item) => [item.key, item]));
-      if (uniqueCandidates.size > 1) {
-        this.callbacks?.onAmbiguous?.();
-        this.samples = [];
+      const candidate = selectCentralCandidate(
+        candidates,
+        this.canvas.width,
+        this.canvas.height,
+      );
+      if (!candidate) {
+        this.handleEmptyFrame();
         return;
       }
-
-      const candidate = [...uniqueCandidates.values()][0];
       this.emptyFrames = 0;
       if (this.lockedKey === candidate.key || this.acceptedKeys.has(candidate.key)) return;
 
@@ -288,6 +313,7 @@ export function normalizeCandidate(
   const canStripApplePrefix =
     upperValue.startsWith('S') && /^[A-Z0-9]{8,17}$/.test(upperValue.slice(1));
   const normalizedValue = canStripApplePrefix ? upperValue.slice(1) : upperValue;
+  if (!/[A-Z]/.test(normalizedValue)) return null;
 
   return {
     rawValue,
@@ -297,6 +323,50 @@ export function normalizeCandidate(
     format,
     prefixStripped: canStripApplePrefix || undefined,
   };
+}
+
+export function selectCentralCandidate(
+  positionedCandidates: PositionedScanCandidate[],
+  frameWidth: number,
+  frameHeight: number,
+) {
+  const bestByKey = new Map<
+    string,
+    PositionedScanCandidate & { score: number }
+  >();
+
+  for (const positioned of positionedCandidates) {
+    const score = centralityScore(
+      positioned.boundingBox,
+      frameWidth,
+      frameHeight,
+    );
+    const current = bestByKey.get(positioned.candidate.key);
+    if (!current || score < current.score) {
+      bestByKey.set(positioned.candidate.key, { ...positioned, score });
+    }
+  }
+
+  return [...bestByKey.values()].sort((left, right) => left.score - right.score)[0]
+    ?.candidate ?? null;
+}
+
+function centralityScore(
+  box: ScanBoundingBox | undefined,
+  frameWidth: number,
+  frameHeight: number,
+) {
+  if (!box || frameWidth <= 0 || frameHeight <= 0) return Number.MAX_SAFE_INTEGER;
+
+  const centerX = box.x + box.width / 2;
+  const centerY = box.y + box.height / 2;
+  const horizontalDistance = Math.abs(centerX - frameWidth / 2) / frameWidth;
+  const verticalDistance = Math.abs(centerY - frameHeight / 2) / frameHeight;
+  const widthBonus = Math.min(box.width / frameWidth, 1) * 0.08;
+
+  // A faixa já é estreita; priorizar o centro vertical evita capturar a linha
+  // de IMEI/EID que costuma ficar imediatamente acima ou abaixo do SN.
+  return horizontalDistance * 0.65 + verticalDistance * 2 - widthBonus;
 }
 
 export function hasValidGtinCheckDigit(value: string) {

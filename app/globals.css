@@ -119,11 +119,17 @@
   html {
     @apply font-sans;
     background: var(--background);
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   body {
     @apply bg-background text-foreground;
+    height: 100%;
     min-width: 320px;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
 
   button,
@@ -152,8 +158,23 @@
 
 .scan-frame {
   position: absolute;
-  inset: 1.6rem;
   z-index: 0;
+}
+
+.scan-frame-product {
+  top: 50%;
+  right: 1.25rem;
+  left: 1.25rem;
+  height: 36%;
+  transform: translateY(-50%);
+}
+
+.scan-frame-serial {
+  top: 50%;
+  right: 1.25rem;
+  left: 1.25rem;
+  height: clamp(4.5rem, 18%, 6rem);
+  transform: translateY(-50%);
 }
 
 .corner {
@@ -195,11 +216,11 @@
 .scan-beam {
   position: absolute;
   inset-inline: 0.75rem;
-  top: 20%;
+  top: 12%;
   height: 2px;
   background: linear-gradient(90deg, transparent, var(--sky), transparent);
   box-shadow: 0 0 16px var(--sky);
-  animation: scan 2s ease-in-out infinite;
+  animation: scan 1.8s ease-in-out infinite;
 }
 
 @keyframes scan {
@@ -209,8 +230,30 @@
     opacity: 0.4;
   }
   50% {
-    transform: translateY(9rem);
+    top: 88%;
     opacity: 1;
+  }
+}
+
+@media (max-height: 700px) {
+  .app-demo-strip {
+    display: none;
+  }
+
+  .flow-description {
+    display: none;
+  }
+
+  .flow-header {
+    padding-bottom: 0.5rem;
+  }
+
+  .scanner-description {
+    display: none;
+  }
+
+  .scanner-camera {
+    min-height: 6.5rem !important;
   }
 }
 
