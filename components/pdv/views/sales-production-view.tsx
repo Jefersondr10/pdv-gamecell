@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   Paperclip,
   Pencil,
+  Plus,
   Search,
   Smartphone,
   UserRound,
@@ -21,6 +22,11 @@ import {
 } from 'lucide-react';
 
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
+import {
+  ReceiptReconciliationEditor,
+  ReconciliationSummary,
+  SavedReceiptValueEditor,
+} from '@/components/pdv/receipt-reconciliation-editor';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -47,6 +53,10 @@ import {
 import { createOperationId } from '@/lib/client-operation-id';
 import { downloadReportPdf } from '@/lib/download-report-pdf';
 import { parseMoneyInput } from '@/lib/money';
+import {
+  deriveReceiptReconciliation,
+  type ReceiptValueInput,
+} from '@/lib/receipt-reconciliation';
 import { cn } from '@/lib/utils';
 import type {
   BootstrapData,
@@ -70,9 +80,17 @@ type PeriodFilter =
 type Grouping = 'sale' | SalesGrouping;
 type ReportLevel = 'simple' | 'detailed' | 'complete';
 type SellerRanking = 'items' | 'value';
+type IssueFilter = 'all' | 'missing_receipt' | 'pending_payment';
 type SelectedGroup = {
   dimension: SalesGrouping;
   row: SalesGroupRecord;
+};
+type QueuedPayment = {
+  operationId: string;
+  method: 'pix' | 'cash';
+  pixAccountId: string | null;
+  accountName: string | null;
+  amountCents: number;
 };
 
 const PERIOD_OPTIONS: Array<{ label: string; value: PeriodFilter }> = [
@@ -92,7 +110,13 @@ function emptySalesPage(): SalesPage {
     groups: [],
     nextCursor: null,
     total: 0,
-    aggregates: { amountCents: 0, itemCount: 0, alertCount: 0 },
+    aggregates: {
+      amountCents: 0,
+      saleCount: 0,
+      itemCount: 0,
+      alertCount: 0,
+    },
+    comparison: null,
   };
 }
 
@@ -118,6 +142,8 @@ export function SalesProductionView({
   );
   const [grouping, setGrouping] = useState<Grouping>('sale');
   const [alertOnly, setAlertOnly] = useState(false);
+  const [issueFilter, setIssueFilter] = useState<IssueFilter>('all');
+  const [orderStatusFilter, setOrderStatusFilter] = useState('all');
   const [sellerRanking, setSellerRanking] = useState<SellerRanking>('items');
   const [selectedGroup, setSelectedGroup] = useState<SelectedGroup | null>(
     null,
@@ -151,9 +177,22 @@ export function SalesProductionView({
     if (period === 'month') params.set('month', selectedMonth);
     if (query) params.set('q', query);
     if (alertOnly) params.set('alert', '1');
+    if (issueFilter !== 'all') params.set('issue', issueFilter);
+    if (orderStatusFilter !== 'all') {
+      params.set('orderStatus', orderStatusFilter);
+    }
     if (openSaleId) params.set('saleId', openSaleId);
     return params.toString();
-  }, [alertOnly, openSaleId, period, query, selectedDay, selectedMonth]);
+  }, [
+    alertOnly,
+    issueFilter,
+    openSaleId,
+    orderStatusFilter,
+    period,
+    query,
+    selectedDay,
+    selectedMonth,
+  ]);
   const filterKey = filterParams;
 
   useEffect(() => {
@@ -312,6 +351,8 @@ export function SalesProductionView({
     grouping === 'sale'
       ? page.aggregates
       : (analytics?.aggregates ?? page.aggregates);
+  const activeComparison =
+    grouping === 'sale' ? page.comparison : (analytics?.comparison ?? null);
   const activeLoading = grouping === 'sale' ? listLoading : analyticsLoading;
   const activeError =
     grouping === 'sale'
@@ -341,42 +382,111 @@ export function SalesProductionView({
           os SNs de cada grupo.
         </p>
       </div>
-      <div className="mb-3 grid shrink-0 grid-cols-3 gap-2">
+      <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-4">
         <Metric
           active={grouping === 'sale' && !alertOnly}
+          comparison={
+            activeComparison
+              ? {
+                  current: activeAggregates.saleCount,
+                  label: activeComparison.label,
+                  previous: activeComparison.aggregates.saleCount,
+                  previousDisplay: String(
+                    activeComparison.aggregates.saleCount,
+                  ),
+                }
+              : null
+          }
+          label="Vendas concluídas"
+          onClick={() => {
+            setAlertOnly(false);
+            setIssueFilter('all');
+            setOrderStatusFilter('all');
+            setGrouping('sale');
+          }}
+          tone="blue"
+          value={String(activeAggregates.saleCount)}
+        />
+        <Metric
+          active={grouping === 'sale' && !alertOnly}
+          comparison={
+            activeComparison
+              ? {
+                  current: activeAggregates.amountCents,
+                  label: activeComparison.label,
+                  previous: activeComparison.aggregates.amountCents,
+                  previousDisplay: formatMoney(
+                    activeComparison.aggregates.amountCents,
+                  ),
+                }
+              : null
+          }
           label="Montante vendido"
           onClick={() => {
             setAlertOnly(false);
+            setIssueFilter('all');
+            setOrderStatusFilter('all');
             setGrouping('sale');
           }}
+          tone="emerald"
           value={formatMoney(activeAggregates.amountCents)}
         />
         <Metric
           active={grouping === 'model' && !alertOnly}
+          comparison={
+            activeComparison
+              ? {
+                  current: activeAggregates.itemCount,
+                  label: activeComparison.label,
+                  previous: activeComparison.aggregates.itemCount,
+                  previousDisplay: String(
+                    activeComparison.aggregates.itemCount,
+                  ),
+                }
+              : null
+          }
           label="Aparelhos"
           onClick={() => {
             setAlertOnly(false);
+            setIssueFilter('all');
             setGrouping('model');
           }}
+          tone="violet"
           value={String(activeAggregates.itemCount)}
         />
         <Metric
           active={alertOnly}
+          comparison={
+            activeComparison
+              ? {
+                  current: activeAggregates.alertCount,
+                  inverse: true,
+                  label: activeComparison.label,
+                  previous: activeComparison.aggregates.alertCount,
+                  previousDisplay: String(
+                    activeComparison.aggregates.alertCount,
+                  ),
+                }
+              : null
+          }
           label="Avisos"
           onClick={() => {
             setAlertOnly(true);
+            setIssueFilter('all');
+            setOrderStatusFilter('all');
             setGrouping('sale');
           }}
+          tone="amber"
           value={String(activeAggregates.alertCount)}
         />
       </div>
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 space-y-2 border-b p-3 sm:p-4">
-          <div className="grid gap-2 xl:grid-cols-[minmax(16rem,1fr)_auto]">
+        <CardHeader className="shrink-0 space-y-2 border-b bg-gradient-to-r from-slate-50/80 via-background to-blue-50/60 p-3 dark:from-slate-950/40 dark:to-blue-950/20 sm:p-4">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_auto_auto_auto]">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                className="h-10 rounded-xl pl-9"
+                className="h-10 rounded-xl bg-background pl-9 font-semibold shadow-sm"
                 onChange={(event) => setQueryDraft(event.target.value)}
                 placeholder="Cliente, vendedor, modelo, venda ou SN"
                 value={queryDraft}
@@ -384,7 +494,7 @@ export function SalesProductionView({
             </div>
             <NativeSelect
               aria-label="Período das vendas"
-              className="h-10 w-full rounded-xl xl:w-48 [&_select]:h-10"
+              className="h-10 w-full rounded-xl bg-background shadow-sm xl:w-48 [&_select]:h-10 [&_select]:font-bold [&_select]:tracking-[-.01em]"
               onChange={(event) =>
                 setPeriod(event.target.value as PeriodFilter)
               }
@@ -393,6 +503,46 @@ export function SalesProductionView({
               {PERIOD_OPTIONS.map((option) => (
                 <NativeSelectOption key={option.value} value={option.value}>
                   {option.label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <NativeSelect
+              aria-label="Pendência da venda"
+              className="h-10 w-full rounded-xl bg-background shadow-sm xl:w-52 [&_select]:h-10 [&_select]:font-bold [&_select]:tracking-[-.01em]"
+              onChange={(event) => {
+                const next = event.target.value as IssueFilter;
+                setIssueFilter(next);
+                if (next !== 'all') {
+                  setAlertOnly(false);
+                  setGrouping('sale');
+                }
+              }}
+              value={issueFilter}
+            >
+              <NativeSelectOption value="all">
+                Todas as pendências
+              </NativeSelectOption>
+              <NativeSelectOption value="missing_receipt">
+                Sem comprovante
+              </NativeSelectOption>
+              <NativeSelectOption value="pending_payment">
+                Pagamento pendente
+              </NativeSelectOption>
+            </NativeSelect>
+            <NativeSelect
+              aria-label="Status do pedido"
+              className="h-10 w-full rounded-xl bg-background shadow-sm xl:w-52 [&_select]:h-10 [&_select]:font-bold [&_select]:tracking-[-.01em]"
+              onChange={(event) => setOrderStatusFilter(event.target.value)}
+              value={orderStatusFilter}
+            >
+              <NativeSelectOption value="all">
+                Todos os status
+              </NativeSelectOption>
+              <NativeSelectOption value="none">Sem status</NativeSelectOption>
+              {data.orderStatuses.map((status) => (
+                <NativeSelectOption key={status.id} value={status.id}>
+                  {status.name}
+                  {status.active ? '' : ' (inativo)'}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
@@ -413,7 +563,7 @@ export function SalesProductionView({
                 value={period === 'day' ? selectedDay : selectedMonth}
               />
             )}
-            <div className="grid grid-cols-4 gap-1 md:ml-auto md:w-[34rem]">
+            <div className="grid grid-cols-4 gap-1 rounded-2xl bg-muted/60 p-1 md:ml-auto md:w-[34rem]">
               {(
                 [
                   ['sale', 'Por venda'],
@@ -423,14 +573,14 @@ export function SalesProductionView({
                 ] as const
               ).map(([value, label]) => (
                 <Button
-                  className="h-9 px-1 text-[.7rem] sm:px-3 sm:text-sm"
+                  className="h-9 rounded-xl px-1 text-[.7rem] font-extrabold tracking-[-.01em] shadow-none sm:px-3 sm:text-sm"
                   key={value}
                   onClick={() => {
                     setGrouping(value);
                     if (value !== 'sale') setAlertOnly(false);
                   }}
                   size="sm"
-                  variant={grouping === value ? 'secondary' : 'ghost'}
+                  variant={grouping === value ? 'default' : 'ghost'}
                 >
                   {label}
                 </Button>
@@ -491,6 +641,8 @@ export function SalesProductionView({
                 Boolean(query) ||
                 period !== 'all' ||
                 alertOnly ||
+                issueFilter !== 'all' ||
+                orderStatusFilter !== 'all' ||
                 Boolean(openSaleId) ||
                 activeTotal > 0
               }
@@ -656,6 +808,28 @@ function SaleList({
                 {sale.status === 'completed' && sale.receipts.length === 0 && (
                   <WarningBadge text="Sem comprovante" />
                 )}
+                {sale.status === 'completed' &&
+                  sale.receipts.length > 0 &&
+                  sale.reconciliation.status === 'reconciled' && (
+                    <SuccessBadge text="Conciliado" />
+                  )}
+                {sale.status === 'completed' &&
+                  sale.receipts.length > 0 &&
+                  sale.reconciliation.status === 'pending' && (
+                    <WarningBadge
+                      text={
+                        sale.productsTotalCents <= 0
+                          ? 'Venda sem valor definido'
+                          : 'Conferir comprovante'
+                      }
+                    />
+                  )}
+                {sale.status === 'completed' &&
+                  sale.reconciliation.status === 'divergent' && (
+                    <WarningBadge
+                      text={`Verificar venda · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'falta' : 'sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`}
+                    />
+                  )}
                 {sale.status === 'cancelled' && sale.cancellationReason && (
                   <span className="text-xs font-semibold text-destructive">
                     Motivo: {sale.cancellationReason}
@@ -952,6 +1126,21 @@ function EditSaleDialog({
   const [selectedStatusId, setSelectedStatusId] = useState(initialStatusId);
   const [currentStatusId, setCurrentStatusId] = useState(initialStatusId);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
+  const [receiptValues, setReceiptValues] = useState<ReceiptValueInput[]>([]);
+  const [savedReceiptValues, setSavedReceiptValues] = useState<
+    Record<string, ReceiptValueInput>
+  >(() =>
+    Object.fromEntries(
+      (sale?.receipts ?? []).map((receipt) => [
+        receipt.id,
+        {
+          amountCents: receipt.receiptAmountCents,
+          source: receipt.receiptAmountSource,
+        },
+      ]),
+    ),
+  );
+  const receiptValueOperationIdRef = useRef(createOperationId());
   const [itemFiles, setItemFiles] = useState<Record<string, File[]>>({});
   const [preparing, setPreparing] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -963,6 +1152,7 @@ function EditSaleDialog({
     formatMoneyInput(Math.max(0, -(sale?.receivedDifferenceCents ?? 0))),
   );
   const paymentOperationIdRef = useRef(createOperationId());
+  const [queuedPayments, setQueuedPayments] = useState<QueuedPayment[]>([]);
   const [visiblePayments, setVisiblePayments] = useState<SalePaymentRecord[]>(
     () => sale?.payments ?? [],
   );
@@ -1001,11 +1191,75 @@ function EditSaleDialog({
     (account) => account.active,
   );
   const additionalPaymentCents = parseMoneyInput(paymentAmount);
+  const queuedPaymentCents = queuedPayments.reduce(
+    (total, payment) => total + payment.amountCents,
+    0,
+  );
+  const remainingPaymentCents = Math.max(
+    0,
+    pendingPaymentCents - queuedPaymentCents,
+  );
   const paymentReady =
     paymentMethod !== '' &&
     additionalPaymentCents > 0 &&
-    additionalPaymentCents <= pendingPaymentCents &&
+    additionalPaymentCents <= remainingPaymentCents &&
     (paymentMethod !== 'pix' || Boolean(paymentPixAccountId));
+  const changedSavedReceiptValues = (sale?.receipts ?? []).flatMap(
+    (receipt) => {
+      const value = savedReceiptValues[receipt.id] ?? {
+        amountCents: null,
+        source: null,
+      };
+      return value.amountCents !== receipt.receiptAmountCents ||
+        value.source !== receipt.receiptAmountSource
+        ? [{ id: receipt.id, ...value }]
+        : [];
+    },
+  );
+  const reconciliation = sale
+    ? deriveReceiptReconciliation(
+        [
+          ...sale.receipts.map(
+            (receipt) =>
+              savedReceiptValues[receipt.id] ?? {
+                amountCents: receipt.receiptAmountCents,
+                source: receipt.receiptAmountSource,
+              },
+          ),
+          ...receiptValues,
+        ],
+        sale.productsTotalCents,
+      )
+    : null;
+
+  const currentPaymentDraft = (): QueuedPayment | null => {
+    if (!paymentReady || !paymentMethod) return null;
+    return {
+      operationId: paymentOperationIdRef.current,
+      method: paymentMethod,
+      pixAccountId: paymentMethod === 'pix' ? paymentPixAccountId : null,
+      accountName:
+        paymentMethod === 'pix'
+          ? (activePixAccounts.find(
+              (account) => account.id === paymentPixAccountId,
+            )?.name ?? null)
+          : null,
+      amountCents: additionalPaymentCents,
+    };
+  };
+
+  const queueCurrentPayment = () => {
+    const draft = currentPaymentDraft();
+    if (!draft) return;
+    setQueuedPayments((current) => [...current, draft]);
+    const nextRemaining = Math.max(
+      0,
+      remainingPaymentCents - draft.amountCents,
+    );
+    setPaymentMethod('');
+    setPaymentAmount(formatMoneyInput(nextRemaining));
+    paymentOperationIdRef.current = createOperationId();
+  };
 
   const prepareReceipts = async (incoming: File[]) => {
     if (!sale || incoming.length === 0) return;
@@ -1023,6 +1277,11 @@ function EditSaleDialog({
         maxTotalBytes: remainingAttachmentBytes,
       });
       setReceiptFiles(result.files);
+      setReceiptValues((current) =>
+        result.files.map(
+          (_, index) => current[index] ?? { amountCents: null, source: null },
+        ),
+      );
       setNotice(mediaPreparationMessage(result));
     } catch (caught) {
       setError(messageOf(caught));
@@ -1155,7 +1414,8 @@ function EditSaleDialog({
                     </div>
                   </div>
 
-                  {visiblePayments.length > 0 && (
+                  {(visiblePayments.length > 0 ||
+                    queuedPayments.length > 0) && (
                     <div className="mt-3 space-y-1 rounded-xl bg-background/80 p-3 text-xs">
                       {visiblePayments.map((payment) => (
                         <div
@@ -1170,67 +1430,101 @@ function EditSaleDialog({
                           <strong>{formatMoney(payment.amountCents)}</strong>
                         </div>
                       ))}
+                      {queuedPayments.map((payment) => (
+                        <div
+                          className="flex items-center justify-between gap-3 rounded-lg bg-primary/5 px-2 py-1.5"
+                          key={payment.operationId}
+                        >
+                          <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                            {payment.method === 'pix'
+                              ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                              : 'Dinheiro'}{' '}
+                            · novo
+                          </span>
+                          <strong>{formatMoney(payment.amountCents)}</strong>
+                          <Button
+                            aria-label="Remover novo pagamento"
+                            className="size-7"
+                            onClick={() => {
+                              setQueuedPayments((current) =>
+                                current.filter(
+                                  (candidate) =>
+                                    candidate.operationId !==
+                                    payment.operationId,
+                                ),
+                              );
+                            }}
+                            size="icon"
+                            type="button"
+                            variant="ghost"
+                          >
+                            <XCircle />
+                          </Button>
+                        </div>
+                      ))}
                     </div>
                   )}
 
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    <div>
-                      <label
-                        className="text-sm font-semibold"
-                        htmlFor={`sale-${sale.id}-payment-method`}
-                      >
-                        Forma do novo pagamento
-                      </label>
-                      <NativeSelect
-                        className="mt-1 h-11 w-full [&_select]:h-11"
-                        id={`sale-${sale.id}-payment-method`}
-                        onChange={(event) =>
-                          setPaymentMethod(
-                            event.target.value as 'pix' | 'cash' | '',
-                          )
-                        }
-                        value={paymentMethod}
-                      >
-                        <NativeSelectOption value="">
-                          Selecione
-                        </NativeSelectOption>
-                        <NativeSelectOption
-                          disabled={activePixAccounts.length === 0}
-                          value="pix"
+                  {remainingPaymentCents > 0 && (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <label
+                          className="text-sm font-semibold"
+                          htmlFor={`sale-${sale.id}-payment-method`}
                         >
-                          Pix
-                        </NativeSelectOption>
-                        <NativeSelectOption value="cash">
-                          Dinheiro
-                        </NativeSelectOption>
-                      </NativeSelect>
+                          Forma do novo pagamento
+                        </label>
+                        <NativeSelect
+                          className="mt-1 h-11 w-full [&_select]:h-11"
+                          id={`sale-${sale.id}-payment-method`}
+                          onChange={(event) =>
+                            setPaymentMethod(
+                              event.target.value as 'pix' | 'cash' | '',
+                            )
+                          }
+                          value={paymentMethod}
+                        >
+                          <NativeSelectOption value="">
+                            Selecione
+                          </NativeSelectOption>
+                          <NativeSelectOption
+                            disabled={activePixAccounts.length === 0}
+                            value="pix"
+                          >
+                            Pix
+                          </NativeSelectOption>
+                          <NativeSelectOption value="cash">
+                            Dinheiro
+                          </NativeSelectOption>
+                        </NativeSelect>
+                      </div>
+                      <div>
+                        <label
+                          className="text-sm font-semibold"
+                          htmlFor={`sale-${sale.id}-payment-amount`}
+                        >
+                          Valor a acrescentar
+                        </label>
+                        <Input
+                          aria-describedby={
+                            paymentMethod && !paymentReady
+                              ? `sale-${sale.id}-payment-error`
+                              : undefined
+                          }
+                          aria-invalid={Boolean(paymentMethod && !paymentReady)}
+                          className="mt-1 h-11 text-right font-bold"
+                          id={`sale-${sale.id}-payment-amount`}
+                          inputMode="decimal"
+                          onChange={(event) =>
+                            setPaymentAmount(event.target.value)
+                          }
+                          value={paymentAmount}
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label
-                        className="text-sm font-semibold"
-                        htmlFor={`sale-${sale.id}-payment-amount`}
-                      >
-                        Valor a acrescentar
-                      </label>
-                      <Input
-                        aria-describedby={
-                          paymentMethod && !paymentReady
-                            ? `sale-${sale.id}-payment-error`
-                            : undefined
-                        }
-                        aria-invalid={Boolean(paymentMethod && !paymentReady)}
-                        className="mt-1 h-11 text-right font-bold"
-                        id={`sale-${sale.id}-payment-amount`}
-                        inputMode="decimal"
-                        onChange={(event) =>
-                          setPaymentAmount(event.target.value)
-                        }
-                        value={paymentAmount}
-                      />
-                    </div>
-                  </div>
+                  )}
 
-                  {paymentMethod === 'pix' && (
+                  {remainingPaymentCents > 0 && paymentMethod === 'pix' && (
                     <div className="mt-2">
                       <label
                         className="text-sm font-semibold"
@@ -1263,17 +1557,43 @@ function EditSaleDialog({
                     </div>
                   )}
 
-                  {paymentMethod && !paymentReady && (
-                    <p
-                      aria-live="polite"
-                      className="mt-2 text-xs font-semibold text-destructive"
-                      id={`sale-${sale.id}-payment-error`}
-                    >
-                      Informe um valor entre R$ 0,01 e{' '}
-                      {formatMoney(pendingPaymentCents)}
-                      {paymentMethod === 'pix' && !paymentPixAccountId
-                        ? ' e selecione uma conta Pix.'
-                        : '.'}
+                  {remainingPaymentCents > 0 &&
+                    paymentMethod &&
+                    !paymentReady && (
+                      <p
+                        aria-live="polite"
+                        className="mt-2 text-xs font-semibold text-destructive"
+                        id={`sale-${sale.id}-payment-error`}
+                      >
+                        Informe um valor entre R$ 0,01 e{' '}
+                        {formatMoney(remainingPaymentCents)}
+                        {paymentMethod === 'pix' && !paymentPixAccountId
+                          ? ' e selecione uma conta Pix.'
+                          : '.'}
+                      </p>
+                    )}
+                  {remainingPaymentCents > 0 && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-muted-foreground">
+                        Ainda falta distribuir{' '}
+                        {formatMoney(remainingPaymentCents)}.
+                      </p>
+                      <Button
+                        disabled={!paymentReady}
+                        onClick={queueCurrentPayment}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        <Plus /> Adicionar pagamento
+                      </Button>
+                    </div>
+                  )}
+                  {queuedPayments.length > 0 && remainingPaymentCents === 0 && (
+                    <p className="mt-3 rounded-xl bg-success/10 px-3 py-2 text-xs font-semibold text-success">
+                      O saldo foi distribuído entre {queuedPayments.length}{' '}
+                      {queuedPayments.length === 1 ? 'pagamento' : 'pagamentos'}
+                      .
                     </p>
                   )}
                 </section>
@@ -1308,24 +1628,64 @@ function EditSaleDialog({
                   />
                 </div>
                 {sale.receipts.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-3 space-y-2">
                     {sale.receipts.map((receipt) => (
-                      <a
-                        className="max-w-full truncate rounded-lg border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted"
-                        href={receipt.url}
+                      <SavedReceiptValueEditor
+                        disabled={preparing || uploadBusy}
                         key={receipt.id}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        {receipt.name}
-                      </a>
+                        onValueChange={(value) =>
+                          setSavedReceiptValues((current) => ({
+                            ...current,
+                            [receipt.id]: value,
+                          }))
+                        }
+                        receipt={receipt}
+                        value={
+                          savedReceiptValues[receipt.id] ?? {
+                            amountCents: receipt.receiptAmountCents,
+                            source: receipt.receiptAmountSource,
+                          }
+                        }
+                      />
                     ))}
                   </div>
                 )}
                 {receiptFiles.length > 0 && (
-                  <SelectedFiles
-                    files={receiptFiles}
-                    onClear={() => setReceiptFiles([])}
+                  <>
+                    <SelectedFiles
+                      files={receiptFiles}
+                      onClear={() => {
+                        setReceiptFiles([]);
+                        setReceiptValues([]);
+                      }}
+                    />
+                    <ReceiptReconciliationEditor
+                      className="mt-3"
+                      disabled={preparing || uploadBusy}
+                      files={receiptFiles}
+                      onValueChange={(index, value) =>
+                        setReceiptValues((current) =>
+                          receiptFiles.map((_, candidateIndex) =>
+                            candidateIndex === index
+                              ? value
+                              : (current[candidateIndex] ?? {
+                                  amountCents: null,
+                                  source: null,
+                                }),
+                          ),
+                        )
+                      }
+                      showSummary={false}
+                      targetCents={sale.productsTotalCents}
+                      values={receiptValues}
+                    />
+                  </>
+                )}
+                {reconciliation && (
+                  <ReconciliationSummary
+                    className="mt-3"
+                    reconciliation={reconciliation}
+                    targetCents={sale.productsTotalCents}
                   />
                 )}
               </section>
@@ -1450,6 +1810,8 @@ function EditSaleDialog({
                     (paymentMethod !== '' && !paymentReady) ||
                     (selectedFiles.length === 0 &&
                       selectedStatusId === currentStatusId &&
+                      changedSavedReceiptValues.length === 0 &&
+                      queuedPayments.length === 0 &&
                       paymentMethod === '')
                   }
                   onClick={async () => {
@@ -1458,8 +1820,16 @@ function EditSaleDialog({
                     setNotice('');
                     let statusSaved = false;
                     let paymentSaved = false;
+                    let receiptValuesSaved = false;
+                    let attachmentsSaved = false;
                     try {
-                      if (paymentMethod && paymentReady) {
+                      const inlinePayment = currentPaymentDraft();
+                      const paymentsToSave = [
+                        ...queuedPayments,
+                        ...(inlinePayment ? [inlinePayment] : []),
+                      ];
+                      let latestPending = pendingPaymentCents;
+                      for (const paymentDraft of paymentsToSave) {
                         const result = await requestJson<{
                           payment: SalePaymentRecord;
                           sale: { receivedDifferenceCents: number };
@@ -1470,17 +1840,14 @@ function EditSaleDialog({
                             'x-csrf-token': data.csrfToken,
                           },
                           body: JSON.stringify({
-                            operationId: paymentOperationIdRef.current,
-                            method: paymentMethod,
-                            pixAccountId:
-                              paymentMethod === 'pix'
-                                ? paymentPixAccountId
-                                : null,
-                            amountCents: additionalPaymentCents,
+                            operationId: paymentDraft.operationId,
+                            method: paymentDraft.method,
+                            pixAccountId: paymentDraft.pixAccountId,
+                            amountCents: paymentDraft.amountCents,
                           }),
                         });
                         paymentSaved = true;
-                        const nextPending = Math.max(
+                        latestPending = Math.max(
                           0,
                           -result.sale.receivedDifferenceCents,
                         );
@@ -1491,8 +1858,19 @@ function EditSaleDialog({
                             ? current
                             : [...current, result.payment],
                         );
-                        setPendingPaymentCents(nextPending);
-                        setPaymentAmount(formatMoneyInput(nextPending));
+                        setQueuedPayments((current) =>
+                          current.filter(
+                            (candidate) =>
+                              candidate.operationId !==
+                              paymentDraft.operationId,
+                          ),
+                        );
+                        setPendingPaymentCents(latestPending);
+                        setPaymentAmount(formatMoneyInput(latestPending));
+                      }
+                      if (paymentsToSave.length > 0) {
+                        setPendingPaymentCents(latestPending);
+                        setPaymentAmount(formatMoneyInput(latestPending));
                         setPaymentMethod('');
                         paymentOperationIdRef.current = createOperationId();
                       }
@@ -1513,11 +1891,34 @@ function EditSaleDialog({
                         statusSaved = true;
                         setCurrentStatusId(selectedStatusId);
                       }
+                      if (changedSavedReceiptValues.length > 0) {
+                        await requestJson(
+                          `/api/sales/${sale.id}/receipt-values`,
+                          {
+                            method: 'PATCH',
+                            headers: {
+                              'content-type': 'application/json',
+                              'x-csrf-token': data.csrfToken,
+                            },
+                            body: JSON.stringify({
+                              operationId: receiptValueOperationIdRef.current,
+                              receipts: changedSavedReceiptValues,
+                            }),
+                          },
+                        );
+                        receiptValuesSaved = true;
+                      }
                       if (selectedFiles.length > 0) {
                         const form = new FormData();
                         receiptFiles.forEach((file) =>
                           form.append('receipts', file),
                         );
+                        if (receiptFiles.length > 0) {
+                          form.append(
+                            'receiptValues',
+                            JSON.stringify(receiptValues),
+                          );
+                        }
                         Object.entries(itemFiles).forEach(([itemId, files]) => {
                           files.forEach((file) =>
                             form.append(`itemPhotos:${itemId}`, file),
@@ -1528,6 +1929,7 @@ function EditSaleDialog({
                           headers: { 'x-csrf-token': data.csrfToken },
                           body: form,
                         });
+                        attachmentsSaved = true;
                       }
                       void onChanged();
                       onOpenChange(false);
@@ -1535,6 +1937,10 @@ function EditSaleDialog({
                       const savedParts = [
                         paymentSaved ? 'o pagamento' : '',
                         statusSaved ? 'o status' : '',
+                        receiptValuesSaved
+                          ? 'a conciliação dos comprovantes'
+                          : '',
+                        attachmentsSaved ? 'os anexos' : '',
                       ].filter(Boolean);
                       if (savedParts.length > 0) void onChanged();
                       setError(
@@ -1702,45 +2108,49 @@ function SaleReport({
               </DialogDescription>
             </DialogHeader>
             <div
-              className="grid shrink-0 grid-cols-3 gap-1 border-b bg-muted/30 p-2 sm:p-3"
+              className="shrink-0 space-y-1.5 border-b bg-muted/30 p-2 sm:p-3"
               data-report-controls
             >
-              {(['simple', 'detailed', 'complete'] as const).map((value) => (
+              <div className="grid grid-cols-3 gap-1">
+                {(['simple', 'detailed', 'complete'] as const).map((value) => (
+                  <Button
+                    className="h-10 px-2 text-xs sm:text-sm"
+                    key={value}
+                    onClick={() => {
+                      setLevel(value);
+                      if (value === 'complete') {
+                        setIncludePhotos(true);
+                        setIncludeReceipts(true);
+                      }
+                    }}
+                    variant={level === value ? 'default' : 'outline'}
+                  >
+                    {value === 'simple'
+                      ? 'Simplificado'
+                      : value === 'detailed'
+                        ? 'Detalhado'
+                        : 'Completo'}
+                  </Button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-1">
                 <Button
-                  className="h-10 px-2 text-xs sm:text-sm"
-                  key={value}
-                  onClick={() => {
-                    setLevel(value);
-                    if (value === 'complete') {
-                      setIncludePhotos(true);
-                      setIncludeReceipts(true);
-                    }
-                  }}
-                  variant={level === value ? 'default' : 'outline'}
+                  className="h-9"
+                  onClick={() => setIncludePhotos((value) => !value)}
+                  size="sm"
+                  variant={includePhotos ? 'secondary' : 'ghost'}
                 >
-                  {value === 'simple'
-                    ? 'Simplificado'
-                    : value === 'detailed'
-                      ? 'Detalhado'
-                      : 'Completo'}
+                  <Camera /> Fotos
                 </Button>
-              ))}
-              <Button
-                className="h-9 sm:col-span-1"
-                onClick={() => setIncludePhotos((value) => !value)}
-                size="sm"
-                variant={includePhotos ? 'secondary' : 'ghost'}
-              >
-                <Camera /> Fotos
-              </Button>
-              <Button
-                className="h-9 sm:col-span-1"
-                onClick={() => setIncludeReceipts((value) => !value)}
-                size="sm"
-                variant={includeReceipts ? 'secondary' : 'ghost'}
-              >
-                <FileCheck2 /> Comprovantes
-              </Button>
+                <Button
+                  className="h-9"
+                  onClick={() => setIncludeReceipts((value) => !value)}
+                  size="sm"
+                  variant={includeReceipts ? 'secondary' : 'ghost'}
+                >
+                  <FileCheck2 /> Comprovantes
+                </Button>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto bg-muted/25 p-3 overscroll-contain sm:p-5">
               <article
@@ -1784,6 +2194,35 @@ function SaleReport({
                     {formatMoney(Math.abs(sale.receivedDifferenceCents))}.
                   </p>
                 )}
+                <div
+                  className={cn(
+                    'report-section mt-3 rounded-lg border px-3 py-2 text-sm',
+                    sale.reconciliation.status === 'reconciled' &&
+                      'border-emerald-200 bg-emerald-50 text-emerald-950',
+                    sale.reconciliation.status === 'pending' &&
+                      'border-amber-200 bg-amber-50 text-amber-950',
+                    sale.reconciliation.status === 'divergent' &&
+                      'border-rose-200 bg-rose-50 text-rose-950',
+                  )}
+                >
+                  <p className="font-extrabold">
+                    {sale.productsTotalCents <= 0
+                      ? 'Venda sem valor definido'
+                      : sale.reconciliation.status === 'reconciled'
+                        ? 'Conciliado'
+                        : sale.reconciliation.status === 'divergent'
+                          ? 'Verificar venda'
+                          : 'Conciliação pendente'}
+                  </p>
+                  <p className="mt-0.5">
+                    Comprovantes confirmados:{' '}
+                    {formatMoney(sale.reconciliation.confirmedTotalCents)} ·
+                    Total da venda: {formatMoney(sale.productsTotalCents)}
+                    {sale.reconciliation.status === 'divergent'
+                      ? ` · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`
+                      : ''}
+                  </p>
+                </div>
                 <section className="report-section mt-5">
                   <h3 className="font-extrabold">Quantidade por aparelho</h3>
                   <div className="mt-2 space-y-2">
@@ -1887,6 +2326,23 @@ function SaleReport({
                       Comprovantes da venda #
                       {String(sale.number).padStart(5, '0')}
                     </h3>
+                    <div className="mt-2 divide-y rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs">
+                      {sale.receipts.map((receipt) => (
+                        <div
+                          className="flex justify-between gap-3 py-2"
+                          key={`receipt-value-${receipt.id}`}
+                        >
+                          <span className="min-w-0 truncate">
+                            {receipt.name}
+                          </span>
+                          <strong className="shrink-0">
+                            {receipt.receiptAmountCents === null
+                              ? 'Não conferido'
+                              : formatMoney(receipt.receiptAmountCents)}
+                          </strong>
+                        </div>
+                      ))}
+                    </div>
                     <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
                       {sale.receipts.map((receipt) =>
                         receipt.mimeType === 'application/pdf' ? (
@@ -2133,33 +2589,89 @@ function WarningBadge({ text }: { text: string }) {
     </span>
   );
 }
+function SuccessBadge({ text }: { text: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/12 px-1.5 py-1 text-[.68rem] font-bold text-emerald-800 dark:text-emerald-200">
+      <FileCheck2 className="size-3" />
+      {text}
+    </span>
+  );
+}
 function Metric({
   label,
   value,
   active = false,
+  comparison,
   onClick,
+  tone = 'blue',
 }: {
   label: string;
   value: string;
   active?: boolean;
+  comparison?: {
+    current: number;
+    inverse?: boolean;
+    label: string;
+    previous: number;
+    previousDisplay: string;
+  } | null;
   onClick?: () => void;
+  tone?: 'amber' | 'blue' | 'emerald' | 'violet';
 }) {
+  const toneClasses = {
+    amber:
+      'border-amber-200/80 bg-gradient-to-br from-amber-50 via-background to-orange-50/70 dark:border-amber-900/60 dark:from-amber-950/35 dark:to-orange-950/15',
+    blue: 'border-blue-200/80 bg-gradient-to-br from-blue-50 via-background to-cyan-50/70 dark:border-blue-900/60 dark:from-blue-950/35 dark:to-cyan-950/15',
+    emerald:
+      'border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-background to-teal-50/70 dark:border-emerald-900/60 dark:from-emerald-950/35 dark:to-teal-950/15',
+    violet:
+      'border-violet-200/80 bg-gradient-to-br from-violet-50 via-background to-fuchsia-50/60 dark:border-violet-900/60 dark:from-violet-950/35 dark:to-fuchsia-950/15',
+  } as const;
+  const comparisonText = comparison
+    ? metricComparisonText(
+        comparison.current,
+        comparison.previous,
+        comparison.previousDisplay,
+        comparison.label,
+      )
+    : null;
+  const movedUp = comparison ? comparison.current > comparison.previous : false;
+  const movedDown = comparison
+    ? comparison.current < comparison.previous
+    : false;
+  const favorable = comparison?.inverse ? movedDown : movedUp;
+  const unfavorable = comparison?.inverse ? movedUp : movedDown;
   const content = (
     <Card
       className={cn(
-        'h-full transition-colors',
+        'h-full overflow-hidden transition-all',
+        toneClasses[tone],
         onClick && 'hover:border-primary/45 hover:bg-secondary/35',
-        active && 'border-primary bg-primary/5 ring-1 ring-primary/30',
+        active && 'border-primary ring-2 ring-primary/25',
       )}
       size="sm"
     >
-      <CardContent className="p-2.5 sm:p-3">
-        <p className="truncate text-[.62rem] font-bold uppercase text-muted-foreground sm:text-xs">
+      <CardContent className="p-3 sm:p-3.5">
+        <p className="truncate text-[.68rem] font-extrabold uppercase tracking-[.08em] text-muted-foreground sm:text-xs">
           {label}
         </p>
-        <p className="mt-0.5 truncate text-sm font-extrabold sm:text-lg">
+        <p className="mt-1 truncate text-lg font-black tracking-[-.035em] sm:text-xl">
           {value}
         </p>
+        {comparisonText && (
+          <p
+            className={cn(
+              'mt-1 truncate text-[.66rem] font-bold sm:text-xs',
+              favorable && 'text-emerald-700 dark:text-emerald-300',
+              unfavorable && 'text-rose-700 dark:text-rose-300',
+              !favorable && !unfavorable && 'text-muted-foreground',
+            )}
+            title={comparisonText}
+          >
+            {movedUp ? '↑ ' : movedDown ? '↓ ' : '→ '}
+            {comparisonText}
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -2174,6 +2686,19 @@ function Metric({
       {content}
     </button>
   );
+}
+
+function metricComparisonText(
+  current: number,
+  previous: number,
+  previousDisplay: string,
+  label: string,
+) {
+  if (previous === 0) {
+    return current === 0 ? `Igual a ${label}: 0` : `Novo · ${label}: 0`;
+  }
+  const percent = Math.round(((current - previous) / previous) * 100);
+  return `${percent > 0 ? '+' : ''}${percent}% · ${label}: ${previousDisplay}`;
 }
 function ReportMetric({ label, value }: { label: string; value: string }) {
   return (

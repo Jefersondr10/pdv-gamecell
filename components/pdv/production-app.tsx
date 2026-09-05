@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
+  ChevronDown,
   CircleUserRound,
   History,
   LoaderCircle,
@@ -51,6 +52,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { messageOf, requestJson } from '@/lib/client-api';
 import { displayCommercialCode } from '@/lib/commercial-code';
@@ -118,16 +126,6 @@ const navigation: Array<{
     icon: Settings,
   },
 ];
-
-const mobileViews = new Set<View>([
-  'sell',
-  'entry',
-  'stock',
-  'sales',
-  'catalog',
-  'entries',
-]);
-const mobileNavigation = navigation.filter(({ view }) => mobileViews.has(view));
 
 export function ProductionApp() {
   const [session, setSession] = useState<SessionResponse | null>(null);
@@ -282,6 +280,7 @@ function CloudPdv({
   const [loadingError, setLoadingError] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [installPrompt, setInstallPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(
@@ -293,6 +292,7 @@ function CloudPdv({
   const reloadRequestRef = useRef(0);
   const dataRef = useRef<BootstrapData | null>(null);
   const lastReloadAtRef = useRef(0);
+  const catalogSyncRef = useRef(0);
 
   const reload = useCallback(async (background = false) => {
     const requestId = ++reloadRequestRef.current;
@@ -315,6 +315,21 @@ function CloudPdv({
   useEffect(() => {
     queueMicrotask(() => void reload());
   }, [reload]);
+
+  useEffect(() => {
+    if (!data?.systemCatalog.updateAvailable) return;
+    const version = data.systemCatalog.currentVersion;
+    if (catalogSyncRef.current === version) return;
+    catalogSyncRef.current = version;
+    void requestJson('/api/system-catalog/sync', {
+      method: 'POST',
+      headers: { 'x-csrf-token': data.csrfToken },
+    })
+      .then(() => reload(true))
+      .catch(() => {
+        catalogSyncRef.current = 0;
+      });
+  }, [data, reload]);
 
   useEffect(() => {
     const refreshIfStale = () => {
@@ -475,6 +490,7 @@ function CloudPdv({
           pixAccountId: payment.method === 'Pix' ? payment.bank : null,
           amountCents: payment.amountCents,
         })),
+        receiptValues: sale.receiptValues,
       }),
     );
     sale.items.forEach((item, itemIndex) =>
@@ -541,9 +557,20 @@ function CloudPdv({
 
       <section className="mx-auto flex h-dvh min-h-0 max-w-[1500px] flex-col overflow-hidden lg:ml-64">
         <header className="relative z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:h-[4.5rem] lg:px-10 lg:pt-0">
-          <div className="lg:hidden">
+          <button
+            aria-controls="mobile-primary-navigation"
+            aria-expanded={mobileMenuOpen}
+            aria-haspopup="dialog"
+            aria-label={`Abrir menu da loja ${data.store.name}`}
+            className="group flex min-w-0 items-center gap-1 rounded-2xl py-1 pr-1 text-left outline-none transition hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
+            onClick={() => setMobileMenuOpen(true)}
+            type="button"
+          >
             <Brand compact storeName={data.store.name} />
-          </div>
+            <ChevronDown
+              className={`size-4 shrink-0 text-muted-foreground transition-transform ${mobileMenuOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
           <div className="hidden lg:block">
             <p className="text-sm font-bold">{data.store.name}</p>
             <p className="text-xs text-muted-foreground">
@@ -569,7 +596,7 @@ function CloudPdv({
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-hidden pb-[calc(4.7rem+env(safe-area-inset-bottom))] lg:pb-0">
+        <div className="min-h-0 flex-1 overflow-hidden">
           {activeView === 'sell' && (
             <SellWizard
               customers={data.clients
@@ -639,7 +666,14 @@ function CloudPdv({
         </div>
       </section>
 
-      <MobileNavigation active={activeView} onChange={changeView} />
+      <MobileNavigation
+        active={activeView}
+        onChange={changeView}
+        onOpenChange={setMobileMenuOpen}
+        open={mobileMenuOpen}
+        storeCode={data.store.code}
+        storeName={data.store.name}
+      />
       <ProfileDialog
         data={data}
         onEntries={() => {
@@ -1303,7 +1337,10 @@ function GuideDialog({
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
           <GuideStep number="1" title="Cadastre a base">
             Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
-            UPCs/EANs e contas Pix. Em Ajustes, o proprietário gerencia os
+            UPCs, EANs, JANs e contas Pix. O catálogo padrão do sistema já traz
+            o iPhone 16 (exceto o Pro Max) e toda a linha iPhone 17, com suas
+            variações, e pode acrescentar códigos de mercados diferentes sem
+            substituir seus preços. Em Ajustes, o proprietário gerencia os
             usuários da loja.
           </GuideStep>
           <GuideStep number="2" title="Dê entrada">
@@ -1314,12 +1351,17 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="3" title="Venda por etapas">
             Pesquise ou cadastre o cliente, bipe um ou mais SNs, adicione fotos,
-            confira ou altere o preço e anexe ou pule o comprovante. Também é
-            possível salvar sem informar pagamento e completar depois.
+            confira ou altere o preço e anexe ou pule o comprovante. A leitura
+            do valor da transação acontece no próprio aparelho; confira o valor
+            sugerido antes de continuar. Também é possível salvar sem informar
+            pagamento e completar depois.
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
-            mostra um aviso na venda, na listagem e no relatório.
+            mostra um aviso na venda, na listagem e no relatório. Se a soma dos
+            comprovantes não bater com o total da venda, aparece Verificar venda
+            com o valor exato que falta ou sobra. Alterar o preço de venda não
+            gera aviso em comparação ao preço padrão.
           </GuideStep>
           <GuideStep number="5" title="Relatórios e histórico">
             O estoque abre somente com variações disponíveis. Nos detalhes,
@@ -1333,13 +1375,20 @@ function GuideDialog({
             title="Pagamento, status e anexos depois da venda"
           >
             Em Vendas, toque em Editar para completar um pagamento pendente sem
-            apagar os pagamentos anteriores, mudar o status do pedido ou
-            acrescentar comprovantes e fotos ao SN correto. Produtos e preços
-            originais permanecem protegidos.
+            apagar os pagamentos anteriores, dividir o saldo em mais de uma
+            forma, mudar o status do pedido, conferir comprovantes ou
+            acrescentar fotos ao SN correto. Produtos e preços originais
+            permanecem protegidos.
           </GuideStep>
           <GuideStep number="7" title="Usuários e lojas">
             Cada loja é isolada. O proprietário cria funcionários e senhas;
             criar conta na tela inicial abre uma nova loja.
+          </GuideStep>
+          <GuideStep number="8" title="Menu e comparações">
+            No celular, toque no nome da loja para abrir o menu. Em Vendas, os
+            cards coloridos funcionam como filtros e comparam o resultado com o
+            período anterior equivalente; os filtros também localizam vendas sem
+            comprovante, com pagamento pendente ou por status.
           </GuideStep>
         </div>
         <DialogFooter>
@@ -1426,29 +1475,72 @@ function DesktopNavigation({
 function MobileNavigation({
   active,
   onChange,
+  onOpenChange,
+  open,
+  storeCode,
+  storeName,
 }: {
   active: View;
   onChange: (view: View) => void;
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
+  storeCode: string;
+  storeName: string;
 }) {
+  const selectView = (view: View) => {
+    onOpenChange(false);
+    onChange(view);
+  };
+
   return (
-    <nav
-      className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-1 pb-[max(.45rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur-xl lg:hidden"
-      aria-label="Navegação principal"
-    >
-      <div className="mx-auto grid max-w-none grid-cols-6 lg:max-w-2xl">
-        {mobileNavigation.map(({ view, short, icon: Icon }) => (
-          <button
-            className={`mx-0.5 flex min-h-[4.15rem] min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-0.5 text-xs font-bold transition-colors ${active === view ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
-            key={view}
-            onClick={() => onChange(view)}
-            type="button"
-          >
-            <Icon className="size-5" />
-            <span className="truncate">{short}</span>
-          </button>
-        ))}
-      </div>
-    </nav>
+    <Sheet onOpenChange={onOpenChange} open={open}>
+      <SheetContent
+        className="w-[min(88vw,23rem)] gap-0 overflow-hidden rounded-r-[2rem] p-0 lg:hidden"
+        id="mobile-primary-navigation"
+        side="left"
+      >
+        <SheetHeader className="border-b bg-muted/35 px-5 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))]">
+          <SheetTitle className="sr-only">Menu da loja</SheetTitle>
+          <div className="pr-10">
+            <Brand storeName={storeName} />
+          </div>
+          <SheetDescription>
+            Loja {storeCode} · escolha onde deseja ir.
+          </SheetDescription>
+        </SheetHeader>
+        <nav
+          aria-label="Navegação principal"
+          className="min-h-0 flex-1 overflow-y-auto p-3 pb-[max(1rem,env(safe-area-inset-bottom))]"
+        >
+          <div className="grid gap-2">
+            {navigation.map(({ view, label, icon: Icon }) => {
+              const selected = active === view;
+              return (
+                <button
+                  aria-current={selected ? 'page' : undefined}
+                  className={`group flex min-h-16 w-full items-center gap-3 rounded-2xl border px-3.5 text-left text-[0.9375rem] font-bold outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-primary/20 bg-primary text-primary-foreground shadow-lg shadow-primary/15' : 'border-transparent bg-muted/35 text-foreground hover:border-border hover:bg-muted'}`}
+                  key={view}
+                  onClick={() => selectView(view)}
+                  type="button"
+                >
+                  <span
+                    className={`grid size-10 shrink-0 place-items-center rounded-xl ${selected ? 'bg-white/15' : 'bg-background text-primary shadow-sm'}`}
+                  >
+                    <Icon className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  {selected && (
+                    <span className="rounded-full bg-white/15 px-2 py-1 text-xs">
+                      Atual
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      </SheetContent>
+    </Sheet>
   );
 }
 

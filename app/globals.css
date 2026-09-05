@@ -273,9 +273,6 @@
     font-size: 0.9375rem;
   }
 
-  .mobile-bottom-nav {
-    box-shadow: 0 -12px 30px rgb(7 24 44 / 8%);
-  }
 }
 
 @media (max-height: 700px) {

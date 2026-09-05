@@ -11,13 +11,20 @@ import type {
 } from '@/lib/pdv-types';
 import { runtime } from '@/lib/server/runtime';
 import { consumeStoreReadBudget } from '@/lib/server/rate-limit';
+import { SYSTEM_CATALOG_VERSION } from '@/lib/system-catalog';
 
 export const dynamic = 'force-dynamic';
 
 type ProductRow = Omit<ProductRecord, 'detail' | 'active' | 'codes'> & {
   active: number;
 };
-type CodeRow = { id: string; productId: string; code: string; kind: string };
+type CodeRow = {
+  id: string;
+  productId: string;
+  code: string;
+  kind: string;
+  market: string | null;
+};
 type ClientRow = Omit<ClientRecord, 'active'> & { active: number };
 type PixAccountRow = Omit<PixAccountRecord, 'active'> & { active: number };
 type OrderStatusRow = Omit<OrderStatusRecord, 'active'> & { active: number };
@@ -52,7 +59,7 @@ export async function GET(request: Request) {
         .bind(storeId),
       db
         .prepare(
-          `SELECT id, product_id AS productId, code, kind
+          `SELECT id, product_id AS productId, code, kind, market
            FROM product_codes WHERE store_id = ? ORDER BY created_at`,
         )
         .bind(storeId),
@@ -102,17 +109,28 @@ export async function GET(request: Request) {
              AND s.created_at >= ? AND s.created_at < ?`,
         )
         .bind(storeId, todayStart, tomorrowStart),
+      db
+        .prepare(
+          `SELECT catalog_version AS catalogVersion
+           FROM system_catalog_syncs WHERE store_id = ? LIMIT 1`,
+        )
+        .bind(storeId),
     ]);
 
     const productRows = rows<ProductRow>(results[0]);
     const codeRows = rows<CodeRow>(results[1]);
     const codesByProduct = new Map<
       string,
-      Array<{ id: string; code: string; kind: string }>
+      Array<{
+        id: string;
+        code: string;
+        kind: string;
+        market: string | null;
+      }>
     >();
-    for (const { productId, id, code, kind } of codeRows) {
+    for (const { productId, id, code, kind, market } of codeRows) {
       const productCodes = codesByProduct.get(productId) ?? [];
-      productCodes.push({ id, code, kind });
+      productCodes.push({ id, code, kind, market });
       codesByProduct.set(productId, productCodes);
     }
     const products: ProductRecord[] = productRows.map((product) => ({
@@ -167,6 +185,17 @@ export async function GET(request: Request) {
         ),
       },
       users,
+      systemCatalog: {
+        currentVersion: SYSTEM_CATALOG_VERSION,
+        syncedVersion: Number(
+          rows<{ catalogVersion: number }>(results[8])[0]?.catalogVersion ?? 0,
+        ),
+        updateAvailable:
+          Number(
+            rows<{ catalogVersion: number }>(results[8])[0]?.catalogVersion ??
+              0,
+          ) < SYSTEM_CATALOG_VERSION,
+      },
       guideRequired: rows(results[6]).length === 0,
       guideVersion: GUIDE_VERSION,
     };

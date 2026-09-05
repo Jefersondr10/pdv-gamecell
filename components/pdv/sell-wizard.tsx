@@ -56,6 +56,11 @@ import {
 } from '@/lib/client-media';
 import { createOperationId } from '@/lib/client-operation-id';
 import { parseMoneyInput } from '@/lib/money';
+import { ReceiptReconciliationEditor } from '@/components/pdv/receipt-reconciliation-editor';
+import {
+  deriveReceiptReconciliation,
+  type ReceiptValueInput,
+} from '@/lib/receipt-reconciliation';
 import { normalizeCandidate, type ScanCandidate } from '@/lib/scanner';
 
 type SaleStep =
@@ -121,6 +126,7 @@ export type CompletedSalePayload = {
     amountCents: number;
   }>;
   receipts: File[];
+  receiptValues: ReceiptValueInput[];
   productsTotalCents: number;
   receivedTotalCents: number;
   receivedDifferenceCents: number;
@@ -202,6 +208,7 @@ export function SellWizard({
   const [items, setItems] = useState<SaleItem[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
+  const [receiptValues, setReceiptValues] = useState<ReceiptValueInput[]>([]);
   const [preparingPhotos, setPreparingPhotos] = useState(false);
   const [photoProgress, setPhotoProgress] = useState('');
   const [photoError, setPhotoError] = useState('');
@@ -288,6 +295,7 @@ export function SellWizard({
     itemsRef.current = [];
     setPayments([]);
     setReceiptFiles([]);
+    setReceiptValues([]);
     setPreparingReceipts(false);
     setReceiptProgress('');
     setReceiptError('');
@@ -303,6 +311,7 @@ export function SellWizard({
     const hadCheckout = payments.length > 0 || receiptFiles.length > 0;
     setPayments([]);
     setReceiptFiles([]);
+    setReceiptValues([]);
     setReceiptProgress('');
     setReceiptError('');
     return hadCheckout;
@@ -365,6 +374,11 @@ export function SellWizard({
         },
       });
       setReceiptFiles(result.files);
+      setReceiptValues((current) =>
+        result.files.map(
+          (_, index) => current[index] ?? { amountCents: null, source: null },
+        ),
+      );
       setAnnouncement(
         mediaReadyAnnouncement(result, 'comprovante', 'comprovantes'),
       );
@@ -567,14 +581,8 @@ export function SellWizard({
 
   const addPayment = (method: PaymentMethod) => {
     const suggestedAmount = Math.max(remaining, 0);
-    const receiptInvalidated = receiptFiles.length > 0;
     setReceiptProgress('');
     setReceiptError('');
-    if (receiptInvalidated) {
-      setReceiptFiles([]);
-      setReceiptProgress('');
-      setReceiptError('');
-    }
     setPayments((current) => [
       ...current,
       {
@@ -585,53 +593,31 @@ export function SellWizard({
       },
     ]);
     setAnnouncement(
-      receiptInvalidated
-        ? `${method === 'pix' ? 'Pix' : 'Dinheiro'} adicionado. O comprovante anterior foi removido porque o pagamento mudou.`
-        : `${method === 'pix' ? 'Pix' : 'Dinheiro'} adicionado aos pagamentos.`,
+      `${method === 'pix' ? 'Pix' : 'Dinheiro'} adicionado aos pagamentos.`,
     );
   };
 
   const updatePayment = (id: string, patch: Partial<SalePayment>) => {
-    const receiptInvalidated = receiptFiles.length > 0;
     setReceiptProgress('');
     setReceiptError('');
-    if (receiptInvalidated) {
-      setReceiptFiles([]);
-      setReceiptProgress('');
-      setReceiptError('');
-    }
     setPayments((current) =>
       current.map((payment) =>
         payment.id === id ? { ...payment, ...patch } : payment,
       ),
     );
-    if (receiptInvalidated) {
-      setAnnouncement(
-        'O comprovante anterior foi removido porque o pagamento mudou.',
-      );
-    }
   };
 
   const removePayment = (id: string) => {
-    const receiptInvalidated = receiptFiles.length > 0;
     setReceiptProgress('');
     setReceiptError('');
-    if (receiptInvalidated) {
-      setReceiptFiles([]);
-      setReceiptProgress('');
-      setReceiptError('');
-    }
     setPayments((current) => current.filter((payment) => payment.id !== id));
-    setAnnouncement(
-      receiptInvalidated
-        ? 'Pagamento removido. O comprovante anterior também foi removido.'
-        : 'Pagamento removido.',
-    );
+    setAnnouncement('Pagamento removido.');
   };
 
   const goToReview = (skippedReceipt: boolean) => {
     if (skippedReceipt) {
       setReceiptFiles([]);
+      setReceiptValues([]);
       setReceiptProgress('');
       setReceiptError('');
     }
@@ -777,6 +763,13 @@ export function SellWizard({
         <ReceiptStage
           files={receiptFiles}
           onBack={() => setStep('payments')}
+          onClear={() => {
+            setReceiptFiles([]);
+            setReceiptValues([]);
+            setReceiptProgress('');
+            setReceiptError('');
+            setAnnouncement('Comprovantes removidos.');
+          }}
           onFiles={prepareReceipts}
           onNext={() => goToReview(false)}
           onSkip={() => goToReview(true)}
@@ -784,6 +777,20 @@ export function SellWizard({
           progressLabel={receiptProgress}
           receiptBytes={sumFileBytes(receiptFiles)}
           receiptError={receiptError}
+          receiptValues={receiptValues}
+          targetCents={total}
+          onReceiptValueChange={(index, value) =>
+            setReceiptValues((current) =>
+              receiptFiles.map((_, candidateIndex) =>
+                candidateIndex === index
+                  ? value
+                  : (current[candidateIndex] ?? {
+                      amountCents: null,
+                      source: null,
+                    }),
+              ),
+            )
+          }
         />
       )}
 
@@ -821,6 +828,7 @@ export function SellWizard({
                     amountCents: parseMoneyInput(payment.amount),
                   })),
                   receipts: receiptFiles,
+                  receiptValues,
                   productsTotalCents: total,
                   receivedTotalCents: paid,
                   receivedDifferenceCents: paid - total,
@@ -848,6 +856,7 @@ export function SellWizard({
           paid={paid}
           payments={payments}
           receiptCount={receiptFiles.length}
+          receiptValues={receiptValues}
           uploadBytes={sumFileBytes([
             ...items.flatMap((item) => item.photos),
             ...receiptFiles,
@@ -1819,28 +1828,36 @@ function PaymentStage({
 
 function ReceiptStage({
   files,
+  receiptValues,
+  targetCents,
   preparing,
   progressLabel,
   receiptBytes,
   receiptError,
   onFiles,
   onBack,
+  onClear,
   onSkip,
   onNext,
+  onReceiptValueChange,
 }: {
   files: File[];
+  receiptValues: ReceiptValueInput[];
+  targetCents: number;
   preparing: boolean;
   progressLabel: string;
   receiptBytes: number;
   receiptError: string;
   onFiles: (files: File[]) => void;
   onBack: () => void;
+  onClear: () => void;
   onSkip: () => void;
   onNext: () => void;
+  onReceiptValueChange: (index: number, value: ReceiptValueInput) => void;
 }) {
   return (
     <Card className={STAGE_CARD_CLASS}>
-      <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3 text-center sm:p-6">
+      <CardContent className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-3 text-center overscroll-contain sm:p-6">
         <Badge variant="secondary">Comprovante opcional</Badge>
         {preparing && (
           <p
@@ -1902,15 +1919,33 @@ function ReceiptStage({
         </div>
 
         {files.length > 0 && (
-          <div className="mt-2 flex max-w-xl items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success sm:mt-4">
+          <div className="mt-2 flex w-full max-w-xl items-center gap-2 rounded-2xl bg-success/10 px-3 py-2 text-sm font-semibold text-success sm:mt-4">
             <FileCheck2 className="size-4 shrink-0" />
             <span className="truncate">
               {files.length === 1
                 ? `${files[0].name} · ${formatMediaBytes(receiptBytes)}`
                 : `${files.length} comprovantes · ${formatMediaBytes(receiptBytes)}`}
             </span>
+            <Button
+              className="ml-auto h-8 shrink-0 px-2 text-xs"
+              disabled={preparing}
+              onClick={onClear}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Limpar
+            </Button>
           </div>
         )}
+        <ReceiptReconciliationEditor
+          className="mt-3 max-w-xl"
+          disabled={preparing}
+          files={files}
+          onValueChange={onReceiptValueChange}
+          targetCents={targetCents}
+          values={receiptValues}
+        />
         {receiptError && (
           <p
             className="mt-2 w-full max-w-xl rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive"
@@ -1958,6 +1993,7 @@ function SaleReview({
   items,
   payments,
   receiptCount,
+  receiptValues,
   uploadBytes,
   total,
   paid,
@@ -1971,6 +2007,7 @@ function SaleReview({
   items: SaleItem[];
   payments: SalePayment[];
   receiptCount: number;
+  receiptValues: ReceiptValueInput[];
   uploadBytes: number;
   total: number;
   paid: number;
@@ -1979,6 +2016,7 @@ function SaleReview({
   onConfirm: () => void;
   saving: boolean;
 }) {
+  const reconciliation = deriveReceiptReconciliation(receiptValues, total);
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
@@ -2084,6 +2122,23 @@ function SaleReview({
                     : 'Pulado'}
                 </strong>
               </div>
+              {receiptCount > 0 && (
+                <p
+                  className={`mt-2 text-xs font-bold ${
+                    reconciliation.status === 'reconciled'
+                      ? 'text-success'
+                      : reconciliation.status === 'divergent'
+                        ? 'text-destructive'
+                        : 'text-amber-800 dark:text-amber-200'
+                  }`}
+                >
+                  {reconciliation.status === 'reconciled'
+                    ? 'Conciliado com o total da venda'
+                    : reconciliation.status === 'divergent'
+                      ? `${(reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} nos comprovantes · verificar venda`
+                      : 'Valor do comprovante ainda não confirmado'}
+                </p>
+              )}
             </div>
           </div>
         </div>

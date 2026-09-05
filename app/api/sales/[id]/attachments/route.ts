@@ -12,8 +12,11 @@ import {
   consumeFixedWindowLimits,
   consumeStoreWriteBudget,
 } from '@/lib/server/rate-limit';
+import { parseReceiptValues } from '@/lib/server/receipt-values';
 import { runtime } from '@/lib/server/runtime';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
+
+import type { ReceiptValueInput } from '@/lib/receipt-reconciliation';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +29,8 @@ type AttachmentInput = {
   pending: ReturnType<typeof prepareFile>;
   kind: 'item_photo' | 'receipt';
   saleItemId: string | null;
+  receiptAmountCents: number | null;
+  receiptAmountSource: 'ocr' | 'manual' | null;
 };
 
 type ExistingTotals = {
@@ -106,12 +111,25 @@ export async function POST(
       form,
       (key) =>
         key === 'receipts' ||
+        key === 'receiptValues' ||
         /^itemPhotos:[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(key),
     );
     const receiptFiles = validateFiles(form.getAll('receipts'), {
       receipts: true,
       max: MAX_RECEIPTS,
     });
+    const receiptValueFields = form.getAll('receiptValues');
+    if (receiptValueFields.length > 1) {
+      throw new HttpError(
+        400,
+        'Os valores dos comprovantes foram enviados mais de uma vez.',
+        'INVALID_RECEIPT_VALUES',
+      );
+    }
+    const receiptValues = receiptValuesFromForm(
+      receiptValueFields[0] ?? null,
+      receiptFiles.length,
+    );
     const requestedItemIds = Array.from(
       new Set(
         Array.from(form.keys())
@@ -223,11 +241,19 @@ export async function POST(
       5 + allFiles.length,
     );
     reservationId = await reserveUpload(session.storeId!, incomingBytes);
-    const receiptUploads: AttachmentInput[] = receiptFiles.map((file) => ({
-      pending: prepareFile(session.storeId!, `sales/${saleId}/receipts`, file),
-      kind: 'receipt',
-      saleItemId: null,
-    }));
+    const receiptUploads: AttachmentInput[] = receiptFiles.map(
+      (file, index) => ({
+        pending: prepareFile(
+          session.storeId!,
+          `sales/${saleId}/receipts`,
+          file,
+        ),
+        kind: 'receipt',
+        saleItemId: null,
+        receiptAmountCents: receiptValues[index].amountCents,
+        receiptAmountSource: receiptValues[index].source,
+      }),
+    );
     const itemUploads: AttachmentInput[] = itemFiles.flatMap(
       ({ itemId, files }) =>
         files.map((file) => ({
@@ -238,6 +264,8 @@ export async function POST(
           ),
           kind: 'item_photo' as const,
           saleItemId: itemId,
+          receiptAmountCents: null,
+          receiptAmountSource: null,
         })),
     );
     const rows = [...receiptUploads, ...itemUploads];
@@ -259,16 +287,18 @@ export async function POST(
          SELECT 1 FROM sales
          WHERE id = ? AND store_id = ? AND status = 'completed'
        )`,
-      `(SELECT COUNT(*) FROM attachments WHERE sale_id = ?) <= ${MAX_SALE_ATTACHMENTS}`,
+      `(SELECT COUNT(*) FROM attachments
+        WHERE sale_id = ? AND store_id = ?) <= ${MAX_SALE_ATTACHMENTS}`,
       `(SELECT COALESCE(SUM(size_bytes), 0) FROM attachments
-        WHERE sale_id = ?) <= ${MAX_SALE_BYTES}`,
+        WHERE sale_id = ? AND store_id = ?) <= ${MAX_SALE_BYTES}`,
       `(SELECT COUNT(*) FROM attachments
-        WHERE sale_id = ? AND kind = 'receipt') <= ${MAX_RECEIPTS}`,
+        WHERE sale_id = ? AND store_id = ?
+          AND kind = 'receipt') <= ${MAX_RECEIPTS}`,
       `(SELECT COUNT(*) FROM attachments
-        WHERE id IN (${intendedPlaceholders})) = ?`,
+        WHERE id IN (${intendedPlaceholders}) AND store_id = ?) = ?`,
       `NOT EXISTS (
          SELECT 1 FROM attachments
-         WHERE sale_id = ? AND kind = 'item_photo'
+         WHERE sale_id = ? AND store_id = ? AND kind = 'item_photo'
          GROUP BY sale_item_id HAVING COUNT(*) > ${MAX_ITEM_PHOTOS}
        )`,
     ]
@@ -292,14 +322,22 @@ export async function POST(
           saleId,
           session.storeId,
           saleId,
+          session.storeId,
           saleId,
+          session.storeId,
           saleId,
+          session.storeId,
           ...rows.map((row) => row.pending.id),
+          session.storeId,
           rows.length,
           saleId,
+          session.storeId,
           saleId,
           JSON.stringify({
             receiptsAdded: receiptUploads.length,
+            receiptValuesConfirmed: receiptValues.filter(
+              (value) => value.amountCents !== null,
+            ).length,
             itemPhotosAdded: itemUploads.length,
             sizeBytes: incomingBytes,
           }),
@@ -375,19 +413,26 @@ function buildAttachmentStatements(
   now: number,
   rows: AttachmentInput[],
 ) {
-  return chunk(rows, 13).map((group) => {
-    const values = group.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+  return chunk(rows, 10).map((group) => {
+    const values = group.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
     return db
       .prepare(
         `WITH incoming
-           (id, kind, sale_item_id, r2_key, file_name, mime_type, size_bytes) AS
+           (id, kind, sale_item_id, r2_key, file_name, mime_type, size_bytes,
+            receipt_amount_cents, receipt_amount_source) AS
            (VALUES ${values})
          INSERT INTO attachments
            (id, store_id, kind, entry_id, sale_id, sale_item_id, r2_key,
-            file_name, mime_type, size_bytes, created_by, created_at)
+            file_name, mime_type, size_bytes, receipt_amount_cents,
+            receipt_amount_source, receipt_amount_confirmed_by,
+            receipt_amount_confirmed_at, created_by, created_at)
          SELECT incoming.id, ?, incoming.kind, NULL, ?, incoming.sale_item_id,
                 incoming.r2_key, incoming.file_name, incoming.mime_type,
-                incoming.size_bytes, ?, ?
+                incoming.size_bytes, incoming.receipt_amount_cents,
+                incoming.receipt_amount_source,
+                CASE WHEN incoming.receipt_amount_cents IS NOT NULL THEN ? END,
+                CASE WHEN incoming.receipt_amount_cents IS NOT NULL THEN ? END,
+                ?, ?
          FROM incoming
          WHERE incoming.sale_item_id IS NULL OR EXISTS (
            SELECT 1 FROM sale_items
@@ -395,23 +440,60 @@ function buildAttachmentStatements(
          )`,
       )
       .bind(
-        ...group.flatMap(({ pending, kind, saleItemId }) => [
-          pending.id,
-          kind,
-          saleItemId,
-          pending.key,
-          pending.file.name.slice(0, 200) || 'arquivo',
-          pending.file.type,
-          pending.file.size,
-        ]),
+        ...group.flatMap(
+          ({
+            pending,
+            kind,
+            saleItemId,
+            receiptAmountCents,
+            receiptAmountSource,
+          }) => [
+            pending.id,
+            kind,
+            saleItemId,
+            pending.key,
+            pending.file.name.slice(0, 200) || 'arquivo',
+            pending.file.type,
+            pending.file.size,
+            receiptAmountCents,
+            receiptAmountSource,
+          ],
+        ),
         storeId,
         saleId,
+        userId,
+        now,
         userId,
         now,
         saleId,
         storeId,
       );
   });
+}
+
+function receiptValuesFromForm(
+  value: FormDataEntryValue | null,
+  expectedLength: number,
+): ReceiptValueInput[] {
+  if (value === null) return parseReceiptValues(undefined, expectedLength);
+  if (typeof value !== 'string' || value.length > 8 * 1024) {
+    throw new HttpError(
+      400,
+      'Os valores dos comprovantes são inválidos.',
+      'INVALID_RECEIPT_VALUES',
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new HttpError(
+      400,
+      'Os valores dos comprovantes são inválidos.',
+      'INVALID_RECEIPT_VALUES',
+    );
+  }
+  return parseReceiptValues(parsed, expectedLength);
 }
 
 function chunk<T>(values: T[], size: number) {

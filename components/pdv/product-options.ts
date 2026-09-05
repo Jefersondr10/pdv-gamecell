@@ -10,12 +10,20 @@ export const APPLE_MEMORY_OPTIONS = [
 ] as const;
 
 export const APPLE_COLOR_SUGGESTIONS = [
+  'Laranja-cósmico',
   'Laranja',
+  'Azul-intenso',
+  'Azul-névoa',
+  'Azul-céu',
   'Preto',
+  'Preto-espacial',
   'Branco',
+  'Branco-nuvem',
   'Azul',
   'Azul ultramarino',
+  'Sálvia',
   'Verde',
+  'Verde-azulado',
   'Rosa',
   'Amarelo',
   'Vermelho',
@@ -23,10 +31,23 @@ export const APPLE_COLOR_SUGGESTIONS = [
   'Meia-noite',
   'Branco estelar',
   'Prata',
+  'Prateado',
+  'Dourado-claro',
   'Dourado',
   'Grafite',
   'Titânio natural',
   'Titânio deserto',
+  'Titânio branco',
+  'Titânio preto',
+] as const;
+
+export const PRODUCT_MARKET_OPTIONS = [
+  'Estados Unidos',
+  'Japão',
+  'Canadá',
+  'Europa',
+  'Brasil',
+  'Internacional',
 ] as const;
 
 export function appleMemoryOptions(current?: string) {

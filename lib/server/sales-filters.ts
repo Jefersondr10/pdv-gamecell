@@ -1,4 +1,4 @@
-import { HttpError, utf8Prefix } from '@/lib/server/http';
+import { HttpError, utf8Prefix } from './http.ts';
 
 export type SalesPeriod =
   | 'today'
@@ -9,12 +9,21 @@ export type SalesPeriod =
   | 'month'
   | 'all';
 
+export type SalesIssue = 'missing_receipt' | 'pending_payment';
+
 export type ParsedSalesFilters = {
   alertOnly: boolean;
   bindings: Array<string | number>;
+  comparison: {
+    bindings: Array<string | number>;
+    label: string;
+    where: string[];
+  } | null;
   day: string | null;
   from: number | null;
   month: string | null;
+  issue: SalesIssue | null;
+  orderStatusId: string | null;
   period: SalesPeriod | null;
   query: string;
   saleId: string | null;
@@ -25,6 +34,27 @@ export type ParsedSalesFilters = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_LEGACY_PERIOD_MS = 367 * DAY_MS;
 const SAO_PAULO_TIME_ZONE = 'America/Sao_Paulo';
+
+export const SALE_ALERT_SQL = `(
+  s.received_difference_cents <> 0 OR NOT EXISTS (
+    SELECT 1 FROM attachments reconciliation_receipt
+    WHERE reconciliation_receipt.store_id = s.store_id
+      AND reconciliation_receipt.sale_id = s.id
+      AND reconciliation_receipt.kind = 'receipt'
+  ) OR EXISTS (
+    SELECT 1 FROM attachments reconciliation_receipt
+    WHERE reconciliation_receipt.store_id = s.store_id
+      AND reconciliation_receipt.sale_id = s.id
+      AND reconciliation_receipt.kind = 'receipt'
+      AND reconciliation_receipt.receipt_amount_cents IS NULL
+  ) OR COALESCE((
+    SELECT SUM(reconciliation_receipt.receipt_amount_cents)
+    FROM attachments reconciliation_receipt
+    WHERE reconciliation_receipt.store_id = s.store_id
+      AND reconciliation_receipt.sale_id = s.id
+      AND reconciliation_receipt.kind = 'receipt'
+  ), 0) <> s.products_total_cents
+)`;
 
 export function parseSalesFilters(
   url: URL,
@@ -68,10 +98,76 @@ export function parseSalesFilters(
     throw new HttpError(400, 'Filtro de avisos inválido.', 'INVALID_ALERT');
   }
   const alertOnly = alertValue === '1';
+  const issue = parseIssue(url.searchParams.get('issue'));
+  const orderStatusId = parseOrderStatus(url.searchParams.get('orderStatus'));
   const saleId = (url.searchParams.get('saleId') ?? '').trim() || null;
   if (saleId && !/^[a-f0-9-]{20,80}$/i.test(saleId)) {
     throw new HttpError(400, 'Venda inválida.', 'INVALID_SALE');
   }
+  const current = buildFilterClauses({
+    alertOnly,
+    from,
+    issue,
+    orderStatusId,
+    query,
+    saleId,
+    storeId,
+    to,
+  });
+  const previous = previousPeriodBounds(period, from, to, day, month);
+  const comparison =
+    previous && !saleId
+      ? {
+          ...buildFilterClauses({
+            alertOnly,
+            from: previous.from,
+            issue,
+            orderStatusId,
+            query,
+            saleId: null,
+            storeId,
+            to: previous.to,
+          }),
+          label: previous.label,
+        }
+      : null;
+
+  return {
+    alertOnly,
+    bindings: current.bindings,
+    comparison,
+    day,
+    from,
+    issue,
+    month,
+    orderStatusId,
+    period,
+    query,
+    saleId,
+    to,
+    where: current.where,
+  };
+}
+
+function buildFilterClauses({
+  alertOnly,
+  from,
+  issue,
+  orderStatusId,
+  query,
+  saleId,
+  storeId,
+  to,
+}: {
+  alertOnly: boolean;
+  from: number | null;
+  issue: SalesIssue | null;
+  orderStatusId: string | null;
+  query: string;
+  saleId: string | null;
+  storeId: string;
+  to: number | null;
+}) {
   const where = ['s.store_id = ?'];
   const bindings: Array<string | number> = [storeId];
   if (from !== null) {
@@ -97,34 +193,49 @@ export function parseSalesFilters(
     bindings.push(pattern, pattern, pattern, pattern, pattern, pattern);
   }
   if (alertOnly) {
+    where.push(`(s.status = 'completed' AND ${SALE_ALERT_SQL})`);
+  }
+  if (issue === 'missing_receipt') {
     where.push(`(
-      s.status = 'completed' AND (
-        s.received_difference_cents <> 0 OR NOT EXISTS (
-          SELECT 1 FROM attachments alert_attachment
-          WHERE alert_attachment.store_id = s.store_id
-            AND alert_attachment.sale_id = s.id
-            AND alert_attachment.kind = 'receipt'
-        )
+      s.status = 'completed' AND NOT EXISTS (
+        SELECT 1 FROM attachments missing_receipt
+        WHERE missing_receipt.store_id = s.store_id
+          AND missing_receipt.sale_id = s.id
+          AND missing_receipt.kind = 'receipt'
       )
     )`);
+  }
+  if (issue === 'pending_payment') {
+    where.push(
+      "s.status = 'completed' AND s.received_total_cents < s.products_total_cents",
+    );
+  }
+  if (orderStatusId === 'none') {
+    where.push('s.order_status_id IS NULL');
+  } else if (orderStatusId) {
+    where.push('s.order_status_id = ?');
+    bindings.push(orderStatusId);
   }
   if (saleId) {
     where.push('s.id = ?');
     bindings.push(saleId);
   }
+  return { bindings, where };
+}
 
-  return {
-    alertOnly,
-    bindings,
-    day,
-    from,
-    month,
-    period,
-    query,
-    saleId,
-    to,
-    where,
-  };
+function parseIssue(value: string | null): SalesIssue | null {
+  if (value === null || value === '') return null;
+  if (value === 'missing_receipt' || value === 'pending_payment') return value;
+  throw new HttpError(400, 'Filtro de pendência inválido.', 'INVALID_ISSUE');
+}
+
+function parseOrderStatus(value: string | null) {
+  if (value === null || value === '') return null;
+  if (value === 'none') return value;
+  if (!/^[a-f0-9-]{20,80}$/i.test(value)) {
+    throw new HttpError(400, 'Status de pedido inválido.', 'INVALID_STATUS');
+  }
+  return value;
 }
 
 function parsePeriod(value: string | null): SalesPeriod | null {
@@ -201,6 +312,41 @@ function periodBounds(
   return {
     from: todayStart - (days - 1) * DAY_MS,
     to: todayStart + DAY_MS,
+  };
+}
+
+function previousPeriodBounds(
+  period: SalesPeriod | null,
+  from: number | null,
+  to: number | null,
+  day: string | null,
+  month: string | null,
+): { from: number; label: string; to: number } | null {
+  if (!period || period === 'all' || from === null || to === null) return null;
+  if (period === 'month') {
+    const [year, monthNumber] = month!.split('-').map(Number);
+    const previousYear = monthNumber === 1 ? year - 1 : year;
+    const previousMonth = monthNumber === 1 ? 12 : monthNumber - 1;
+    return {
+      from: saoPauloMidnight(`${previousYear}-${twoDigits(previousMonth)}-01`),
+      label: 'mês anterior',
+      to: saoPauloMidnight(`${year}-${twoDigits(monthNumber)}-01`),
+    };
+  }
+  const duration = to - from;
+  return {
+    from: from - duration,
+    label:
+      period === 'today'
+        ? 'ontem'
+        : period === '7d'
+          ? '7 dias anteriores'
+          : period === '15d'
+            ? '15 dias anteriores'
+            : day || period === 'yesterday'
+              ? 'dia anterior'
+              : 'período anterior',
+    to: from,
   };
 }
 

@@ -16,6 +16,7 @@ import {
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import {
   APPLE_COLOR_SUGGESTIONS,
+  PRODUCT_MARKET_OPTIONS,
   appleMemoryOptions,
 } from '@/components/pdv/product-options';
 import { Badge } from '@/components/ui/badge';
@@ -595,6 +596,7 @@ function ProductEditor({
     codes: '',
   });
   const [newCode, setNewCode] = useState('');
+  const [newCodeMarket, setNewCodeMarket] = useState('');
   const [removeCodeId, setRemoveCodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -732,7 +734,7 @@ function ProductEditor({
                 A leitura aceita o UPC de 12 números e o zero técnico do leitor.
               </p>
             </div>
-            <Badge variant="secondary">{product.codes.length}/10</Badge>
+            <Badge variant="secondary">{product.codes.length}/20</Badge>
           </div>
           <div className="mt-3 space-y-2">
             {product.codes.map((code) => (
@@ -744,7 +746,12 @@ function ProductEditor({
                 <span className="min-w-0 flex-1 truncate font-mono text-sm font-bold">
                   {displayCommercialCode(code.code, code.kind)}
                 </span>
-                <Badge variant="outline">{code.kind}</Badge>
+                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                  <Badge variant="outline">{code.kind}</Badge>
+                  {code.market && (
+                    <Badge variant="secondary">{code.market}</Badge>
+                  )}
+                </div>
                 <Button
                   aria-label={`Excluir código ${displayCommercialCode(code.code, code.kind)}`}
                   disabled={busy || product.codes.length <= 1}
@@ -795,14 +802,16 @@ function ProductEditor({
             </div>
           )}
           <form
-            className="mt-3 flex gap-2"
+            className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
             onSubmit={(event) => {
               event.preventDefault();
               void runAction(setBusy, setError, async () => {
                 await postJson(`/api/products/${product.id}/codes`, csrfToken, {
                   code: newCode,
+                  market: newCodeMarket || null,
                 });
                 setNewCode('');
+                setNewCodeMarket('');
                 await onChanged();
               });
             }}
@@ -816,10 +825,25 @@ function ProductEditor({
               required
               value={newCode}
             />
+            <NativeSelect
+              aria-label="Mercado do código"
+              className="h-11 w-full [&_select]:h-11"
+              onChange={(event) => setNewCodeMarket(event.target.value)}
+              value={newCodeMarket}
+            >
+              <NativeSelectOption value="">
+                Mercado (opcional)
+              </NativeSelectOption>
+              {PRODUCT_MARKET_OPTIONS.map((market) => (
+                <NativeSelectOption key={market} value={market}>
+                  {market}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
             <Button
               aria-label="Adicionar código"
               className="size-11 rounded-xl"
-              disabled={busy || product.codes.length >= 10}
+              disabled={busy || product.codes.length >= 20}
               size="icon"
               type="submit"
             >

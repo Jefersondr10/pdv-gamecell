@@ -23,12 +23,15 @@ import {
   consumeStoreWriteBudget,
 } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
-import { parseSalesFilters } from '@/lib/server/sales-filters';
+import { parseReceiptValues } from '@/lib/server/receipt-values';
+import { parseSalesFilters, SALE_ALERT_SQL } from '@/lib/server/sales-filters';
 import { normalizeAppleSerial, sha256 } from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
+import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
 import type {
   AttachmentRecord,
   OrderStatusColor,
+  ReceiptAttachmentRecord,
   SaleItemRecord,
   SalePaymentRecord,
   SaleRecord,
@@ -56,10 +59,12 @@ type SaleAttachmentRow = {
   pending: ReturnType<typeof prepareFile>;
   kind: 'item_photo' | 'receipt';
   saleItemId: string | null;
+  receiptAmountCents: number | null;
+  receiptAmountSource: 'ocr' | 'manual' | null;
 };
 type SaleListRow = Omit<
   SaleRecord,
-  'items' | 'payments' | 'receipts' | 'orderStatus'
+  'items' | 'payments' | 'receipts' | 'reconciliation' | 'orderStatus'
 > & {
   orderStatusId: string | null;
   orderStatusName: string | null;
@@ -69,8 +74,22 @@ type SaleItemListRow = Omit<SaleItemRecord, 'photos'> & { saleId: string };
 type SalePaymentListRow = SalePaymentRecord & { saleId: string };
 type SaleAttachmentListRow = Omit<AttachmentRecord, 'url'> & {
   kind: 'item_photo' | 'receipt';
+  receiptAmountCents: number | null;
+  receiptAmountSource: 'ocr' | 'manual' | null;
+  receiptAmountConfirmedAt: number | null;
   saleId: string;
   saleItemId: string | null;
+};
+type SalesAggregateRow = {
+  total: number;
+  amountCents: number;
+  saleCount: number;
+  itemCount: number;
+  alertCount: number;
+  previousAmountCents?: number | null;
+  previousSaleCount?: number | null;
+  previousItemCount?: number | null;
+  previousAlertCount?: number | null;
 };
 
 export const dynamic = 'force-dynamic';
@@ -88,7 +107,7 @@ export async function GET(request: Request) {
       grouping === 'all'
         ? grouping
         : 'sale';
-    const { bindings, where } = parseSalesFilters(url, storeId);
+    const { bindings, comparison, where } = parseSalesFilters(url, storeId);
     const filterSql = where.join(' AND ');
     const db = runtime().DB;
     await consumeStoreReadBudget(
@@ -97,27 +116,17 @@ export async function GET(request: Request) {
       storeId,
       group === 'sale' ? 10 : group === 'all' ? 16 : 12,
     );
-    const aggregateStatement = db
-      .prepare(
-        `SELECT COUNT(*) AS total,
-                COALESCE(SUM(CASE WHEN s.status = 'completed'
-                  THEN s.products_total_cents ELSE 0 END), 0) AS amountCents,
-                COALESCE(SUM(CASE WHEN s.status = 'completed' THEN (
-                  SELECT COUNT(*) FROM sale_items aggregate_item
-                  WHERE aggregate_item.sale_id = s.id
-                    AND aggregate_item.store_id = s.store_id
-                ) ELSE 0 END), 0) AS itemCount,
-                COALESCE(SUM(CASE WHEN s.status = 'completed' AND (
-                  s.received_difference_cents <> 0 OR NOT EXISTS (
-                    SELECT 1 FROM attachments aggregate_attachment
-                    WHERE aggregate_attachment.store_id = s.store_id
-                      AND aggregate_attachment.sale_id = s.id
-                      AND aggregate_attachment.kind = 'receipt'
-                  )
-                ) THEN 1 ELSE 0 END), 0) AS alertCount
-         FROM sales s WHERE ${filterSql}`,
-      )
-      .bind(...bindings);
+    const aggregateStatement = salesAggregateStatement(
+      db,
+      filterSql,
+      bindings,
+      comparison
+        ? {
+            bindings: comparison.bindings,
+            filterSql: comparison.where.join(' AND '),
+          }
+        : null,
+    );
 
     if (group === 'all') {
       const results = await db.batch([
@@ -126,12 +135,7 @@ export async function GET(request: Request) {
         salesGroupStatement(db, 'customer', filterSql, bindings),
         salesGroupStatement(db, 'seller', filterSql, bindings),
       ]);
-      const aggregate = firstRow<{
-        total: number;
-        amountCents: number;
-        itemCount: number;
-        alertCount: number;
-      }>(results[0]);
+      const aggregate = firstRow<SalesAggregateRow>(results[0]);
       return json({
         groups: {
           model: numericSalesGroups(results[1]),
@@ -140,6 +144,7 @@ export async function GET(request: Request) {
         },
         total: Number(aggregate?.total ?? 0),
         aggregates: numericSalesAggregates(aggregate),
+        comparison: salesComparison(comparison, aggregate),
       } satisfies SalesAnalytics);
     }
 
@@ -151,18 +156,14 @@ export async function GET(request: Request) {
         bindings,
       );
       const results = await db.batch([aggregateStatement, groupStatement]);
-      const aggregate = firstRow<{
-        total: number;
-        amountCents: number;
-        itemCount: number;
-        alertCount: number;
-      }>(results[0]);
+      const aggregate = firstRow<SalesAggregateRow>(results[0]);
       return json({
         items: [],
         groups: numericSalesGroups(results[1]),
         nextCursor: null,
         total: Number(aggregate?.total ?? 0),
         aggregates: numericSalesAggregates(aggregate),
+        comparison: salesComparison(comparison, aggregate),
       } satisfies SalesPage);
     }
 
@@ -203,12 +204,7 @@ export async function GET(request: Request) {
       )
       .bind(...pageBindings, pageSize + 1);
     const baseResults = await db.batch([aggregateStatement, listStatement]);
-    const aggregate = firstRow<{
-      total: number;
-      amountCents: number;
-      itemCount: number;
-      alertCount: number;
-    }>(baseResults[0]);
+    const aggregate = firstRow<SalesAggregateRow>(baseResults[0]);
     const listed = resultRows<SaleListRow>(baseResults[1]);
     const hasMore = listed.length > pageSize;
     const visible = listed.slice(0, pageSize);
@@ -222,6 +218,7 @@ export async function GET(request: Request) {
         hasMore && last ? encodeCursor(last.createdAt, last.id) : null,
       total: Number(aggregate?.total ?? 0),
       aggregates: numericSalesAggregates(aggregate),
+      comparison: salesComparison(comparison, aggregate),
     } satisfies SalesPage);
   } catch (error) {
     return apiError(error);
@@ -415,6 +412,10 @@ export async function POST(request: Request) {
       receipts: true,
       max: 8,
     });
+    const receiptValues = parseReceiptValues(
+      payload.receiptValues,
+      receiptFiles.length,
+    );
     const allFiles = [...itemFiles.flat(), ...receiptFiles];
     const filesSizeBytes = allFiles.reduce(
       (total, file) => total + file.size,
@@ -445,8 +446,9 @@ export async function POST(request: Request) {
         ),
       })),
     );
-    const receiptUploads = receiptFiles.map((file) => ({
+    const receiptUploads = receiptFiles.map((file, index) => ({
       pending: prepareFile(session.storeId!, `sales/${saleId}/receipts`, file),
+      receiptValue: receiptValues[index],
     }));
     uploaded.push(
       ...itemUploads.map((value) => value.pending),
@@ -542,11 +544,15 @@ export async function POST(request: Request) {
         pending,
         kind: 'item_photo' as const,
         saleItemId: itemIds[itemIndex],
+        receiptAmountCents: null,
+        receiptAmountSource: null,
       })),
-      ...receiptUploads.map(({ pending }) => ({
+      ...receiptUploads.map(({ pending, receiptValue }) => ({
         pending,
         kind: 'receipt' as const,
         saleItemId: null,
+        receiptAmountCents: receiptValue.amountCents,
+        receiptAmountSource: receiptValue.source,
       })),
     ];
     const attachmentStatements = buildAttachmentStatements(
@@ -1069,19 +1075,26 @@ function buildAttachmentStatements(
   now: number,
   rows: SaleAttachmentRow[],
 ) {
-  return chunk(rows, 13).map((rowGroup) => {
-    const values = rowGroup.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+  return chunk(rows, 10).map((rowGroup) => {
+    const values = rowGroup.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
     return db
       .prepare(
         `WITH incoming
-           (id, kind, sale_item_id, r2_key, file_name, mime_type, size_bytes) AS
+           (id, kind, sale_item_id, r2_key, file_name, mime_type, size_bytes,
+            receipt_amount_cents, receipt_amount_source) AS
            (VALUES ${values})
          INSERT INTO attachments
            (id, store_id, kind, entry_id, sale_id, sale_item_id, r2_key,
-            file_name, mime_type, size_bytes, created_by, created_at)
+             file_name, mime_type, size_bytes, receipt_amount_cents,
+             receipt_amount_source, receipt_amount_confirmed_by,
+             receipt_amount_confirmed_at, created_by, created_at)
          SELECT incoming.id, ?, incoming.kind, NULL, ?, incoming.sale_item_id,
                 incoming.r2_key, incoming.file_name, incoming.mime_type,
-                incoming.size_bytes, ?, ?
+                incoming.size_bytes, incoming.receipt_amount_cents,
+                incoming.receipt_amount_source,
+                CASE WHEN incoming.receipt_amount_cents IS NOT NULL THEN ? END,
+                CASE WHEN incoming.receipt_amount_cents IS NOT NULL THEN ? END,
+                ?, ?
          FROM incoming
          WHERE incoming.sale_item_id IS NULL OR EXISTS (
            SELECT 1 FROM sale_items
@@ -1089,17 +1102,29 @@ function buildAttachmentStatements(
          )`,
       )
       .bind(
-        ...rowGroup.flatMap(({ pending, kind, saleItemId }) => [
-          pending.id,
-          kind,
-          saleItemId,
-          pending.key,
-          pending.file.name.slice(0, 200) || 'arquivo',
-          pending.file.type,
-          pending.file.size,
-        ]),
+        ...rowGroup.flatMap(
+          ({
+            pending,
+            kind,
+            saleItemId,
+            receiptAmountCents,
+            receiptAmountSource,
+          }) => [
+            pending.id,
+            kind,
+            saleItemId,
+            pending.key,
+            pending.file.name.slice(0, 200) || 'arquivo',
+            pending.file.type,
+            pending.file.size,
+            receiptAmountCents,
+            receiptAmountSource,
+          ],
+        ),
         storeId,
         saleId,
+        userId,
+        now,
         userId,
         now,
         saleId,
@@ -1147,8 +1172,11 @@ async function hydrateSales(
     db
       .prepare(
         `SELECT id, kind, sale_id AS saleId, sale_item_id AS saleItemId,
-                file_name AS name, mime_type AS mimeType,
-                size_bytes AS sizeBytes
+                 file_name AS name, mime_type AS mimeType,
+                 size_bytes AS sizeBytes,
+                 receipt_amount_cents AS receiptAmountCents,
+                 receipt_amount_source AS receiptAmountSource,
+                 receipt_amount_confirmed_at AS receiptAmountConfirmedAt
          FROM attachments
          WHERE store_id = ? AND sale_id IN (${placeholders})
          ORDER BY created_at, id`,
@@ -1157,7 +1185,7 @@ async function hydrateSales(
   ]);
   const attachmentRows = resultRows<SaleAttachmentListRow>(results[2]);
   const photosByItem = new Map<string, AttachmentRecord[]>();
-  const receiptsBySale = new Map<string, AttachmentRecord[]>();
+  const receiptsBySale = new Map<string, ReceiptAttachmentRecord[]>();
   for (const file of attachmentRows) {
     const attachment = attachmentRecord(file);
     if (file.kind === 'item_photo' && file.saleItemId) {
@@ -1199,6 +1227,8 @@ async function hydrateSales(
   return sales.map((sale): SaleRecord => {
     const { orderStatusId, orderStatusName, orderStatusColor, ...baseSale } =
       sale;
+    const receipts = receiptsBySale.get(sale.id) ?? [];
+    const productsTotalCents = Number(sale.productsTotalCents);
     return {
       ...baseSale,
       orderStatus:
@@ -1210,7 +1240,7 @@ async function hydrateSales(
             }
           : null,
       number: Number(sale.number),
-      productsTotalCents: Number(sale.productsTotalCents),
+      productsTotalCents,
       receivedTotalCents: Number(sale.receivedTotalCents),
       receivedDifferenceCents: Number(sale.receivedDifferenceCents),
       referenceTotalCents: Number(sale.referenceTotalCents),
@@ -1219,19 +1249,70 @@ async function hydrateSales(
       cancelledAt: sale.cancelledAt === null ? null : Number(sale.cancelledAt),
       items: itemsBySale.get(sale.id) ?? [],
       payments: paymentsBySale.get(sale.id) ?? [],
-      receipts: receiptsBySale.get(sale.id) ?? [],
+      receipts,
+      reconciliation: deriveReceiptReconciliation(receipts, productsTotalCents),
     };
   });
 }
 
-function attachmentRecord(file: Omit<AttachmentRecord, 'url'>) {
+function attachmentRecord(
+  file: Omit<ReceiptAttachmentRecord, 'url'>,
+): ReceiptAttachmentRecord {
   return {
     id: file.id,
     name: file.name,
     mimeType: file.mimeType,
     sizeBytes: Number(file.sizeBytes),
+    receiptAmountCents:
+      file.receiptAmountCents === null ? null : Number(file.receiptAmountCents),
+    receiptAmountSource: file.receiptAmountSource,
+    receiptAmountConfirmedAt:
+      file.receiptAmountConfirmedAt === null
+        ? null
+        : Number(file.receiptAmountConfirmedAt),
     url: `/api/files/${file.id}`,
-  } satisfies AttachmentRecord;
+  };
+}
+
+function salesAggregateStatement(
+  db: D1Database,
+  filterSql: string,
+  bindings: Array<string | number>,
+  comparison: {
+    bindings: Array<string | number>;
+    filterSql: string;
+  } | null,
+) {
+  const currentSql = salesAggregateSql(filterSql);
+  if (!comparison) return db.prepare(currentSql).bind(...bindings);
+  return db
+    .prepare(
+      `WITH current_period AS (${currentSql}),
+            previous_period AS (${salesAggregateSql(comparison.filterSql)})
+       SELECT current_period.*,
+              previous_period.amountCents AS previousAmountCents,
+              previous_period.saleCount AS previousSaleCount,
+              previous_period.itemCount AS previousItemCount,
+              previous_period.alertCount AS previousAlertCount
+       FROM current_period CROSS JOIN previous_period`,
+    )
+    .bind(...bindings, ...comparison.bindings);
+}
+
+function salesAggregateSql(filterSql: string) {
+  return `SELECT COUNT(*) AS total,
+                 COALESCE(SUM(CASE WHEN s.status = 'completed'
+                   THEN 1 ELSE 0 END), 0) AS saleCount,
+                 COALESCE(SUM(CASE WHEN s.status = 'completed'
+                   THEN s.products_total_cents ELSE 0 END), 0) AS amountCents,
+                 COALESCE(SUM(CASE WHEN s.status = 'completed' THEN (
+                   SELECT COUNT(*) FROM sale_items aggregate_item
+                   WHERE aggregate_item.sale_id = s.id
+                     AND aggregate_item.store_id = s.store_id
+                 ) ELSE 0 END), 0) AS itemCount,
+                 COALESCE(SUM(CASE WHEN s.status = 'completed'
+                   AND ${SALE_ALERT_SQL} THEN 1 ELSE 0 END), 0) AS alertCount
+          FROM sales s WHERE ${filterSql}`;
 }
 
 function salesGroupStatement(
@@ -1327,6 +1408,7 @@ function numericSalesAggregates(
   value:
     | {
         amountCents: number;
+        saleCount: number;
         itemCount: number;
         alertCount: number;
       }
@@ -1335,8 +1417,25 @@ function numericSalesAggregates(
 ) {
   return {
     amountCents: Number(value?.amountCents ?? 0),
+    saleCount: Number(value?.saleCount ?? 0),
     itemCount: Number(value?.itemCount ?? 0),
     alertCount: Number(value?.alertCount ?? 0),
+  };
+}
+
+function salesComparison(
+  comparison: { label: string } | null,
+  value: SalesAggregateRow | null | undefined,
+) {
+  if (!comparison) return null;
+  return {
+    label: comparison.label,
+    aggregates: numericSalesAggregates({
+      amountCents: Number(value?.previousAmountCents ?? 0),
+      saleCount: Number(value?.previousSaleCount ?? 0),
+      itemCount: Number(value?.previousItemCount ?? 0),
+      alertCount: Number(value?.previousAlertCount ?? 0),
+    }),
   };
 }
 

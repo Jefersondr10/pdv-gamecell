@@ -31,6 +31,7 @@ export async function POST(
       throw new HttpError(400, 'UPC ou EAN inválido.', 'INVALID_CODE');
     }
     const kind = classifyCommercialCode(raw, code);
+    const market = optionalMarket(body.market);
     const db = runtime().DB;
     const now = Date.now();
     await consumeStoreWriteBudget(db, now, session.storeId!, 3);
@@ -42,16 +43,16 @@ export async function POST(
         db
           .prepare(
             `INSERT INTO product_codes
-             (id, store_id, product_id, code, kind, created_at)
-             SELECT ?, p.store_id, p.id, ?, ?, ?
+             (id, store_id, product_id, code, kind, market, created_at)
+             SELECT ?, p.store_id, p.id, ?, ?, ?, ?
              FROM products p
              WHERE p.id = ? AND p.store_id = ?
                AND (
                  SELECT COUNT(*) FROM product_codes pc
                  WHERE pc.product_id = p.id AND pc.store_id = p.store_id
-               ) < 10`,
+               ) < 20`,
           )
-          .bind(codeId, code, kind, now, id, session.storeId),
+          .bind(codeId, code, kind, market, now, id, session.storeId),
         db
           .prepare(
             `UPDATE products
@@ -78,7 +79,7 @@ export async function POST(
             session.storeId,
             session.id,
             id,
-            JSON.stringify({ codeId, code, kind }),
+            JSON.stringify({ codeId, code, kind, market }),
             now,
             codeId,
             id,
@@ -110,10 +111,10 @@ export async function POST(
       if (!product) {
         throw new HttpError(404, 'Produto não encontrado.', 'NOT_FOUND');
       }
-      if (Number(product.codeCount) >= 10) {
+      if (Number(product.codeCount) >= 20) {
         throw new HttpError(
           409,
-          'Este produto atingiu o limite de 10 códigos.',
+          'Este produto atingiu o limite de 20 códigos.',
           'PRODUCT_CODE_LIMIT',
         );
       }
@@ -127,6 +128,11 @@ export async function POST(
   } catch (error) {
     return apiError(error);
   }
+}
+
+function optionalMarket(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  return stringField(value, 'Mercado', { max: 60 });
 }
 
 function isProductCodeConflict(error: unknown) {

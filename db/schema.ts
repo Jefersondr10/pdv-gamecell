@@ -27,6 +27,14 @@ export const stores = sqliteTable(
   (table) => [uniqueIndex('uq_stores_code').on(table.code)],
 );
 
+export const systemCatalogSyncs = sqliteTable('system_catalog_syncs', {
+  storeId: text('store_id')
+    .primaryKey()
+    .references(() => stores.id, { onDelete: 'cascade' }),
+  catalogVersion: integer('catalog_version').notNull().default(0),
+  syncedAt: integer('synced_at', { mode: 'number' }).notNull(),
+});
+
 export const users = sqliteTable(
   'users',
   {
@@ -171,6 +179,7 @@ export const productCodes = sqliteTable(
     kind: text('kind', { enum: ['UPC', 'EAN', 'JAN', 'OUTRO'] })
       .notNull()
       .default('EAN'),
+    market: text('market'),
     createdAt: integer('created_at', { mode: 'number' }).notNull(),
   },
   (table) => [
@@ -427,6 +436,16 @@ export const attachments = sqliteTable(
     fileName: text('file_name').notNull(),
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
+    receiptAmountCents: integer('receipt_amount_cents'),
+    receiptAmountSource: text('receipt_amount_source', {
+      enum: ['ocr', 'manual'],
+    }),
+    receiptAmountConfirmedBy: text('receipt_amount_confirmed_by').references(
+      () => users.id,
+    ),
+    receiptAmountConfirmedAt: integer('receipt_amount_confirmed_at', {
+      mode: 'number',
+    }),
     createdBy: text('created_by')
       .notNull()
       .references(() => users.id),

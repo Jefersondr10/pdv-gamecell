@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.05-leitura-estoque-vendas-v5';
+export const GUIDE_VERSION = '2026.09.05-catalogo-conciliacao-v6';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
@@ -23,6 +23,12 @@ export type AttachmentRecord = {
   url: string;
 };
 
+export type ReceiptAttachmentRecord = AttachmentRecord & {
+  receiptAmountCents: number | null;
+  receiptAmountSource: 'ocr' | 'manual' | null;
+  receiptAmountConfirmedAt: number | null;
+};
+
 export type ProductRecord = {
   id: string;
   model: string;
@@ -31,7 +37,12 @@ export type ProductRecord = {
   detail: string;
   defaultPriceCents: number;
   active: boolean;
-  codes: Array<{ id: string; code: string; kind: string }>;
+  codes: Array<{
+    id: string;
+    code: string;
+    kind: string;
+    market: string | null;
+  }>;
 };
 
 export type InventoryUnitRecord = {
@@ -148,7 +159,13 @@ export type SaleRecord = {
   cancellationReason: string | null;
   items: SaleItemRecord[];
   payments: SalePaymentRecord[];
-  receipts: AttachmentRecord[];
+  receipts: ReceiptAttachmentRecord[];
+  reconciliation: {
+    status: 'pending' | 'reconciled' | 'divergent';
+    confirmedTotalCents: number;
+    differenceCents: number | null;
+    pendingReceiptCount: number;
+  };
 };
 
 export type SalesGroupRecord = {
@@ -165,8 +182,14 @@ export type SalesGrouping = 'model' | 'customer' | 'seller';
 
 export type SalesAggregates = {
   amountCents: number;
+  saleCount: number;
   itemCount: number;
   alertCount: number;
+};
+
+export type SalesComparison = {
+  aggregates: SalesAggregates;
+  label: string;
 };
 
 export type SalesPage = {
@@ -175,12 +198,14 @@ export type SalesPage = {
   nextCursor: string | null;
   total: number;
   aggregates: SalesAggregates;
+  comparison: SalesComparison | null;
 };
 
 export type SalesAnalytics = {
   groups: Record<SalesGrouping, SalesGroupRecord[]>;
   total: number;
   aggregates: SalesAggregates;
+  comparison: SalesComparison | null;
 };
 
 export type SalesGroupDetailRecord = {
@@ -236,6 +261,11 @@ export type BootstrapData = {
   orderStatuses: OrderStatusRecord[];
   metrics: { soldTodayItems: number };
   users: UserRecord[];
+  systemCatalog: {
+    currentVersion: number;
+    syncedVersion: number;
+    updateAvailable: boolean;
+  };
   guideRequired: boolean;
   guideVersion: string;
 };

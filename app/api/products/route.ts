@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     if (
       !Array.isArray(body.codes) ||
       body.codes.length === 0 ||
-      body.codes.length > 10
+      body.codes.length > 20
     ) {
       throw new HttpError(
         400,

@@ -47,6 +47,13 @@ export default function PrivacyPage() {
           clientes e imagens. Comprovantes são opcionais; fotos de aparelhos e
           entradas servem à rastreabilidade do estoque.
         </p>
+        <p>
+          Quando a conferência automática de um comprovante é usada, a leitura
+          da foto ou do PDF acontece localmente no aparelho do usuário. O texto
+          reconhecido não é enviado a um serviço externo nem armazenado pelo
+          sistema; somente o valor da transação que o usuário confirma é salvo
+          junto à venda.
+        </p>
       </LegalSection>
 
       <LegalSection title="Segurança e conservação">
