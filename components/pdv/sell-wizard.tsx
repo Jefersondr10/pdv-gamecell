@@ -27,6 +27,7 @@ import {
 
 import { BarcodeScanner } from '@/components/pdv/barcode-scanner';
 import { FlowFrame } from '@/components/pdv/flow-frame';
+import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,6 +36,13 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import {
+  formatMediaBytes,
+  MEDIA_LIMITS,
+  prepareMediaSelection,
+  sumFileBytes,
+  type PreparedMediaSelection,
+} from '@/lib/client-media';
 import { parseMoneyInput } from '@/lib/money';
 import { normalizeCandidate, type ScanCandidate } from '@/lib/scanner';
 
@@ -117,7 +125,7 @@ const SALE_STEPS = [
 ] as const;
 
 const STAGE_CARD_CLASS =
-  'flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
+  'flow-stage-card flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
 
 const STEP_INDEX: Record<SaleStep, number> = {
   customer: 0,
@@ -175,6 +183,12 @@ export function SellWizard({
   const [items, setItems] = useState<SaleItem[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
+  const [preparingPhotos, setPreparingPhotos] = useState(false);
+  const [photoProgress, setPhotoProgress] = useState('');
+  const [photoError, setPhotoError] = useState('');
+  const [preparingReceipts, setPreparingReceipts] = useState(false);
+  const [receiptProgress, setReceiptProgress] = useState('');
+  const [receiptError, setReceiptError] = useState('');
   const [saving, setSaving] = useState(false);
   const [serialWarning, setSerialWarning] = useState(
     initialSerial && initialUnavailable
@@ -235,11 +249,18 @@ export function SellWizard({
     setPendingSerial(null);
     setPendingProduct(null);
     setPhotoFiles([]);
+    setPreparingPhotos(false);
+    setPhotoProgress('');
+    setPhotoError('');
     setPrice('');
     setItems([]);
     itemsRef.current = [];
     setPayments([]);
     setReceiptFiles([]);
+    setPreparingReceipts(false);
+    setReceiptProgress('');
+    setReceiptError('');
+    setSaving(false);
     setSerialWarning('');
     completionSentRef.current = false;
     setAnnouncement('Nova venda. Pesquise o cliente para começar.');
@@ -249,7 +270,82 @@ export function SellWizard({
     const hadCheckout = payments.length > 0 || receiptFiles.length > 0;
     setPayments([]);
     setReceiptFiles([]);
+    setReceiptProgress('');
+    setReceiptError('');
     return hadCheckout;
+  };
+
+  const prepareItemPhotos = async (files: File[]) => {
+    if (preparingPhotos) return;
+    setPreparingPhotos(true);
+    setPhotoError('');
+    setPhotoProgress('Preparando fotos…');
+    try {
+      const result = await prepareMediaSelection({
+        current: photoFiles,
+        incoming: files,
+        maxFiles: MEDIA_LIMITS.saleItemPhotos,
+        otherFiles: itemsRef.current.flatMap((item) => item.photos),
+        maxCombinedFiles: MEDIA_LIMITS.saleFiles,
+        onProgress: ({ completed, total }) => {
+          setPhotoProgress(
+            total > 0
+              ? `Preparando foto ${Math.min(completed + 1, total)} de ${total}…`
+              : 'Preparando fotos…',
+          );
+        },
+      });
+      setPhotoFiles(result.files);
+      setAnnouncement(mediaReadyAnnouncement(result, 'foto', 'fotos'));
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível preparar as fotos.';
+      setPhotoError(message);
+      setAnnouncement(message);
+    } finally {
+      setPreparingPhotos(false);
+      setPhotoProgress('');
+    }
+  };
+
+  const prepareReceipts = async (files: File[]) => {
+    if (preparingReceipts) return;
+    setPreparingReceipts(true);
+    setReceiptError('');
+    setReceiptProgress('Preparando comprovantes…');
+    try {
+      const result = await prepareMediaSelection({
+        current: receiptFiles,
+        incoming: files,
+        maxFiles: MEDIA_LIMITS.saleReceipts,
+        allowPdf: true,
+        otherFiles: itemsRef.current.flatMap((item) => item.photos),
+        maxCombinedFiles: MEDIA_LIMITS.saleFiles,
+        onProgress: ({ completed, total }) => {
+          setReceiptProgress(
+            total > 0
+              ? `Preparando arquivo ${Math.min(completed + 1, total)} de ${total}…`
+              : 'Preparando comprovantes…',
+          );
+        },
+      });
+      setReceiptFiles(result.files);
+      setAnnouncement(
+        mediaReadyAnnouncement(result, 'comprovante', 'comprovantes'),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível preparar os comprovantes.';
+      setReceiptError(message);
+      setAnnouncement(message);
+    } finally {
+      setPreparingReceipts(false);
+      setReceiptProgress('');
+    }
   };
 
   const acceptSerial = async (candidate: ScanCandidate) => {
@@ -314,12 +410,16 @@ export function SellWizard({
       setPendingSerial(null);
       setPendingProduct(null);
       setPhotoFiles([]);
+      setPhotoProgress('');
+      setPhotoError('');
       setPrice('');
       setSerialWarning(warning);
       navigator.vibrate?.([120, 80, 120]);
       return;
     }
     setPhotoFiles([]);
+    setPhotoProgress('');
+    setPhotoError('');
     if (!product || !availableValue) {
       const warning = `O SN ${candidate.normalizedValue} não foi encontrado no estoque da loja. Faça a entrada primeiro.`;
       setPendingSerial(null);
@@ -376,6 +476,8 @@ export function SellWizard({
     setPendingSerial(null);
     setPendingProduct(null);
     setPhotoFiles([]);
+    setPhotoProgress('');
+    setPhotoError('');
     setPrice('');
     setSerialWarning('');
     setStep('items');
@@ -414,6 +516,8 @@ export function SellWizard({
     setPendingSerial(null);
     setPendingProduct(null);
     setPhotoFiles([]);
+    setPhotoProgress('');
+    setPhotoError('');
     setPrice('');
     setSerialWarning('');
     setStep('serial');
@@ -423,7 +527,13 @@ export function SellWizard({
   const addPayment = (method: PaymentMethod) => {
     const suggestedAmount = Math.max(remaining, 0);
     const receiptInvalidated = receiptFiles.length > 0;
-    if (receiptInvalidated) setReceiptFiles([]);
+    setReceiptProgress('');
+    setReceiptError('');
+    if (receiptInvalidated) {
+      setReceiptFiles([]);
+      setReceiptProgress('');
+      setReceiptError('');
+    }
     setPayments((current) => [
       ...current,
       {
@@ -442,7 +552,13 @@ export function SellWizard({
 
   const updatePayment = (id: string, patch: Partial<SalePayment>) => {
     const receiptInvalidated = receiptFiles.length > 0;
-    if (receiptInvalidated) setReceiptFiles([]);
+    setReceiptProgress('');
+    setReceiptError('');
+    if (receiptInvalidated) {
+      setReceiptFiles([]);
+      setReceiptProgress('');
+      setReceiptError('');
+    }
     setPayments((current) =>
       current.map((payment) =>
         payment.id === id ? { ...payment, ...patch } : payment,
@@ -457,7 +573,13 @@ export function SellWizard({
 
   const removePayment = (id: string) => {
     const receiptInvalidated = receiptFiles.length > 0;
-    if (receiptInvalidated) setReceiptFiles([]);
+    setReceiptProgress('');
+    setReceiptError('');
+    if (receiptInvalidated) {
+      setReceiptFiles([]);
+      setReceiptProgress('');
+      setReceiptError('');
+    }
     setPayments((current) => current.filter((payment) => payment.id !== id));
     setAnnouncement(
       receiptInvalidated
@@ -467,7 +589,11 @@ export function SellWizard({
   };
 
   const goToReview = (skippedReceipt: boolean) => {
-    if (skippedReceipt) setReceiptFiles([]);
+    if (skippedReceipt) {
+      setReceiptFiles([]);
+      setReceiptProgress('');
+      setReceiptError('');
+    }
     setStep('review');
     setAnnouncement(
       skippedReceipt
@@ -524,6 +650,8 @@ export function SellWizard({
             setPendingSerial(null);
             setPendingProduct(null);
             setPhotoFiles([]);
+            setPhotoProgress('');
+            setPhotoError('');
             setPrice('');
             setSerialWarning('');
             setAnnouncement('Faça uma nova leitura do SN.');
@@ -537,19 +665,16 @@ export function SellWizard({
         <SalePhotoStage
           candidate={pendingSerial}
           onBack={() => setStep('serial')}
-          onFiles={(files) => {
-            setPhotoFiles((current) =>
-              mergeUniqueFiles(current, files).slice(0, 6),
-            );
-            setAnnouncement(
-              `${files.length} ${files.length === 1 ? 'foto vinculada' : 'fotos vinculadas'} ao aparelho.`,
-            );
-          }}
+          onFiles={prepareItemPhotos}
           onNext={() => {
             setStep('price');
             setAnnouncement('Etapa 4. Informe o preço do aparelho.');
           }}
+          photoBytes={sumFileBytes(photoFiles)}
+          photoError={photoError}
           photoFiles={photoFiles}
+          preparing={preparingPhotos}
+          progressLabel={photoProgress}
         />
       )}
 
@@ -610,14 +735,13 @@ export function SellWizard({
         <ReceiptStage
           files={receiptFiles}
           onBack={() => setStep('payments')}
-          onFiles={(files) => {
-            setReceiptFiles((current) => mergeUniqueFiles(current, files));
-            setAnnouncement(
-              `${files.length} ${files.length === 1 ? 'comprovante anexado' : 'comprovantes anexados'}.`,
-            );
-          }}
+          onFiles={prepareReceipts}
           onNext={() => goToReview(false)}
           onSkip={() => goToReview(true)}
+          preparing={preparingReceipts}
+          progressLabel={receiptProgress}
+          receiptBytes={sumFileBytes(receiptFiles)}
+          receiptError={receiptError}
         />
       )}
 
@@ -676,6 +800,10 @@ export function SellWizard({
           paid={paid}
           payments={payments}
           receiptCount={receiptFiles.length}
+          uploadBytes={sumFileBytes([
+            ...items.flatMap((item) => item.photos),
+            ...receiptFiles,
+          ])}
           total={total}
           saving={saving}
         />
@@ -713,8 +841,8 @@ function CustomerStage({
   const matches = allMatches.slice(0, 4);
   return (
     <Card className={STAGE_CARD_CLASS}>
-      <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-5">
-        <div className="mx-auto max-w-2xl">
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-3 lg:p-5">
+        <div className="mx-auto max-w-none lg:max-w-2xl">
           <div className="flow-stage-intro flex items-center gap-3">
             <span className="grid size-11 place-items-center rounded-2xl bg-secondary text-primary">
               <CircleUserRound className="size-6" />
@@ -728,12 +856,12 @@ function CustomerStage({
             </div>
           </div>
 
-          <div className="relative mt-3 sm:mt-5">
+          <div className="relative mt-3 lg:mt-5">
             <Search className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" />
             <Input
               aria-label="Pesquisar cliente"
               aria-describedby="customer-search-help"
-              className="h-12 rounded-2xl pl-12 text-base sm:h-14"
+              className="h-12 rounded-2xl pl-12 text-base lg:h-14"
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder="Nome do cliente"
               value={query}
@@ -745,18 +873,18 @@ function CustomerStage({
 
           {canSearch && !customer && (
             <div
-              className="mt-3 grid grid-cols-2 gap-2 sm:mt-4"
+              className="mt-3 grid grid-cols-1 gap-2 lg:mt-4 lg:grid-cols-2"
               aria-label="Clientes encontrados"
             >
               {matches.map((entry) => (
                 <Button
                   aria-pressed={customer === entry.name}
-                  className="h-11 min-w-0 justify-start rounded-xl px-3 text-sm sm:h-12"
+                  className="h-14 min-w-0 justify-start rounded-xl px-4 text-base lg:h-12 lg:px-3 lg:text-sm"
                   key={entry.id}
                   onClick={() => onSelect(entry)}
                   variant={customer === entry.name ? 'secondary' : 'outline'}
                 >
-                  <UserRound className="hidden size-4 sm:block" />
+                  <UserRound className="hidden size-4 lg:block" />
                   <span className="truncate">{entry.name}</span>
                   {customer === entry.name && (
                     <Check className="ml-auto text-success" />
@@ -778,15 +906,15 @@ function CustomerStage({
           )}
 
           {customer && (
-            <div className="mt-3 flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm font-semibold text-success sm:mt-4">
+            <div className="mt-3 flex items-center gap-2 rounded-xl bg-success/10 px-4 py-3 text-sm font-semibold text-success lg:mt-4">
               <Check className="size-4" /> {customer} selecionado
             </div>
           )}
         </div>
       </CardContent>
-      <div className="shrink-0 border-t p-2.5 text-right sm:p-3">
+      <div className="flow-stage-actions shrink-0 border-t p-2.5 text-right lg:p-3">
         <Button
-          className="h-12 w-full rounded-xl sm:w-auto sm:min-w-56"
+          className="h-14 w-full rounded-2xl text-base lg:h-12 lg:w-auto lg:min-w-56 lg:rounded-xl lg:text-sm"
           disabled={!customer}
           onClick={onNext}
         >
@@ -859,9 +987,16 @@ function SaleSerialStage({
           <h2 className="mt-1 text-xl font-bold">
             {product?.product ?? 'Produto não identificado'}
           </h2>
-          <p className="text-sm text-muted-foreground">
-            {product?.detail ?? 'Confira o estoque antes de continuar'}
-          </p>
+          {product ? (
+            <ProductDetailVisual
+              className="mt-1 justify-center"
+              detail={product.detail}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Confira o estoque antes de continuar
+            </p>
+          )}
           <p className="mx-auto mt-3 w-fit rounded-xl bg-muted px-4 py-2 font-mono text-sm font-bold sm:mt-4">
             SN {candidate.normalizedValue}
           </p>
@@ -890,12 +1025,20 @@ function SaleSerialStage({
 function SalePhotoStage({
   candidate,
   photoFiles,
+  photoBytes,
+  photoError,
+  preparing,
+  progressLabel,
   onFiles,
   onBack,
   onNext,
 }: {
   candidate: ScanCandidate;
   photoFiles: File[];
+  photoBytes: number;
+  photoError: string;
+  preparing: boolean;
+  progressLabel: string;
   onFiles: (files: File[]) => void;
   onBack: () => void;
   onNext: () => void;
@@ -906,40 +1049,64 @@ function SalePhotoStage({
         <Badge variant="secondary">SN {candidate.normalizedValue}</Badge>
         <label className="flow-upload-panel mt-3 flex w-full max-w-xl cursor-pointer flex-col items-center rounded-2xl border-2 border-dashed bg-muted/30 p-4 transition hover:bg-muted/55 sm:mt-4 sm:rounded-3xl sm:p-6">
           <span className="flow-stage-icon grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
-            <Camera className="size-6" />
+            {preparing ? (
+              <LoaderCircle className="size-6 animate-spin" />
+            ) : (
+              <Camera className="size-6" />
+            )}
           </span>
           <span className="mt-2 text-base font-bold sm:mt-3">
-            Fotografar aparelho
+            {preparing
+              ? progressLabel || 'Preparando fotos…'
+              : 'Fotografar aparelho'}
           </span>
           <span className="flow-stage-support mt-1 text-sm text-muted-foreground">
-            A foto ficará vinculada a este SN.
+            {preparing
+              ? 'Reduzindo o tamanho sem comprometer a leitura.'
+              : 'A foto ficará vinculada a este SN.'}
           </span>
           {photoFiles.length > 0 && (
             <span className="mt-2 inline-flex items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success sm:mt-3">
               <Check className="size-4" /> {photoFiles.length}{' '}
-              {photoFiles.length === 1 ? 'foto pronta' : 'fotos prontas'}
+              {photoFiles.length === 1 ? 'foto pronta' : 'fotos prontas'} ·{' '}
+              {formatMediaBytes(photoBytes)}
             </span>
           )}
           <input
             accept="image/*"
             capture="environment"
             className="sr-only"
+            disabled={preparing}
             multiple
             onChange={(event) => {
               const files = Array.from(event.target.files ?? []);
               if (files.length > 0) onFiles(files);
+              event.currentTarget.value = '';
             }}
             type="file"
           />
         </label>
+        {photoError && (
+          <p
+            className="mt-2 w-full max-w-xl rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive"
+            role="alert"
+          >
+            {photoError}
+          </p>
+        )}
       </CardContent>
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
-        <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
+        <Button
+          className="h-12 rounded-xl"
+          disabled={preparing}
+          onClick={onBack}
+          variant="outline"
+        >
           <ArrowLeft /> Voltar
         </Button>
         <Button
           className="h-12 rounded-xl"
-          disabled={photoFiles.length === 0}
+          disabled={photoFiles.length === 0 || preparing}
           onClick={onNext}
         >
           <span className="sm:hidden">Preço</span>
@@ -983,9 +1150,7 @@ function PriceStage({
             </span>
             <div className="min-w-0">
               <p className="truncate font-bold">{product.product}</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {product.detail}
-              </p>
+              <ProductDetailVisual detail={product.detail} />
               <p className="truncate text-sm text-muted-foreground">
                 SN {candidate.normalizedValue}
               </p>
@@ -1109,9 +1274,7 @@ function SaleItemsStage({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold">{item.product}</p>
-                  <p className="flow-stage-support truncate text-xs text-muted-foreground">
-                    {item.detail}
-                  </p>
+                  <ProductDetailVisual detail={item.detail} />
                   <p className="truncate font-mono text-xs text-muted-foreground">
                     SN {item.serial.normalizedValue}
                   </p>
@@ -1484,12 +1647,20 @@ function PaymentStage({
 
 function ReceiptStage({
   files,
+  preparing,
+  progressLabel,
+  receiptBytes,
+  receiptError,
   onFiles,
   onBack,
   onSkip,
   onNext,
 }: {
   files: File[];
+  preparing: boolean;
+  progressLabel: string;
+  receiptBytes: number;
+  receiptError: string;
   onFiles: (files: File[]) => void;
   onBack: () => void;
   onSkip: () => void;
@@ -1499,8 +1670,19 @@ function ReceiptStage({
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3 text-center sm:p-6">
         <Badge variant="secondary">Comprovante opcional</Badge>
+        {preparing && (
+          <p
+            aria-live="polite"
+            className="mt-3 flex items-center gap-2 text-sm font-semibold text-primary"
+          >
+            <LoaderCircle className="size-4 animate-spin" />
+            {progressLabel || 'Preparando comprovantes…'}
+          </p>
+        )}
         <div className="mt-3 grid w-full max-w-xl grid-cols-2 gap-2 sm:mt-4 sm:gap-3">
-          <label className="flow-receipt-option flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/30 p-3 transition hover:bg-muted/55 sm:min-h-36 sm:rounded-3xl sm:p-5">
+          <label
+            className={`flow-receipt-option flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/30 p-3 transition hover:bg-muted/55 sm:min-h-36 sm:rounded-3xl sm:p-5 ${preparing ? 'pointer-events-none opacity-60' : ''}`}
+          >
             <span className="grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
               <Camera className="size-6" />
             </span>
@@ -1512,6 +1694,7 @@ function ReceiptStage({
               accept="image/*"
               capture="environment"
               className="sr-only"
+              disabled={preparing}
               onChange={(event) => {
                 const selectedFiles = Array.from(event.target.files ?? []);
                 if (selectedFiles.length > 0) onFiles(selectedFiles);
@@ -1521,7 +1704,9 @@ function ReceiptStage({
             />
           </label>
 
-          <label className="flow-receipt-option flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/30 p-3 transition hover:bg-muted/55 sm:min-h-36 sm:rounded-3xl sm:p-5">
+          <label
+            className={`flow-receipt-option flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/30 p-3 transition hover:bg-muted/55 sm:min-h-36 sm:rounded-3xl sm:p-5 ${preparing ? 'pointer-events-none opacity-60' : ''}`}
+          >
             <span className="grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
               <Paperclip className="size-6" />
             </span>
@@ -1532,6 +1717,7 @@ function ReceiptStage({
             <input
               accept="image/*,application/pdf"
               className="sr-only"
+              disabled={preparing}
               multiple
               onChange={(event) => {
                 const selectedFiles = Array.from(event.target.files ?? []);
@@ -1548,27 +1734,44 @@ function ReceiptStage({
             <FileCheck2 className="size-4 shrink-0" />
             <span className="truncate">
               {files.length === 1
-                ? files[0].name
-                : `${files.length} comprovantes prontos`}
+                ? `${files[0].name} · ${formatMediaBytes(receiptBytes)}`
+                : `${files.length} comprovantes · ${formatMediaBytes(receiptBytes)}`}
             </span>
           </div>
+        )}
+        {receiptError && (
+          <p
+            className="mt-2 w-full max-w-xl rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive"
+            role="alert"
+          >
+            {receiptError}
+          </p>
         )}
       </CardContent>
       <div className="grid shrink-0 grid-cols-[auto_1fr] gap-2 border-t p-2.5 sm:p-3">
         <Button
           aria-label="Voltar"
           className="h-12 rounded-xl"
+          disabled={preparing}
           onClick={onBack}
           variant="outline"
         >
           <ArrowLeft />
         </Button>
         {files.length === 0 ? (
-          <Button className="h-12 rounded-xl" onClick={onSkip}>
+          <Button
+            className="h-12 rounded-xl"
+            disabled={preparing}
+            onClick={onSkip}
+          >
             Pular comprovante <ArrowRight />
           </Button>
         ) : (
-          <Button className="h-12 rounded-xl" onClick={onNext}>
+          <Button
+            className="h-12 rounded-xl"
+            disabled={preparing}
+            onClick={onNext}
+          >
             Continuar com comprovante <ArrowRight className="hidden sm:block" />
           </Button>
         )}
@@ -1582,6 +1785,7 @@ function SaleReview({
   items,
   payments,
   receiptCount,
+  uploadBytes,
   total,
   paid,
   onBack,
@@ -1593,6 +1797,7 @@ function SaleReview({
   items: SaleItem[];
   payments: SalePayment[];
   receiptCount: number;
+  uploadBytes: number;
   total: number;
   paid: number;
   onBack: () => void;
@@ -1670,6 +1875,7 @@ function SaleReview({
                   <Smartphone className="size-5 shrink-0 text-primary" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{item.product}</p>
+                    <ProductDetailVisual detail={item.detail} />
                     <p className="truncate font-mono text-xs text-muted-foreground">
                       SN {item.serial.normalizedValue} · {item.photos.length}{' '}
                       {item.photos.length === 1 ? 'foto' : 'fotos'}
@@ -1693,6 +1899,7 @@ function SaleReview({
             </div>
             <Button
               className="mt-3 h-11 w-full rounded-xl border-dashed"
+              disabled={saving}
               onClick={onEditItems}
               variant="outline"
             >
@@ -1724,7 +1931,12 @@ function SaleReview({
         </div>
       </CardContent>
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
-        <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
+        <Button
+          className="h-12 rounded-xl"
+          disabled={saving}
+          onClick={onBack}
+          variant="outline"
+        >
           <ArrowLeft /> Voltar
         </Button>
         <Button
@@ -1732,7 +1944,19 @@ function SaleReview({
           disabled={saving}
           onClick={onConfirm}
         >
-          <Check /> {saving ? 'Salvando…' : 'Finalizar venda'}
+          {saving ? (
+            <>
+              <LoaderCircle className="animate-spin" />
+              <span className="sm:hidden">Salvando…</span>
+              <span className="hidden sm:inline">
+                Enviando {formatMediaBytes(uploadBytes)} e salvando…
+              </span>
+            </>
+          ) : (
+            <>
+              <Check /> Finalizar venda
+            </>
+          )}
         </Button>
       </div>
     </Card>
@@ -1761,6 +1985,34 @@ function SummaryTile({
   );
 }
 
+function ProductDetailVisual({
+  detail,
+  className = '',
+}: {
+  detail: string;
+  className?: string;
+}) {
+  const [colorPart, ...memoryParts] = detail.split('·');
+  const color = colorPart?.trim() || detail;
+  const memory = memoryParts.join('·').trim();
+  return (
+    <span
+      className={`flow-stage-support flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground ${className}`}
+    >
+      <ProductColorSwatch color={color} />
+      <span className="truncate">{color}</span>
+      {memory && (
+        <Badge
+          className="shrink-0 px-1.5 py-0 font-extrabold"
+          variant="secondary"
+        >
+          {memory}
+        </Badge>
+      )}
+    </span>
+  );
+}
+
 function SaleCompletion({
   customer,
   total,
@@ -1771,7 +2023,7 @@ function SaleCompletion({
   onReset: () => void;
 }) {
   return (
-    <Card className="grid h-full place-items-center gap-0 overflow-hidden py-0">
+    <Card className="flow-stage-card grid h-full place-items-center gap-0 overflow-hidden py-0">
       <CardContent className="max-w-lg p-6 text-center sm:p-10">
         <span className="mx-auto grid size-20 place-items-center rounded-full bg-success/10 text-success">
           <CheckCircle2 className="size-10" />
@@ -1801,17 +2053,29 @@ function createLocalId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function mergeUniqueFiles(current: File[], incoming: File[]) {
-  const byIdentity = new Map(
-    current.map((file) => [
-      `${file.name}:${file.size}:${file.lastModified}`,
-      file,
-    ]),
-  );
-  for (const file of incoming) {
-    byIdentity.set(`${file.name}:${file.size}:${file.lastModified}`, file);
+function mediaReadyAnnouncement(
+  result: PreparedMediaSelection,
+  singular: string,
+  plural: string,
+) {
+  const duplicates = result.duplicateCount
+    ? ` ${result.duplicateCount} ${result.duplicateCount === 1 ? 'arquivo repetido foi ignorado' : 'arquivos repetidos foram ignorados'}.`
+    : '';
+  if (result.addedCount === 0) {
+    return `Nenhum arquivo novo foi adicionado.${duplicates}`;
   }
-  return [...byIdentity.values()];
+  const optimized = result.optimizedCount
+    ? ` ${result.optimizedCount} ${result.optimizedCount === 1 ? 'foi otimizado' : 'foram otimizados'}, economizando ${formatMediaBytes(result.bytesSaved)}.`
+    : '';
+  const readyLabel =
+    singular === 'foto'
+      ? result.addedCount === 1
+        ? 'foto pronta'
+        : 'fotos prontas'
+      : result.addedCount === 1
+        ? `${singular} pronto`
+        : `${plural} prontos`;
+  return `${result.addedCount} ${readyLabel}.${optimized}${duplicates}`;
 }
 
 function serialCandidateValues(candidate: ScanCandidate) {

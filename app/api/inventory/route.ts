@@ -62,9 +62,25 @@ export async function GET(request: Request) {
       Math.max(10, Math.trunc(Number(url.searchParams.get('limit')) || 50)),
     );
     const query = utf8Prefix((url.searchParams.get('q') ?? '').trim(), 48);
+    const productId = (url.searchParams.get('productId') ?? '').trim();
+    if (productId.length > 80) {
+      throw new HttpError(400, 'Produto inválido.', 'INVALID_PRODUCT');
+    }
+    const status = url.searchParams.get('status') ?? 'available';
+    if (!['available', 'sold', 'all'].includes(status)) {
+      throw new HttpError(400, 'Situação inválida.', 'INVALID_STATUS');
+    }
     const cursor = parseCursor(url.searchParams.get('cursor'));
-    const where = ['iu.store_id = ?', "iu.status = 'available'"];
+    const where = ['iu.store_id = ?'];
     const bindings: Array<string | number> = [storeId];
+    if (status !== 'all') {
+      where.push('iu.status = ?');
+      bindings.push(status);
+    }
+    if (productId) {
+      where.push('iu.product_id = ?');
+      bindings.push(productId);
+    }
     if (query) {
       const pattern = `%${query}%`;
       where.push(`(
@@ -95,7 +111,7 @@ export async function GET(request: Request) {
           `SELECT iu.id, iu.product_id AS productId, iu.entry_id AS entryId,
                   p.model AS productName,
                   (p.color || ' · ' || p.memory) AS productDetail,
-                  iu.serial, iu.created_at AS createdAt
+                  iu.serial, iu.status, iu.created_at AS createdAt
            FROM inventory_units iu
            JOIN products p ON p.id = iu.product_id AND p.store_id = iu.store_id
            WHERE ${filterSql}

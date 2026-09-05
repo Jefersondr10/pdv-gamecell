@@ -9,25 +9,24 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  LoaderCircle,
   PackageCheck,
   RotateCcw,
-  Smartphone,
   Trash2,
 } from 'lucide-react';
 
 import { BarcodeScanner } from '@/components/pdv/barcode-scanner';
 import { FlowFrame } from '@/components/pdv/flow-frame';
+import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+  formatMediaBytes,
+  MEDIA_LIMITS,
+  prepareMediaSelection,
+  sumFileBytes,
+} from '@/lib/client-media';
 import type { ScanCandidate } from '@/lib/scanner';
 
 type EntryStep =
@@ -42,6 +41,8 @@ export type EntryProduct = {
   id: string;
   name: string;
   detail: string;
+  color: string;
+  memory: string;
   code: string;
 };
 
@@ -83,7 +84,7 @@ type EntryWizardProps = {
 const ENTRY_STEPS = ['Produto', 'Seriais', 'Fotos', 'Revisão'] as const;
 
 const ENTRY_STAGE_CARD_CLASS =
-  'flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
+  'flow-stage-card flex h-full min-h-0 flex-col gap-0 overflow-hidden py-0';
 
 const STEP_INDEX: Record<EntryStep, number> = {
   'product-scan': 0,
@@ -107,15 +108,19 @@ export function EntryWizard({
   const [product, setProduct] = useState<Product | null>(null);
   const [serials, setSerials] = useState<SerialItem[]>([]);
   const [photos, setPhotos] = useState<File[]>([]);
+  const [preparingPhotos, setPreparingPhotos] = useState(false);
+  const [photoProgress, setPhotoProgress] = useState('');
+  const [photoError, setPhotoError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
   const [ignoredCount, setIgnoredCount] = useState(0);
-  const [serialPrefixChoice, setSerialPrefixChoice] =
-    useState<ScanCandidate | null>(null);
   const [announcement, setAnnouncement] = useState(
     'Etapa 1. Leia o UPC ou EAN do produto.',
   );
   const committedRef = useRef(false);
   const serialsRef = useRef<SerialItem[]>([]);
+  const pendingSerialKeysRef = useRef(new Map<string, number>());
+  const serialGenerationRef = useRef(0);
   const existingSerialSet = useMemo(
     () => new Set(existingTestSerials),
     [existingTestSerials],
@@ -138,23 +143,42 @@ export function EntryWizard({
     setProduct(null);
     setSerials([]);
     serialsRef.current = [];
+    serialGenerationRef.current += 1;
+    pendingSerialKeysRef.current.clear();
     setPhotos([]);
+    setPreparingPhotos(false);
+    setPhotoProgress('');
+    setPhotoError('');
+    setSaving(false);
     setSavedCount(0);
     setIgnoredCount(0);
-    setSerialPrefixChoice(null);
     committedRef.current = false;
     setAnnouncement('Nova entrada. Leia o UPC ou EAN do produto.');
   };
 
   const acceptProductCode = (candidate: ScanCandidate) => {
-    const matchedProduct = productsByCode[candidate.normalizedValue] ?? null;
+    const matchingCode = [candidate.normalizedValue, candidate.alternateValue]
+      .filter((value): value is string => Boolean(value))
+      .find((value) => productsByCode[value]);
+    const matchedProduct = matchingCode ? productsByCode[matchingCode] : null;
+    const acceptedCandidate = matchingCode
+      ? {
+          ...candidate,
+          normalizedValue: matchingCode,
+          key: `PRODUCT:${matchingCode}`,
+        }
+      : candidate;
     serialsRef.current = [];
+    serialGenerationRef.current += 1;
+    pendingSerialKeysRef.current.clear();
     setSerials([]);
     setPhotos([]);
+    setPhotoProgress('');
+    setPhotoError('');
     setSavedCount(0);
     setIgnoredCount(0);
     committedRef.current = false;
-    setCommercialCode(candidate);
+    setCommercialCode(acceptedCandidate);
     setProduct(matchedProduct);
     setStep('product-confirm');
     setAnnouncement(
@@ -165,6 +189,7 @@ export function EntryWizard({
   };
 
   const addSerial = async (candidate: ScanCandidate) => {
+    const generation = serialGenerationRef.current;
     const candidateValues = serialCandidateValues(candidate);
     const existingValue = candidateValues.find((value) =>
       existingSerialSet.has(value),
@@ -175,9 +200,27 @@ export function EntryWizard({
       );
       return;
     }
-    if (lookupSerials) {
-      try {
+    const repeatedValue = candidateValues.find((value) =>
+      serialsRef.current.some((item) => item.normalized === value),
+    );
+    if (repeatedValue) {
+      setAnnouncement(`SN ${repeatedValue} já foi bipado e foi ignorado.`);
+      return;
+    }
+    const pendingValue = candidateValues.find((value) =>
+      pendingSerialKeysRef.current.has(value),
+    );
+    if (pendingValue) {
+      setAnnouncement(`SN ${pendingValue} já está sendo verificado.`);
+      return;
+    }
+    candidateValues.forEach((value) =>
+      pendingSerialKeysRef.current.set(value, generation),
+    );
+    try {
+      if (lookupSerials) {
         const matches = await lookupSerials(candidateValues);
+        if (generation !== serialGenerationRef.current) return;
         const registered = candidateValues
           .map((value) => matches.find((match) => match.serial === value))
           .find(Boolean);
@@ -187,45 +230,39 @@ export function EntryWizard({
           );
           return;
         }
-      } catch {
+      }
+      const repeatedAfterLookup = candidateValues.find((value) =>
+        serialsRef.current.some((item) => item.normalized === value),
+      );
+      if (repeatedAfterLookup) {
         setAnnouncement(
-          'Não foi possível verificar este SN. Confira a conexão e bipe novamente.',
+          `SN ${repeatedAfterLookup} já foi bipado e foi ignorado.`,
         );
         return;
       }
+      const nextSerials = [
+        ...serialsRef.current,
+        { raw: candidate.rawValue, normalized: candidate.normalizedValue },
+      ];
+      serialsRef.current = nextSerials;
+      setSerials(nextSerials);
+      setAnnouncement(`SN ${candidate.normalizedValue} adicionado.`);
+    } catch {
+      if (lookupSerials) {
+        setAnnouncement(
+          'Não foi possível verificar este SN. Confira a conexão e bipe novamente.',
+        );
+      }
+    } finally {
+      candidateValues.forEach((value) => {
+        if (pendingSerialKeysRef.current.get(value) === generation) {
+          pendingSerialKeysRef.current.delete(value);
+        }
+      });
     }
-    const repeatedAfterLookup = candidateValues.find((value) =>
-      serialsRef.current.some((item) => item.normalized === value),
-    );
-    if (repeatedAfterLookup) {
-      setAnnouncement(
-        `SN ${repeatedAfterLookup} já foi bipado e foi ignorado.`,
-      );
-      return;
-    }
-    const repeatedValue = candidateValues.find((value) =>
-      serialsRef.current.some((item) => item.normalized === value),
-    );
-    if (repeatedValue) {
-      setAnnouncement(`SN ${repeatedValue} já foi bipado e foi ignorado.`);
-      return;
-    }
-
-    const nextSerials = [
-      ...serialsRef.current,
-      { raw: candidate.rawValue, normalized: candidate.normalizedValue },
-    ];
-    serialsRef.current = nextSerials;
-    setSerials(nextSerials);
-    setAnnouncement(`SN ${candidate.normalizedValue} adicionado.`);
   };
 
   const acceptSerial = (candidate: ScanCandidate) => {
-    if (candidate.prefixStripped && candidate.alternateValue) {
-      setSerialPrefixChoice(candidate);
-      setAnnouncement('Confirme se o S faz parte do número de série.');
-      return;
-    }
     void addSerial(candidate);
   };
 
@@ -262,6 +299,8 @@ export function EntryWizard({
             serialsRef.current = [];
             setSerials([]);
             setPhotos([]);
+            setPhotoProgress('');
+            setPhotoError('');
             setSavedCount(0);
             setIgnoredCount(0);
             committedRef.current = false;
@@ -300,18 +339,58 @@ export function EntryWizard({
         <PhotoStage
           onBack={() => setStep('serials')}
           onFiles={(files) => {
-            setPhotos((current) =>
-              mergeUniqueFiles(current, files).slice(0, 8),
-            );
-            setAnnouncement(
-              `${files.length} ${files.length === 1 ? 'foto adicionada' : 'fotos adicionadas'}.`,
-            );
+            if (preparingPhotos) return;
+            setPreparingPhotos(true);
+            setPhotoError('');
+            setPhotoProgress('Preparando fotos…');
+            void prepareMediaSelection({
+              current: photos,
+              incoming: files,
+              maxFiles: MEDIA_LIMITS.entryPhotos,
+              onProgress: ({ completed, total }) => {
+                setPhotoProgress(
+                  total > 0
+                    ? `Preparando foto ${Math.min(completed + 1, total)} de ${total}…`
+                    : 'Preparando fotos…',
+                );
+              },
+            })
+              .then((result) => {
+                setPhotos(result.files);
+                const optimized = result.optimizedCount
+                  ? ` ${result.optimizedCount} ${result.optimizedCount === 1 ? 'foi otimizada' : 'foram otimizadas'}, economizando ${formatMediaBytes(result.bytesSaved)}.`
+                  : '';
+                const duplicates = result.duplicateCount
+                  ? ` ${result.duplicateCount} ${result.duplicateCount === 1 ? 'repetida foi ignorada' : 'repetidas foram ignoradas'}.`
+                  : '';
+                setAnnouncement(
+                  result.addedCount > 0
+                    ? `${result.addedCount} ${result.addedCount === 1 ? 'foto pronta' : 'fotos prontas'}.${optimized}${duplicates}`
+                    : `Nenhuma foto nova foi adicionada.${duplicates}`,
+                );
+              })
+              .catch((error) => {
+                const message =
+                  error instanceof Error
+                    ? error.message
+                    : 'Não foi possível preparar as fotos.';
+                setPhotoError(message);
+                setAnnouncement(message);
+              })
+              .finally(() => {
+                setPreparingPhotos(false);
+                setPhotoProgress('');
+              });
           }}
           onNext={() => {
             setStep('review');
             setAnnouncement('Etapa 4. Revise e confirme a entrada.');
           }}
           photoCount={photos.length}
+          photoBytes={sumFileBytes(photos)}
+          photoError={photoError}
+          preparing={preparingPhotos}
+          progressLabel={photoProgress}
           product={product}
           serialCount={serials.length}
         />
@@ -323,6 +402,7 @@ export function EntryWizard({
           onConfirm={async () => {
             if (committedRef.current || !commercialCode) return;
             committedRef.current = true;
+            setSaving(true);
             let result: EntryCommitResult;
             try {
               result = (await onConfirmEntry?.({
@@ -340,6 +420,7 @@ export function EntryWizard({
               };
             } catch (error) {
               committedRef.current = false;
+              setSaving(false);
               setAnnouncement(
                 error instanceof Error
                   ? error.message
@@ -349,6 +430,7 @@ export function EntryWizard({
             }
             setSavedCount(result.added);
             setIgnoredCount(Math.max(serials.length - result.added, 0));
+            setSaving(false);
             setStep('done');
             setAnnouncement(
               result.added > 0
@@ -358,6 +440,7 @@ export function EntryWizard({
           }}
           photoCount={photos.length}
           product={product}
+          saving={saving}
           serials={serials}
         />
       )}
@@ -370,57 +453,6 @@ export function EntryWizard({
           productName={product?.name ?? 'Produto'}
         />
       )}
-
-      <Dialog
-        onOpenChange={(open) => {
-          if (!open) setSerialPrefixChoice(null);
-        }}
-        open={Boolean(serialPrefixChoice)}
-      >
-        <DialogContent className="max-w-md">
-          {serialPrefixChoice && (
-            <>
-              <DialogHeader>
-                <DialogTitle>O S faz parte do SN?</DialogTitle>
-                <DialogDescription>
-                  Algumas etiquetas usam S apenas como prefixo. Confira o número
-                  impresso ao lado do código antes de salvar.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-2 rounded-xl bg-muted p-3 font-mono text-sm">
-                <span>Sem prefixo: {serialPrefixChoice.normalizedValue}</span>
-                <span>Com S: {serialPrefixChoice.alternateValue}</span>
-              </div>
-              <DialogFooter className="grid grid-cols-2 gap-2 sm:grid-cols-2">
-                <Button
-                  onClick={() => {
-                    void addSerial(serialPrefixChoice);
-                    setSerialPrefixChoice(null);
-                  }}
-                >
-                  Remover o S
-                </Button>
-                <Button
-                  onClick={() => {
-                    const value = serialPrefixChoice.alternateValue!;
-                    void addSerial({
-                      ...serialPrefixChoice,
-                      normalizedValue: value,
-                      key: `SERIAL:${value}`,
-                      alternateValue: serialPrefixChoice.normalizedValue,
-                      prefixStripped: undefined,
-                    });
-                    setSerialPrefixChoice(null);
-                  }}
-                  variant="outline"
-                >
-                  Manter o S
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
     </FlowFrame>
   );
 }
@@ -457,12 +489,14 @@ function ProductConfirmation({
           <div className="mt-5 w-full max-w-md rounded-2xl border bg-background p-4 text-left">
             <div className="flex items-center gap-3">
               <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
-                <Smartphone className="size-6" />
+                <ProductColorSwatch className="size-7" color={product.color} />
               </span>
               <div className="min-w-0">
                 <p className="truncate font-bold">{product.name}</p>
-                <p className="truncate text-sm text-muted-foreground">
-                  {product.detail}
+                <p className="flex items-center gap-2 truncate text-sm text-muted-foreground">
+                  <ProductColorSwatch color={product.color} />
+                  <span className="truncate">{product.color}</span>
+                  <Badge variant="secondary">{product.memory}</Badge>
                 </p>
               </div>
             </div>
@@ -529,7 +563,7 @@ function SerialStage({
       : '';
 
   return (
-    <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 md:grid-cols-[minmax(0,1fr)_18rem] md:grid-rows-1">
+    <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 lg:grid-cols-[minmax(0,1fr)_18rem] lg:grid-rows-1">
       <BarcodeScanner
         autoStart
         fill
@@ -539,16 +573,18 @@ function SerialStage({
         title="2. Bipar somente o SN"
       />
 
-      <Card className="flex min-h-0 flex-col gap-0 overflow-hidden py-0">
-        <CardHeader className="hidden shrink-0 border-b p-4 md:flex">
+      <Card className="flow-stage-card flex min-h-0 flex-col gap-0 overflow-hidden py-0">
+        <CardHeader className="hidden shrink-0 border-b p-4 lg:flex">
           <div>
-            <p className="eyebrow">{product.name}</p>
+            <p className="eyebrow flex items-center gap-2">
+              <ProductColorSwatch color={product.color} /> {product.name}
+            </p>
             <CardTitle className="mt-1 text-base">SNs registrados</CardTitle>
           </div>
           <Badge variant="secondary">{serials.length}</Badge>
         </CardHeader>
 
-        <CardContent className="hidden min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3 md:flex">
+        <CardContent className="hidden min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3 lg:flex">
           {serials.length === 0 ? (
             <div className="grid min-h-32 flex-1 place-items-center rounded-2xl border border-dashed bg-muted/30 p-4 text-center text-sm text-muted-foreground">
               O primeiro SN aparecerá aqui depois do bip.
@@ -591,7 +627,7 @@ function SerialStage({
               {duplicateWarning}
             </p>
           )}
-          <div className="mb-2 flex min-w-0 items-center justify-between gap-3 md:hidden">
+          <div className="mb-2 flex min-w-0 items-center justify-between gap-3 lg:hidden">
             <div className="min-w-0">
               <p className="text-sm font-bold">
                 {serials.length}{' '}
@@ -644,6 +680,10 @@ function PhotoStage({
   product,
   serialCount,
   photoCount,
+  photoBytes,
+  photoError,
+  preparing,
+  progressLabel,
   onFiles,
   onBack,
   onNext,
@@ -651,6 +691,10 @@ function PhotoStage({
   product: Product;
   serialCount: number;
   photoCount: number;
+  photoBytes: number;
+  photoError: string;
+  preparing: boolean;
+  progressLabel: string;
   onFiles: (files: File[]) => void;
   onBack: () => void;
   onNext: () => void;
@@ -659,47 +703,74 @@ function PhotoStage({
     <Card className={ENTRY_STAGE_CARD_CLASS}>
       <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3 text-center sm:p-6">
         <div className="mb-4 flex flex-wrap justify-center gap-2">
-          <Badge variant="secondary">{product.name}</Badge>
+          <Badge className="gap-1.5" variant="secondary">
+            <ProductColorSwatch color={product.color} /> {product.name}
+          </Badge>
+          <Badge variant="outline">{product.memory}</Badge>
           <Badge variant="outline">
             {serialCount} {serialCount === 1 ? 'aparelho' : 'aparelhos'}
           </Badge>
         </div>
         <label className="flow-upload-panel flex w-full max-w-xl cursor-pointer flex-col items-center rounded-2xl border-2 border-dashed bg-muted/30 p-4 transition hover:bg-muted/55 sm:rounded-3xl sm:p-6">
           <span className="flow-stage-icon grid size-12 place-items-center rounded-2xl bg-card text-primary shadow-sm">
-            <Camera className="size-6" />
+            {preparing ? (
+              <LoaderCircle className="size-6 animate-spin" />
+            ) : (
+              <Camera className="size-6" />
+            )}
           </span>
           <span className="mt-2 text-base font-bold sm:mt-3">
-            Fotografar recebimento
+            {preparing
+              ? progressLabel || 'Preparando fotos…'
+              : 'Fotografar recebimento'}
           </span>
           <span className="flow-stage-support mt-1 text-sm text-muted-foreground">
-            Selecione uma ou mais fotos da entrada.
+            {preparing
+              ? 'Reduzindo o tamanho sem comprometer a leitura.'
+              : 'Selecione uma ou mais fotos da entrada.'}
           </span>
           {photoCount > 0 && (
             <span className="mt-2 inline-flex items-center gap-2 rounded-full bg-success/10 px-4 py-2 text-sm font-semibold text-success sm:mt-3">
               <Check className="size-4" /> {photoCount}{' '}
-              {photoCount === 1 ? 'foto pronta' : 'fotos prontas'}
+              {photoCount === 1 ? 'foto pronta' : 'fotos prontas'} ·{' '}
+              {formatMediaBytes(photoBytes)}
             </span>
           )}
           <input
             accept="image/*"
             capture="environment"
             className="sr-only"
+            disabled={preparing}
             multiple
             onChange={(event) => {
               const files = Array.from(event.target.files ?? []);
               if (files.length > 0) onFiles(files);
+              event.currentTarget.value = '';
             }}
             type="file"
           />
         </label>
+        {photoError && (
+          <p
+            className="mt-2 w-full max-w-xl rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive"
+            role="alert"
+          >
+            {photoError}
+          </p>
+        )}
       </CardContent>
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
-        <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
+        <Button
+          className="h-12 rounded-xl"
+          disabled={preparing}
+          onClick={onBack}
+          variant="outline"
+        >
           <ArrowLeft /> Voltar
         </Button>
         <Button
           className="h-12 rounded-xl"
-          disabled={photoCount === 0}
+          disabled={photoCount === 0 || preparing}
           onClick={onNext}
         >
           Revisar entrada <ArrowRight />
@@ -713,12 +784,14 @@ function EntryReview({
   product,
   serials,
   photoCount,
+  saving,
   onBack,
   onConfirm,
 }: {
   product: Product;
   serials: SerialItem[];
   photoCount: number;
+  saving: boolean;
   onBack: () => void;
   onConfirm: () => void;
 }) {
@@ -734,17 +807,19 @@ function EntryReview({
   return (
     <Card className={ENTRY_STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-5">
-        <div className="grid grid-cols-2 gap-2 sm:gap-3">
+        <div className="grid grid-cols-1 gap-2 sm:gap-3 lg:grid-cols-2">
           <section className="rounded-xl border bg-background p-3 sm:rounded-2xl sm:p-4">
             <p className="eyebrow">Produto</p>
             <div className="mt-3 flex items-center gap-3">
               <span className="hidden size-12 shrink-0 place-items-center rounded-xl bg-secondary text-primary sm:grid">
-                <Smartphone className="size-6" />
+                <ProductColorSwatch className="size-7" color={product.color} />
               </span>
               <div className="min-w-0">
                 <p className="truncate font-bold">{product.name}</p>
-                <p className="truncate text-sm text-muted-foreground">
-                  {product.detail}
+                <p className="flex items-center gap-2 truncate text-sm text-muted-foreground">
+                  <ProductColorSwatch color={product.color} />
+                  <span className="truncate">{product.color}</span>
+                  <Badge variant="secondary">{product.memory}</Badge>
                 </p>
                 <p className="mt-1 font-mono text-xs text-muted-foreground">
                   UPC/EAN {product.code}
@@ -827,11 +902,32 @@ function EntryReview({
       </CardContent>
 
       <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
-        <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
+        <Button
+          className="h-12 rounded-xl"
+          disabled={saving}
+          onClick={onBack}
+          variant="outline"
+        >
           <ArrowLeft /> Voltar
         </Button>
-        <Button className="h-12 rounded-xl" onClick={onConfirm}>
-          <Check /> Confirmar entrada
+        <Button
+          className="h-12 rounded-xl"
+          disabled={saving}
+          onClick={onConfirm}
+        >
+          {saving ? (
+            <>
+              <LoaderCircle className="animate-spin" />
+              <span className="sm:hidden">Salvando…</span>
+              <span className="hidden sm:inline">
+                Enviando fotos e salvando…
+              </span>
+            </>
+          ) : (
+            <>
+              <Check /> Confirmar entrada
+            </>
+          )}
         </Button>
       </div>
     </Card>
@@ -881,19 +977,6 @@ function CompletionStage({
       </CardContent>
     </Card>
   );
-}
-
-function mergeUniqueFiles(current: File[], incoming: File[]) {
-  const byIdentity = new Map(
-    current.map((file) => [
-      `${file.name}:${file.size}:${file.lastModified}`,
-      file,
-    ]),
-  );
-  for (const file of incoming) {
-    byIdentity.set(`${file.name}:${file.size}:${file.lastModified}`, file);
-  }
-  return [...byIdentity.values()];
 }
 
 function serialCandidateValues(candidate: ScanCandidate) {

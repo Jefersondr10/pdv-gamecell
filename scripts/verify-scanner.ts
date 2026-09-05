@@ -6,10 +6,16 @@ import {
   normalizeCandidate,
   selectCentralCandidate,
 } from '../lib/scanner.ts';
+import { displayCommercialCode } from '../lib/commercial-code.ts';
+import { normalizeCommercialCode } from '../lib/gtin.ts';
 
 assert.equal(hasValidGtinCheckDigit('4006381333931'), true);
 assert.equal(hasValidGtinCheckDigit('4006381333932'), false);
+assert.equal(displayCommercialCode('00036000291452', 'UPC'), '036000291452');
+assert.equal(displayCommercialCode('00036000291452', 'EAN'), '036000291452');
+assert.equal(displayCommercialCode('04006381333931', 'EAN'), '4006381333931');
 assert.equal(expandUpce('04252614'), '042100005264');
+assert.equal(normalizeCommercialCode('04252614'), '00042100005264');
 
 assert.equal(
   normalizeCandidate('4006381333931', 'ean_13', 'product')?.normalizedValue,
@@ -28,8 +34,16 @@ assert.equal(
   'PRODUCT:00036000291452',
 );
 assert.equal(
+  normalizeCandidate('195950638011', 'upc_a', 'product')?.key,
+  normalizeCandidate('0195950638011', 'ean_13', 'product')?.key,
+);
+assert.equal(
   normalizeCandidate('04252614', 'upc_e', 'product')?.normalizedValue,
   '00042100005264',
+);
+assert.equal(
+  normalizeCandidate('04252614', 'upc_e', 'product')?.alternateValue,
+  '00000004252614',
 );
 assert.equal(normalizeCandidate('4006381333932', 'ean_13', 'product'), null);
 
@@ -43,11 +57,16 @@ const manualSerial = normalizeCandidate(
   'manual_code_128',
   'apple_serial',
 );
-assert.equal(manualSerial?.normalizedValue, 'SHC9P06R095');
-assert.equal(manualSerial?.prefixStripped, undefined);
+assert.equal(manualSerial?.normalizedValue, 'HC9P06R095');
+assert.equal(manualSerial?.prefixStripped, true);
+assert.equal(manualSerial?.alternateValue, 'SHC9P06R095');
 assert.equal(
   normalizeCandidate('HC9P06R095', 'code_128', 'apple_serial')?.normalizedValue,
   'HC9P06R095',
+);
+assert.equal(
+  normalizeCandidate('HC9P06R095', 'manual_code_128', 'apple_serial')?.key,
+  manualSerial?.key,
 );
 assert.equal(
   normalizeCandidate('SN inválido!', 'code_128', 'apple_serial'),

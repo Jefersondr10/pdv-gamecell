@@ -11,7 +11,7 @@ import {
 } from '@/lib/server/http';
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
-import { normalizeCommercialCode } from '@/lib/server/security';
+import { classifyCommercialCode, normalizeCommercialCode } from '@/lib/gtin';
 
 export async function POST(request: Request) {
   try {
@@ -45,15 +45,15 @@ export async function POST(request: Request) {
       );
     }
     const codes = Array.from(
-      new Set(
-        body.codes.map((value) =>
-          normalizeCommercialCode(
-            stringField(value, 'Código', { min: 8, max: 18 }),
-          ),
-        ),
-      ),
+      new Map(
+        body.codes.map((value) => {
+          const raw = stringField(value, 'Código', { min: 8, max: 18 });
+          const code = normalizeCommercialCode(raw);
+          return [code, { code, kind: classifyCommercialCode(raw, code) }];
+        }),
+      ).values(),
     );
-    if (codes.some((code) => code.length !== 14)) {
+    if (codes.some(({ code }) => code.length !== 14)) {
       throw new HttpError(400, 'UPC ou EAN inválido.', 'INVALID_CODE');
     }
     const db = runtime().DB;
@@ -76,7 +76,7 @@ export async function POST(request: Request) {
       .prepare(
         `SELECT code FROM product_codes WHERE store_id = ? AND code IN (${placeholders}) LIMIT 1`,
       )
-      .bind(session.storeId, ...codes)
+      .bind(session.storeId, ...codes.map(({ code }) => code))
       .first<{ code: string }>();
     if (codeConflict) {
       throw new HttpError(
@@ -106,7 +106,10 @@ export async function POST(request: Request) {
           `INSERT INTO products
            (id, store_id, model, color, memory, default_price_cents,
             active, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?, ?, 1, ?, ?, ?
+           WHERE (
+             SELECT COUNT(*) FROM products WHERE store_id = ?
+           ) < 1000`,
         )
         .bind(
           productId,
@@ -118,28 +121,34 @@ export async function POST(request: Request) {
           session.id,
           now,
           now,
+          session.storeId,
         ),
-      ...codes.map((code) =>
+      ...codes.map(({ code, kind }) =>
         db
           .prepare(
             `INSERT INTO product_codes
              (id, store_id, product_id, code, kind, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)`,
+             SELECT ?, p.store_id, p.id, ?, ?, ?
+             FROM products p
+             WHERE p.id = ? AND p.store_id = ?`,
           )
           .bind(
             crypto.randomUUID(),
-            session.storeId,
-            productId,
             code,
-            classifyCode(code),
+            kind,
             now,
+            productId,
+            session.storeId,
           ),
       ),
       db
         .prepare(
           `INSERT INTO audit_events
            (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
-           VALUES (?, ?, ?, 'product.created', 'product', ?, ?, ?)`,
+           SELECT ?, ?, ?, 'product.created', 'product', ?, ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM products WHERE id = ? AND store_id = ?
+           )`,
         )
         .bind(
           crypto.randomUUID(),
@@ -148,17 +157,48 @@ export async function POST(request: Request) {
           productId,
           JSON.stringify({ codes: codes.length }),
           now,
+          productId,
+          session.storeId,
         ),
     ];
-    await db.batch(statements);
+    try {
+      const results = await db.batch(statements);
+      if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
+        throw new HttpError(
+          409,
+          'Esta loja atingiu o limite de 1.000 variações de produto.',
+          'PRODUCT_LIMIT',
+        );
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /UNIQUE constraint failed:.*product_codes\.(?:store_id|code)/i.test(
+          error.message,
+        )
+      ) {
+        throw new HttpError(
+          409,
+          'Um dos códigos já está vinculado a outro produto.',
+          'CODE_EXISTS',
+        );
+      }
+      if (
+        error instanceof Error &&
+        /UNIQUE constraint failed:.*products\.(?:store_id|model|color|memory)/i.test(
+          error.message,
+        )
+      ) {
+        throw new HttpError(
+          409,
+          'Esta variação já está cadastrada.',
+          'PRODUCT_EXISTS',
+        );
+      }
+      throw error;
+    }
     return json({ ok: true, id: productId }, { status: 201 });
   } catch (error) {
     return apiError(error);
   }
-}
-
-function classifyCode(code: string) {
-  const unpadded = code.replace(/^0+/, '');
-  if (unpadded.length <= 12) return 'UPC';
-  return 'EAN';
 }

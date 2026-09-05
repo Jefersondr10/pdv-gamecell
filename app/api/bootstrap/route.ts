@@ -4,6 +4,7 @@ import { GUIDE_VERSION } from '@/lib/pdv-types';
 import type {
   BootstrapData,
   ClientRecord,
+  OrderStatusRecord,
   PixAccountRecord,
   ProductRecord,
   UserRecord,
@@ -19,6 +20,7 @@ type ProductRow = Omit<ProductRecord, 'detail' | 'active' | 'codes'> & {
 type CodeRow = { id: string; productId: string; code: string; kind: string };
 type ClientRow = Omit<ClientRecord, 'active'> & { active: number };
 type PixAccountRow = Omit<PixAccountRecord, 'active'> & { active: number };
+type OrderStatusRow = Omit<OrderStatusRecord, 'active'> & { active: number };
 type UserRow = Omit<UserRecord, 'active' | 'mustChangePassword'> & {
   active: number;
   mustChangePassword: number;
@@ -64,6 +66,13 @@ export async function GET(request: Request) {
         .prepare(
           `SELECT id, name, details, active
            FROM pix_accounts WHERE store_id = ? ORDER BY active DESC, name`,
+        )
+        .bind(storeId),
+      db
+        .prepare(
+          `SELECT id, name, color, active
+           FROM order_statuses WHERE store_id = ?
+           ORDER BY active DESC, name COLLATE NOCASE`,
         )
         .bind(storeId),
       includeUsers
@@ -113,7 +122,11 @@ export async function GET(request: Request) {
       ...account,
       active: Boolean(account.active),
     }));
-    const users = rows<UserRow>(results[4]).map((user) => ({
+    const orderStatuses = rows<OrderStatusRow>(results[4]).map((status) => ({
+      ...status,
+      active: Boolean(status.active),
+    }));
+    const users = rows<UserRow>(results[5]).map((user) => ({
       ...user,
       active: Boolean(user.active),
       mustChangePassword: Boolean(user.mustChangePassword),
@@ -140,13 +153,14 @@ export async function GET(request: Request) {
       products,
       clients,
       pixAccounts,
+      orderStatuses,
       metrics: {
         soldTodayItems: Number(
-          rows<{ soldTodayItems: number }>(results[6])[0]?.soldTodayItems ?? 0,
+          rows<{ soldTodayItems: number }>(results[7])[0]?.soldTodayItems ?? 0,
         ),
       },
       users,
-      guideRequired: rows(results[5]).length === 0,
+      guideRequired: rows(results[6]).length === 0,
       guideVersion: GUIDE_VERSION,
     };
     return json(data);

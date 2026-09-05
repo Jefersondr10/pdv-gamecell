@@ -12,6 +12,7 @@ import {
   assertSameOrigin,
   HttpError,
   json,
+  parseJsonObject,
   stringField,
   utf8Prefix,
 } from '@/lib/server/http';
@@ -21,7 +22,11 @@ import {
   consumeStoreWriteBudget,
 } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
-import { normalizeSerial } from '@/lib/server/security';
+import {
+  normalizeAppleSerial,
+  normalizeCommercialCode,
+  serialAliases,
+} from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import type {
   AttachmentRecord,
@@ -234,8 +239,17 @@ export async function POST(request: Request) {
         'PAYLOAD_TOO_LARGE',
       );
     }
-    const payload = JSON.parse(payloadValue) as Record<string, unknown>;
+    const payload = parseJsonObject(
+      payloadValue,
+      'Dados da entrada inválidos.',
+    );
     const productId = stringField(payload.productId, 'Produto', { max: 80 });
+    const gtin14 = normalizeCommercialCode(
+      stringField(payload.gtin14, 'UPC ou EAN', { min: 8, max: 18 }),
+    );
+    if (!gtin14) {
+      throw new HttpError(400, 'UPC ou EAN inválido.', 'INVALID_CODE');
+    }
     if (
       !Array.isArray(payload.serials) ||
       payload.serials.length === 0 ||
@@ -250,20 +264,26 @@ export async function POST(request: Request) {
     const serials = Array.from(
       new Set(
         payload.serials.map((value) =>
-          normalizeSerial(stringField(value, 'SN', { min: 8, max: 24 })),
+          normalizeAppleSerial(stringField(value, 'SN', { min: 8, max: 24 })),
         ),
       ),
     );
+    if (serials.length !== payload.serials.length) {
+      throw new HttpError(
+        409,
+        'Há SN repetido nesta entrada.',
+        'INVALID_SERIALS',
+      );
+    }
     if (
-      serials.length !== payload.serials.length ||
       serials.some(
         (serial) =>
-          serial.length < 8 || serial.length > 18 || !/[A-Z]/.test(serial),
+          serial.length < 8 || serial.length > 17 || !/[A-Z]/.test(serial),
       )
     ) {
       throw new HttpError(
-        409,
-        'Há SN repetido ou inválido nesta entrada.',
+        400,
+        'Há SN inválido nesta entrada.',
         'INVALID_SERIALS',
       );
     }
@@ -287,22 +307,34 @@ export async function POST(request: Request) {
     );
     const product = await db
       .prepare(
-        'SELECT id FROM products WHERE id = ? AND store_id = ? AND active = 1 LIMIT 1',
+        `SELECT p.id FROM products p
+         JOIN product_codes pc
+           ON pc.product_id = p.id AND pc.store_id = p.store_id
+         WHERE p.id = ? AND p.store_id = ? AND p.active = 1
+           AND pc.code = ? LIMIT 1`,
       )
-      .bind(productId, session.storeId)
+      .bind(productId, session.storeId, gtin14)
       .first();
-    if (!product)
-      throw new HttpError(404, 'Produto não encontrado.', 'PRODUCT_NOT_FOUND');
+    if (!product) {
+      throw new HttpError(
+        409,
+        'O código do produto foi alterado. Bipe o UPC ou EAN novamente.',
+        'PRODUCT_CODE_CHANGED',
+      );
+    }
     let duplicate: { serial: string } | null = null;
-    for (let start = 0; start < serials.length && !duplicate; start += 90) {
-      const batch = serials.slice(start, start + 90);
-      const placeholders = batch.map(() => '?').join(',');
+    // Cada SN pode gerar duas formas equivalentes (com e sem o prefixo S).
+    // Mantemos no máximo 91 binds por consulta para respeitar o limite do D1.
+    for (let start = 0; start < serials.length && !duplicate; start += 45) {
+      const batch = serials.slice(start, start + 45);
+      const aliases = Array.from(new Set(batch.flatMap(serialAliases)));
+      const placeholders = aliases.map(() => '?').join(',');
       duplicate = await db
         .prepare(
           `SELECT serial FROM inventory_units
            WHERE store_id = ? AND serial IN (${placeholders}) LIMIT 1`,
         )
-        .bind(session.storeId, ...batch)
+        .bind(session.storeId, ...aliases)
         .first<{ serial: string }>();
     }
     if (duplicate) {
@@ -374,15 +406,23 @@ export async function POST(request: Request) {
         .prepare(
           `INSERT INTO entries
            (id, store_id, product_id, operator_user_id, quantity, note, created_at)
-           VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+           SELECT ?, ?, p.id, ?, ?, NULL, ?
+           FROM products p
+           JOIN product_codes pc
+             ON pc.product_id = p.id AND pc.store_id = p.store_id
+           WHERE p.id = ? AND p.store_id = ? AND p.active = 1
+             AND pc.code = ?
+           LIMIT 1`,
         )
         .bind(
           entryId,
           session.storeId,
-          productId,
           session.id,
           serials.length,
           now,
+          productId,
+          session.storeId,
+          gtin14,
         ),
       ...inventoryStatements,
       ...attachmentStatements,
@@ -443,6 +483,18 @@ export async function POST(request: Request) {
           409,
           'Um dos SNs acabou de ser cadastrado em outra entrada. Atualize e tente novamente.',
           'SERIAL_EXISTS',
+        ),
+      );
+    }
+    if (
+      error instanceof Error &&
+      /FOREIGN KEY constraint failed/i.test(error.message)
+    ) {
+      return apiError(
+        new HttpError(
+          409,
+          'O produto ou o código foi alterado durante a entrada. Bipe o UPC ou EAN novamente.',
+          'PRODUCT_CODE_CHANGED',
         ),
       );
     }

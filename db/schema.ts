@@ -219,6 +219,44 @@ export const pixAccounts = sqliteTable(
   ],
 );
 
+export const orderStatuses = sqliteTable(
+  'order_statuses',
+  {
+    id: text('id').primaryKey(),
+    storeId: text('store_id')
+      .notNull()
+      .references(() => stores.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    nameNormalized: text('name_normalized').notNull(),
+    color: text('color', {
+      enum: [
+        'slate',
+        'blue',
+        'amber',
+        'orange',
+        'green',
+        'red',
+        'purple',
+        'pink',
+      ],
+    })
+      .notNull()
+      .default('slate'),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => users.id),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('uq_order_statuses_store_name').on(
+      table.storeId,
+      table.nameNormalized,
+    ),
+    index('idx_order_statuses_store_active').on(table.storeId, table.active),
+  ],
+);
+
 export const entries = sqliteTable(
   'entries',
   {
@@ -255,6 +293,7 @@ export const sales = sqliteTable(
       .notNull()
       .references(() => users.id),
     sellerName: text('seller_name').notNull(),
+    orderStatusId: text('order_status_id').references(() => orderStatuses.id),
     productsTotalCents: integer('products_total_cents').notNull(),
     receivedTotalCents: integer('received_total_cents').notNull(),
     receivedDifferenceCents: integer('received_difference_cents').notNull(),
@@ -272,6 +311,10 @@ export const sales = sqliteTable(
     uniqueIndex('uq_sales_store_number').on(table.storeId, table.number),
     index('idx_sales_store_created').on(table.storeId, table.createdAt),
     index('idx_sales_store_status').on(table.storeId, table.status),
+    index('idx_sales_store_order_status').on(
+      table.storeId,
+      table.orderStatusId,
+    ),
   ],
 );
 

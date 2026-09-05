@@ -38,12 +38,15 @@ export async function POST(request: Request) {
         'CLIENT_LIMIT',
       );
     }
-    await db.batch([
+    const results = await db.batch([
       db
         .prepare(
           `INSERT INTO clients
            (id, store_id, name, phone, email, notes, active, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?, ?, 1, ?, ?, ?
+           WHERE (
+             SELECT COUNT(*) FROM clients WHERE store_id = ?
+           ) < 5000`,
         )
         .bind(
           id,
@@ -55,15 +58,34 @@ export async function POST(request: Request) {
           session.id,
           now,
           now,
+          session.storeId,
         ),
       db
         .prepare(
           `INSERT INTO audit_events
            (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
-           VALUES (?, ?, ?, 'client.created', 'client', ?, NULL, ?)`,
+           SELECT ?, ?, ?, 'client.created', 'client', ?, NULL, ?
+           WHERE EXISTS (
+             SELECT 1 FROM clients WHERE id = ? AND store_id = ?
+           )`,
         )
-        .bind(crypto.randomUUID(), session.storeId, session.id, id, now),
+        .bind(
+          crypto.randomUUID(),
+          session.storeId,
+          session.id,
+          id,
+          now,
+          id,
+          session.storeId,
+        ),
     ]);
+    if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
+      throw new HttpError(
+        409,
+        'Esta loja atingiu o limite de 5.000 clientes.',
+        'CLIENT_LIMIT',
+      );
+    }
     return json({ ok: true, id }, { status: 201 });
   } catch (error) {
     return apiError(error);

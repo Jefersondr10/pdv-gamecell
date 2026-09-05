@@ -53,6 +53,13 @@ function tinyPhoto() {
   });
 }
 
+function tinyPdf() {
+  return new Blob(
+    ['%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF'],
+    { type: 'application/pdf' },
+  );
+}
+
 const ownerPayload = {
   displayName: 'Proprietário Integração',
   email: `owner-${runId}@example.com`,
@@ -82,12 +89,32 @@ const emptyBootstrap = await call('/api/bootstrap', { cookie: ownerCookie });
 assert.deepEqual(emptyBootstrap.body.products, []);
 assert.deepEqual(emptyBootstrap.body.clients, []);
 assert.deepEqual(emptyBootstrap.body.pixAccounts, []);
+assert.deepEqual(emptyBootstrap.body.orderStatuses, []);
 assert.equal('inventory' in emptyBootstrap.body, false);
 
 const emptyStock = await call('/api/inventory?view=summary', {
   cookie: ownerCookie,
 });
 assert.deepEqual(emptyStock.body.rows, []);
+await call('/api/clients', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 400,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: 'null',
+});
+for (const endpoint of ['/api/entries', '/api/sales']) {
+  const invalidForm = new FormData();
+  invalidForm.set('payload', '{');
+  const invalidPayload = await call(endpoint, {
+    method: 'POST',
+    cookie: ownerCookie,
+    expected: 400,
+    headers: { 'x-csrf-token': ownerCsrf },
+    body: invalidForm,
+  });
+  assert.equal(invalidPayload.body.code, 'INVALID_PAYLOAD');
+}
 
 const product = await call('/api/products', {
   method: 'POST',
@@ -103,6 +130,83 @@ const product = await call('/api/products', {
   }),
 });
 const productId = String(product.body.id);
+const catalogAfterProduct = await call('/api/bootstrap', {
+  cookie: ownerCookie,
+});
+const primaryCodeId = String(
+  (
+    catalogAfterProduct.body.products as Array<{
+      id: string;
+      codes: Array<{ id: string }>;
+    }>
+  ).find((item) => item.id === productId)!.codes[0].id,
+);
+const additionalCode = await call(`/api/products/${productId}/codes`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 201,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ code: '04252614' }),
+});
+const catalogWithUpce = await call('/api/bootstrap', { cookie: ownerCookie });
+const upceCode = (
+  catalogWithUpce.body.products as Array<{
+    id: string;
+    codes: Array<{ id: string; code: string; kind: string }>;
+  }>
+)
+  .find((item) => item.id === productId)!
+  .codes.find((code) => code.id === String(additionalCode.body.id));
+assert.equal(upceCode?.code, '00042100005264');
+assert.equal(upceCode?.kind, 'UPC');
+await call(
+  `/api/products/${productId}/codes/${String(additionalCode.body.id)}`,
+  {
+    method: 'DELETE',
+    cookie: ownerCookie,
+    headers: { 'x-csrf-token': ownerCsrf },
+  },
+);
+const lastCode = await call(
+  `/api/products/${productId}/codes/${primaryCodeId}`,
+  {
+    method: 'DELETE',
+    cookie: ownerCookie,
+    expected: 409,
+    headers: { 'x-csrf-token': ownerCsrf },
+  },
+);
+assert.equal(lastCode.body.code, 'LAST_PRODUCT_CODE');
+await call(`/api/products/${productId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: false }),
+});
+await call(`/api/products/${productId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: true, defaultPriceCents: 500_000 }),
+});
+const imeiAsSerialForm = new FormData();
+imeiAsSerialForm.set(
+  'payload',
+  JSON.stringify({
+    productId,
+    gtin14: '00036000291452',
+    serials: ['S353915104521117'],
+  }),
+);
+imeiAsSerialForm.append('photos', tinyPhoto(), 'imei-invalido.png');
+const invalidSerial = await call('/api/entries', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 400,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: imeiAsSerialForm,
+});
+assert.equal(invalidSerial.body.code, 'INVALID_SERIALS');
 
 const client = await call('/api/clients', {
   method: 'POST',
@@ -112,6 +216,18 @@ const client = await call('/api/clients', {
   body: JSON.stringify({ name: 'Cliente Integração' }),
 });
 const clientId = String(client.body.id);
+await call(`/api/clients/${clientId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ phone: '(11) 99999-0000', active: false }),
+});
+await call(`/api/clients/${clientId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: true }),
+});
 
 const pix = await call('/api/pix-accounts', {
   method: 'POST',
@@ -124,11 +240,62 @@ const pix = await call('/api/pix-accounts', {
   }),
 });
 const pixId = String(pix.body.id);
+const duplicatePix = await call('/api/pix-accounts', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'Pix Integração' }),
+});
+assert.equal(duplicatePix.body.code, 'PIX_ACCOUNT_EXISTS');
+await call(`/api/pix-accounts/${pixId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ details: 'Conta atualizada', active: false }),
+});
+await call(`/api/pix-accounts/${pixId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: true }),
+});
+
+const pendingStatus = await call('/api/order-statuses', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 201,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'Pagamento pendente', color: 'amber' }),
+});
+const pendingStatusId = String((pendingStatus.body.item as { id: string }).id);
+const duplicateStatus = await call('/api/order-statuses', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'pagamento PENDENTE', color: 'red' }),
+});
+assert.equal(duplicateStatus.body.code, 'ORDER_STATUS_EXISTS');
+await call(`/api/order-statuses/${pendingStatusId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'Pagamento pendente', color: 'orange' }),
+});
+const orderStatuses = await call('/api/order-statuses', {
+  cookie: ownerCookie,
+});
+assert.equal((orderStatuses.body.items as unknown[]).length, 1);
 
 const entryForm = new FormData();
 entryForm.set(
   'payload',
-  JSON.stringify({ productId, serials: ['HC9P06R095', 'SHC9P06R096'] }),
+  JSON.stringify({
+    productId,
+    gtin14: '00036000291452',
+    serials: ['HC9P06R095', 'SHC9P06R096'],
+  }),
 );
 entryForm.append('photos', tinyPhoto(), 'entrada.png');
 await call('/api/entries', {
@@ -142,7 +309,11 @@ await call('/api/entries', {
 const duplicateForm = new FormData();
 duplicateForm.set(
   'payload',
-  JSON.stringify({ productId, serials: ['HC9P06R095'] }),
+  JSON.stringify({
+    productId,
+    gtin14: '00036000291452',
+    serials: ['HC9P06R095'],
+  }),
 );
 duplicateForm.append('photos', tinyPhoto(), 'duplicada.png');
 const duplicate = await call('/api/entries', {
@@ -185,7 +356,7 @@ saleForm.set(
     customerId: clientId,
     items: [
       { serial: 'HC9P06R095', priceCents: 450_000 },
-      { serial: 'SHC9P06R096', priceCents: 450_000 },
+      { serial: 'HC9P06R096', priceCents: 450_000 },
     ],
     payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 850_000 }],
   }),
@@ -213,6 +384,27 @@ const soldStock = await call('/api/inventory?view=summary', {
   cookie: ownerCookie,
 });
 assert.equal((soldStock.body.rows as Array<{ sold: number }>)[0].sold, 2);
+const soldProductDetails = await call(
+  `/api/inventory?productId=${encodeURIComponent(productId)}&status=sold&limit=50&includePhotos=1`,
+  { cookie: ownerCookie },
+);
+assert.equal(soldProductDetails.body.total, 2);
+assert.deepEqual(
+  (
+    soldProductDetails.body.items as Array<{
+      status: string;
+      photos: unknown[];
+    }>
+  ).map((item) => item.status),
+  ['sold', 'sold'],
+);
+assert.ok(
+  (
+    soldProductDetails.body.items as Array<{
+      photos: unknown[];
+    }>
+  ).every((item) => item.photos.length === 1),
+);
 
 const sales = await call('/api/sales?group=sale&limit=50', {
   cookie: ownerCookie,
@@ -227,6 +419,89 @@ assert.equal(
   900_000,
 );
 assert.equal((sales.body.aggregates as { alertCount: number }).alertCount, 1);
+const listedSale = (
+  sales.body.items as Array<{
+    id: string;
+    orderStatus: unknown;
+    items: Array<{ id: string; photos: unknown[] }>;
+    receipts: unknown[];
+  }>
+)[0];
+assert.equal(listedSale.orderStatus, null);
+
+await call(`/api/sales/${saleId}/order-status`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ orderStatusId: pendingStatusId }),
+});
+const appendedAttachments = new FormData();
+appendedAttachments.append('receipts', tinyPdf(), 'comprovante-depois.pdf');
+appendedAttachments.append(
+  `itemPhotos:${listedSale.items[0].id}`,
+  tinyPhoto(),
+  'foto-depois.png',
+);
+const appended = await call(`/api/sales/${saleId}/attachments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: appendedAttachments,
+});
+assert.equal(appended.body.receiptsAdded, 1);
+assert.equal(appended.body.itemPhotosAdded, 1);
+
+await call(`/api/order-statuses/${pendingStatusId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: false }),
+});
+const editedSales = await call('/api/sales?group=sale&limit=50&period=all', {
+  cookie: ownerCookie,
+});
+const editedSale = (
+  editedSales.body.items as Array<{
+    orderStatus: { id: string; name: string; color: string } | null;
+    items: Array<{ id: string; photos: unknown[] }>;
+    receipts: unknown[];
+  }>
+)[0];
+assert.equal(editedSale.orderStatus?.id, pendingStatusId);
+assert.equal(editedSale.orderStatus?.name, 'Pagamento pendente');
+assert.equal(editedSale.orderStatus?.color, 'orange');
+assert.equal(editedSale.receipts.length, 1);
+assert.equal(
+  editedSale.items.find((item) => item.id === listedSale.items[0].id)?.photos
+    .length,
+  2,
+);
+await call(`/api/sales/${saleId}/order-status`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ orderStatusId: null }),
+});
+const inactiveAssignment = await call(`/api/sales/${saleId}/order-status`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ orderStatusId: pendingStatusId }),
+});
+assert.equal(inactiveAssignment.body.code, 'ORDER_STATUS_INVALID');
+await call(`/api/order-statuses/${pendingStatusId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: true }),
+});
+await call(`/api/sales/${saleId}/order-status`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ orderStatusId: pendingStatusId }),
+});
 const longSearch = encodeURIComponent('ação'.repeat(40));
 await call(`/api/sales?group=sale&q=${longSearch}`, { cookie: ownerCookie });
 await call(`/api/entries?q=${longSearch}`, { cookie: ownerCookie });
@@ -238,11 +513,107 @@ assert.equal(
   2,
 );
 
+type TestedGroup = {
+  key: string;
+  label: string;
+  saleCount: number;
+  itemCount: number;
+  totalCents: number;
+  rankByItems?: number;
+  rankByValue?: number;
+};
+const analytics = await call('/api/sales?group=all&period=all', {
+  cookie: ownerCookie,
+});
+const analyticsGroups = analytics.body.groups as {
+  model: TestedGroup[];
+  customer: TestedGroup[];
+  seller: TestedGroup[];
+};
+assert.equal(analyticsGroups.model[0].itemCount, 2);
+assert.equal(analyticsGroups.customer[0].label, 'Cliente Integração');
+assert.equal(analyticsGroups.customer[0].totalCents, 900_000);
+assert.equal(analyticsGroups.seller[0].label, 'Proprietário Integração');
+assert.equal(analyticsGroups.seller[0].rankByItems, 1);
+assert.equal(analyticsGroups.seller[0].rankByValue, 1);
+
+for (const period of ['today', '7d', '15d'] as const) {
+  const filtered = await call(`/api/sales?group=sale&period=${period}`, {
+    cookie: ownerCookie,
+  });
+  assert.equal(filtered.body.total, 1);
+}
+const yesterdaySales = await call('/api/sales?group=sale&period=yesterday', {
+  cookie: ownerCookie,
+});
+assert.equal(yesterdaySales.body.total, 0);
+const currentMonthParts = Object.fromEntries(
+  new Intl.DateTimeFormat('en', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .formatToParts(new Date())
+    .map((part) => [part.type, part.value]),
+);
+const currentMonth = `${currentMonthParts.year}-${currentMonthParts.month}`;
+const currentDay = `${currentMonth}-${currentMonthParts.day}`;
+const selectedDaySales = await call(
+  `/api/sales?group=sale&period=day&day=${currentDay}`,
+  { cookie: ownerCookie },
+);
+assert.equal(selectedDaySales.body.total, 1);
+const monthSales = await call(
+  `/api/sales?group=sale&period=month&month=${currentMonth}`,
+  { cookie: ownerCookie },
+);
+assert.equal(monthSales.body.total, 1);
+
+for (const dimension of ['model', 'customer', 'seller'] as const) {
+  const group = analyticsGroups[dimension][0];
+  const params = new URLSearchParams({
+    dimension,
+    key: group.key,
+    period: 'all',
+  });
+  const details = await call(`/api/sales/groups?${params.toString()}`, {
+    cookie: ownerCookie,
+  });
+  const detailRows = details.body.items as Array<{
+    serial: string;
+    sellerName: string;
+  }>;
+  assert.deepEqual(detailRows.map((item) => item.serial).sort(), [
+    'HC9P06R095',
+    'HC9P06R096',
+  ]);
+  assert.equal(detailRows[0].sellerName, 'Proprietário Integração');
+}
+
+await call('/api/sales?group=all&period=month&month=2026-13', {
+  cookie: ownerCookie,
+  expected: 400,
+});
+await call('/api/sales?group=all&period=day&day=2026-02-31', {
+  cookie: ownerCookie,
+  expected: 400,
+});
+
 await call(`/api/sales/${saleId}/cancel`, {
   method: 'POST',
   cookie: ownerCookie,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
   body: JSON.stringify({ reason: 'Cancelamento do ensaio local' }),
+});
+const cancelledAttachment = new FormData();
+cancelledAttachment.append('receipts', tinyPhoto(), 'cancelada.png');
+await call(`/api/sales/${saleId}/attachments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: cancelledAttachment,
 });
 await call(`/api/sales/${saleId}/cancel`, {
   method: 'POST',
@@ -301,7 +672,30 @@ const changedPassword = await call('/api/me/password', {
   }),
 });
 staffCookie = sessionCookie(changedPassword.response);
+const changedStaffSession = await call('/api/auth/session', {
+  cookie: staffCookie,
+});
+const changedStaffCsrf = String(changedStaffSession.body.csrfToken);
 await call('/api/bootstrap', { cookie: staffCookie });
+
+const activeSaleForm = new FormData();
+activeSaleForm.set(
+  'payload',
+  JSON.stringify({
+    customerId: clientId,
+    items: [{ serial: 'HC9P06R095', priceCents: 500_000 }],
+    payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 500_000 }],
+  }),
+);
+activeSaleForm.append('itemPhotos:0', tinyPhoto(), 'aparelho-ativo.png');
+const activeSale = await call('/api/sales', {
+  method: 'POST',
+  cookie: staffCookie,
+  expected: 201,
+  headers: { 'x-csrf-token': changedStaffCsrf },
+  body: activeSaleForm,
+});
+assert.equal(activeSale.body.number, 2);
 
 const rotatedCodesResult = await call('/api/me/recovery-codes', {
   method: 'POST',

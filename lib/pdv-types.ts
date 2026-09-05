@@ -1,6 +1,19 @@
-export const GUIDE_VERSION = '2026.09.05-production-multiloja-v1';
+export const GUIDE_VERSION = '2026.09.05-status-anexos-v3';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
+
+export const ORDER_STATUS_COLORS = [
+  'slate',
+  'blue',
+  'amber',
+  'orange',
+  'green',
+  'red',
+  'purple',
+  'pink',
+] as const;
+
+export type OrderStatusColor = (typeof ORDER_STATUS_COLORS)[number];
 
 export type AttachmentRecord = {
   id: string;
@@ -45,6 +58,7 @@ export type InventoryDetailRecord = {
   productName: string;
   productDetail: string;
   serial: string;
+  status: 'available' | 'sold';
   createdAt: number;
   photos: AttachmentRecord[];
 };
@@ -73,6 +87,13 @@ export type PixAccountRecord = {
   id: string;
   name: string;
   details: string | null;
+  active: boolean;
+};
+
+export type OrderStatusRecord = {
+  id: string;
+  name: string;
+  color: OrderStatusColor;
   active: boolean;
 };
 
@@ -112,6 +133,7 @@ export type SaleRecord = {
   customerId: string | null;
   customerName: string;
   sellerName: string;
+  orderStatus: Pick<OrderStatusRecord, 'id' | 'name' | 'color'> | null;
   productsTotalCents: number;
   receivedTotalCents: number;
   receivedDifferenceCents: number;
@@ -133,6 +155,16 @@ export type SalesGroupRecord = {
   saleCount: number;
   itemCount: number;
   totalCents: number;
+  rankByItems?: number | null;
+  rankByValue?: number | null;
+};
+
+export type SalesGrouping = 'model' | 'customer' | 'seller';
+
+export type SalesAggregates = {
+  amountCents: number;
+  itemCount: number;
+  alertCount: number;
 };
 
 export type SalesPage = {
@@ -140,11 +172,33 @@ export type SalesPage = {
   groups: SalesGroupRecord[];
   nextCursor: string | null;
   total: number;
-  aggregates: {
-    amountCents: number;
-    itemCount: number;
-    alertCount: number;
-  };
+  aggregates: SalesAggregates;
+};
+
+export type SalesAnalytics = {
+  groups: Record<SalesGrouping, SalesGroupRecord[]>;
+  total: number;
+  aggregates: SalesAggregates;
+};
+
+export type SalesGroupDetailRecord = {
+  id: string;
+  serial: string;
+  productId: string;
+  productName: string;
+  productDetail: string;
+  referencePriceCents: number;
+  soldPriceCents: number;
+  saleId: string;
+  saleNumber: number;
+  saleCreatedAt: number;
+  customerName: string;
+  sellerName: string;
+};
+
+export type SalesGroupDetailPage = {
+  items: SalesGroupDetailRecord[];
+  nextCursor: string | null;
 };
 
 export type EntriesPage = {
@@ -177,6 +231,7 @@ export type BootstrapData = {
   products: ProductRecord[];
   clients: ClientRecord[];
   pixAccounts: PixAccountRecord[];
+  orderStatuses: OrderStatusRecord[];
   metrics: { soldTodayItems: number };
   users: UserRecord[];
   guideRequired: boolean;

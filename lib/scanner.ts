@@ -1,3 +1,7 @@
+import { expandUpce, hasValidGtinCheckDigit } from './gtin.ts';
+
+export { expandUpce, hasValidGtinCheckDigit } from './gtin.ts';
+
 export type ScannerMode = 'product' | 'apple_serial';
 
 export type ScannerState =
@@ -347,13 +351,15 @@ export function normalizeCandidate(
   if (mode === 'product') {
     const digits = rawValue.replace(/\D/g, '');
     if (![8, 12, 13, 14].includes(digits.length)) return null;
-    const canonicalValue =
-      format === 'upc_e' && digits.length === 8 ? expandUpce(digits) : digits;
-    if (!canonicalValue || !hasValidGtinCheckDigit(canonicalValue)) return null;
+    const expandedUpce =
+      format === 'upc_e' && digits.length === 8 ? expandUpce(digits) : null;
+    const canonicalValue = expandedUpce ?? digits;
+    if (!hasValidGtinCheckDigit(canonicalValue)) return null;
     const normalizedValue = canonicalValue.padStart(14, '0');
     return {
       rawValue,
       normalizedValue,
+      alternateValue: expandedUpce ? digits.padStart(14, '0') : undefined,
       key: `PRODUCT:${normalizedValue}`,
       format,
     };
@@ -362,9 +368,7 @@ export function normalizeCandidate(
   const upperValue = rawValue.toUpperCase().replace(/\s+/g, '');
   if (!/^[A-Z0-9]{8,18}$/.test(upperValue)) return null;
   const canStripApplePrefix =
-    !format.startsWith('manual_') &&
-    upperValue.startsWith('S') &&
-    /^[A-Z0-9]{8,17}$/.test(upperValue.slice(1));
+    upperValue.startsWith('S') && /^[A-Z0-9]{8,17}$/.test(upperValue.slice(1));
   const normalizedValue = canStripApplePrefix
     ? upperValue.slice(1)
     : upperValue;
@@ -373,7 +377,11 @@ export function normalizeCandidate(
   return {
     rawValue,
     normalizedValue,
-    alternateValue: canStripApplePrefix ? upperValue : undefined,
+    alternateValue: canStripApplePrefix
+      ? upperValue
+      : /^[A-Z0-9]{8,17}$/.test(`S${normalizedValue}`)
+        ? `S${normalizedValue}`
+        : undefined,
     key: `SERIAL:${normalizedValue}`,
     format,
     prefixStripped: canStripApplePrefix || undefined,
@@ -425,37 +433,6 @@ function centralityScore(
   // A faixa já é estreita; priorizar o centro vertical evita capturar a linha
   // de IMEI/EID que costuma ficar imediatamente acima ou abaixo do SN.
   return horizontalDistance * 0.65 + verticalDistance * 2 - widthBonus;
-}
-
-export function hasValidGtinCheckDigit(value: string) {
-  if (!/^\d{8}$|^\d{12,14}$/.test(value)) return false;
-  const digits = value.split('').map(Number);
-  const suppliedCheckDigit = digits.pop();
-  const total = digits
-    .reverse()
-    .reduce((sum, digit, index) => sum + digit * (index % 2 === 0 ? 3 : 1), 0);
-  return suppliedCheckDigit === (10 - (total % 10)) % 10;
-}
-
-export function expandUpce(value: string) {
-  if (!/^\d{8}$/.test(value)) return null;
-  const [numberSystem, first, second, third, fourth, fifth, expansion, check] =
-    value.split('');
-  if (numberSystem !== '0' && numberSystem !== '1') return null;
-
-  let body: string;
-  if ('012'.includes(expansion)) {
-    body = `${numberSystem}${first}${second}${expansion}0000${third}${fourth}${fifth}`;
-  } else if (expansion === '3') {
-    body = `${numberSystem}${first}${second}${third}00000${fourth}${fifth}`;
-  } else if (expansion === '4') {
-    body = `${numberSystem}${first}${second}${third}${fourth}00000${fifth}`;
-  } else {
-    body = `${numberSystem}${first}${second}${third}${fourth}${fifth}0000${expansion}`;
-  }
-
-  const expanded = body + check;
-  return hasValidGtinCheckDigit(expanded) ? expanded : null;
 }
 
 function cameraErrorMessage(error: unknown) {

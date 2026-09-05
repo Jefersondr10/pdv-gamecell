@@ -28,7 +28,7 @@ const DAILY_WRITE_CREDITS: Record<WriteBudgetClass, number> = {
   'account-security': 4_000,
   business: 25_000,
   control: 6_000,
-  read: 18_000,
+  read: 3_000_000,
 };
 
 export async function consumeFixedWindowLimits(
@@ -324,38 +324,38 @@ export async function consumeStoreReadBudget(
     now,
     [
       {
-        scope: `reads:store:${storeId}:requests-hour`,
+        scope: `reads:v2:store:${storeId}:requests-hour`,
         windowMs: 60 * 60 * 1000,
-        max: 100,
+        max: 600,
       },
       {
-        scope: `reads:store:${storeId}:requests-day`,
-        windowMs: 24 * 60 * 60 * 1000,
-        max: 400,
-      },
-      {
-        scope: `reads:store:${storeId}:weighted-hour`,
-        windowMs: 60 * 60 * 1000,
-        max: 800,
-        cost,
-      },
-      {
-        scope: `reads:store:${storeId}:weighted-day`,
+        scope: `reads:v2:store:${storeId}:requests-day`,
         windowMs: 24 * 60 * 60 * 1000,
         max: 6_000,
+      },
+      {
+        scope: `reads:v2:store:${storeId}:weighted-hour`,
+        windowMs: 60 * 60 * 1000,
+        max: 8_000,
         cost,
       },
       {
-        scope: 'reads:global:weighted-hour',
+        scope: `reads:v2:store:${storeId}:weighted-day`,
+        windowMs: 24 * 60 * 60 * 1000,
+        max: 80_000,
+        cost,
+      },
+      {
+        scope: 'reads:v2:global:weighted-hour',
         windowMs: 60 * 60 * 1000,
-        max: 20_000,
+        max: 120_000,
         global: true,
         cost,
       },
       {
-        scope: 'reads:global:weighted-day',
+        scope: 'reads:v2:global:weighted-day',
         windowMs: 24 * 60 * 60 * 1000,
-        max: 80_000,
+        max: 1_200_000,
         global: true,
         cost,
       },

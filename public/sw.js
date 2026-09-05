@@ -1,4 +1,4 @@
-const CACHE_NAME = 'atacadoapple-static-v1';
+const CACHE_NAME = 'atacadoapple-static-v2';
 const PRECACHE = [
   '/offline.html',
   '/manifest.webmanifest',

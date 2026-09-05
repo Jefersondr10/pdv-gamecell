@@ -2,19 +2,22 @@
 
 /* oxlint-disable next/no-img-element -- authenticated attachment URLs must load directly with the session cookie */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowLeft,
   Camera,
+  ChevronRight,
+  Download,
   FileText,
   LoaderCircle,
-  Printer,
   Search,
   Smartphone,
   TrendingUp,
   Warehouse,
 } from 'lucide-react';
 
+import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -43,6 +46,8 @@ import type {
   StockSummaryRecord,
   StockSummaryResponse,
 } from '@/lib/pdv-types';
+import { displayCommercialCode } from '@/lib/commercial-code';
+import { downloadReportPdf } from '@/lib/download-report-pdf';
 
 type StockRow = ProductRecord & {
   received: number;
@@ -65,6 +70,7 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
   const [detailsStarted, setDetailsStarted] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState('');
+  const [selectedRow, setSelectedRow] = useState<StockRow | null>(null);
 
   const loadSummary = useCallback(async () => {
     setSummaryLoading(true);
@@ -224,16 +230,35 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
           ) : (
             <div className="divide-y">
               {filtered.map((row) => (
-                <div
-                  className="grid grid-cols-[1fr_auto] items-center gap-3 px-4 py-3 sm:grid-cols-[1fr_auto_auto_auto] sm:px-5"
+                <button
+                  aria-label={`Abrir estoque de ${row.model}, ${row.color}, ${row.memory}`}
+                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none sm:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto_auto] sm:px-5"
                   key={row.id}
+                  onClick={() => setSelectedRow(row)}
+                  type="button"
                 >
+                  <span className="grid size-10 place-items-center rounded-xl bg-secondary">
+                    <ProductColorSwatch className="size-6" color={row.color} />
+                  </span>
                   <div className="min-w-0">
                     <p className="truncate font-bold">{row.model}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {row.detail} ·{' '}
+                    <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
+                        <ProductColorSwatch color={row.color} />
+                        <span className="truncate">{row.color}</span>
+                      </span>
+                      <Badge
+                        className="shrink-0 font-extrabold"
+                        variant="secondary"
+                      >
+                        {row.memory}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 hidden truncate font-mono text-[.7rem] text-muted-foreground sm:block">
                       {row.codes
-                        .map((code) => displayCode(code.code))
+                        .map((code) =>
+                          displayCommercialCode(code.code, code.kind),
+                        )
                         .join(' · ')}
                     </p>
                   </div>
@@ -263,7 +288,8 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
                     </p>
                     <p className="font-bold">{row.sold}</p>
                   </div>
-                </div>
+                  <ChevronRight className="size-5 text-muted-foreground" />
+                </button>
               ))}
             </div>
           )}
@@ -282,7 +308,296 @@ export function StockProductionView({ data }: { data: BootstrapData }) {
         rows={rows}
         storeName={data.store.name}
       />
+      {selectedRow && (
+        <StockProductDetails
+          key={selectedRow.id}
+          onOpenChange={(open) => !open && setSelectedRow(null)}
+          row={selectedRow}
+        />
+      )}
     </Page>
+  );
+}
+
+function StockProductDetails({
+  row,
+  onOpenChange,
+}: {
+  row: StockRow;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [items, setItems] = useState<InventoryDetailRecord[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const [started, setStarted] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [selectedUnit, setSelectedUnit] =
+    useState<InventoryDetailRecord | null>(null);
+  const [selectedPhoto, setSelectedPhoto] = useState<AttachmentRecord | null>(
+    null,
+  );
+  const loadingRef = useRef(false);
+
+  const loadPage = useCallback(
+    async (nextCursor: string | null) => {
+      if (loadingRef.current) return;
+      loadingRef.current = true;
+      setLoading(true);
+      setError('');
+      try {
+        const params = new URLSearchParams({
+          productId: row.id,
+          status: 'all',
+          limit: '99',
+          includePhotos: '1',
+        });
+        if (nextCursor) params.set('cursor', nextCursor);
+        const result = await requestJson<InventoryPage>(
+          `/api/inventory?${params.toString()}`,
+        );
+        setItems((current) => {
+          const byId = new Map(current.map((item) => [item.id, item]));
+          result.items.forEach((item) => byId.set(item.id, item));
+          return Array.from(byId.values());
+        });
+        if (result.total !== null) setTotal(result.total);
+        setCursor(result.nextCursor);
+        setStarted(true);
+      } catch (caught) {
+        setError(messageOf(caught));
+        setStarted(true);
+      } finally {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    },
+    [row.id],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadPage(null), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadPage]);
+
+  const goBack = () => {
+    if (selectedPhoto) {
+      setSelectedPhoto(null);
+      return;
+    }
+    setSelectedUnit(null);
+  };
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open>
+      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 sm:h-[90dvh] sm:max-w-3xl sm:rounded-2xl">
+        <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
+          <div className="flex items-center gap-3">
+            {(selectedUnit || selectedPhoto) && (
+              <Button
+                aria-label="Voltar para a lista de SNs"
+                className="size-10 shrink-0 rounded-xl"
+                onClick={goBack}
+                size="icon"
+                variant="outline"
+              >
+                <ArrowLeft />
+              </Button>
+            )}
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
+              <ProductColorSwatch className="size-7" color={row.color} />
+            </span>
+            <div className="min-w-0">
+              <DialogTitle className="truncate">{row.model}</DialogTitle>
+              <DialogDescription className="mt-1 flex items-center gap-2">
+                <ProductColorSwatch color={row.color} />
+                <span className="truncate">{row.color}</span>
+                <Badge className="font-extrabold" variant="secondary">
+                  {row.memory}
+                </Badge>
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-3 overscroll-contain sm:p-4">
+          {selectedPhoto && selectedUnit ? (
+            <div className="mx-auto max-w-2xl">
+              <p className="font-mono text-sm font-bold">
+                SN {selectedUnit.serial}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Foto da entrada de {formatDateTime(selectedUnit.createdAt)}
+              </p>
+              <img
+                alt={`Foto da entrada do SN ${selectedUnit.serial}`}
+                className="mt-3 max-h-[65dvh] w-full rounded-2xl border bg-muted object-contain"
+                src={selectedPhoto.url}
+              />
+            </div>
+          ) : selectedUnit ? (
+            <div className="mx-auto max-w-2xl">
+              <div className="rounded-2xl border bg-muted/25 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase text-muted-foreground">
+                      Número de série
+                    </p>
+                    <p className="mt-1 break-all font-mono text-lg font-extrabold">
+                      {selectedUnit.serial}
+                    </p>
+                  </div>
+                  <Badge
+                    className={
+                      selectedUnit.status === 'available'
+                        ? 'bg-success/10 text-success hover:bg-success/10'
+                        : undefined
+                    }
+                    variant={
+                      selectedUnit.status === 'available'
+                        ? 'default'
+                        : 'secondary'
+                    }
+                  >
+                    {selectedUnit.status === 'available'
+                      ? 'Disponível'
+                      : 'Vendido'}
+                  </Badge>
+                </div>
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Entrada em {formatDateTime(selectedUnit.createdAt)}
+                </p>
+              </div>
+              <h3 className="mt-5 font-bold">Fotos da entrada</h3>
+              {selectedUnit.photos.length ? (
+                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {selectedUnit.photos.map((photo) => (
+                    <button
+                      className="overflow-hidden rounded-2xl border bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      key={photo.id}
+                      onClick={() => setSelectedPhoto(photo)}
+                      type="button"
+                    >
+                      <img
+                        alt={`Foto da entrada do SN ${selectedUnit.serial}`}
+                        className="aspect-square w-full object-cover"
+                        src={photo.url}
+                      />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 rounded-2xl border border-dashed p-5 text-center text-sm text-muted-foreground">
+                  Esta entrada não possui foto disponível.
+                </p>
+              )}
+            </div>
+          ) : !started || (loading && items.length === 0) ? (
+            <div className="grid min-h-52 place-items-center text-sm text-muted-foreground">
+              <span className="flex items-center gap-2">
+                <LoaderCircle className="size-4 animate-spin" /> Carregando SNs…
+              </span>
+            </div>
+          ) : error && items.length === 0 ? (
+            <div className="grid min-h-52 place-items-center text-center">
+              <div>
+                <AlertCircle className="mx-auto size-8 text-destructive" />
+                <p className="mt-2 font-bold">Não foi possível abrir os SNs</p>
+                <p className="mt-1 text-sm text-muted-foreground">{error}</p>
+                <Button className="mt-3" onClick={() => void loadPage(null)}>
+                  Tentar novamente
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-bold">Lista de números de série</p>
+                  <p className="text-xs text-muted-foreground">
+                    {items.length}
+                    {total === null ? '' : ` de ${total}`} SNs recebidos
+                  </p>
+                </div>
+                <div className="flex gap-1.5">
+                  <Badge className="bg-success/10 text-success hover:bg-success/10">
+                    {items.filter((item) => item.status === 'available').length}{' '}
+                    disponíveis
+                  </Badge>
+                  <Badge variant="secondary">
+                    {items.filter((item) => item.status === 'sold').length}{' '}
+                    vendidos
+                  </Badge>
+                </div>
+              </div>
+              <div className="divide-y overflow-hidden rounded-2xl border">
+                {items.map((item) => (
+                  <button
+                    className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 bg-card px-3 py-3 text-left transition-colors hover:bg-muted/45"
+                    key={item.id}
+                    onClick={() => setSelectedUnit(item)}
+                    type="button"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-mono text-sm font-bold">
+                        {item.serial}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        Entrada {formatDateTime(item.createdAt)} ·{' '}
+                        {item.photos.length}{' '}
+                        {item.photos.length === 1 ? 'foto' : 'fotos'}
+                      </p>
+                    </div>
+                    <Badge
+                      className={
+                        item.status === 'available'
+                          ? 'bg-success/10 text-success hover:bg-success/10'
+                          : undefined
+                      }
+                      variant={
+                        item.status === 'available' ? 'default' : 'secondary'
+                      }
+                    >
+                      {item.status === 'available' ? 'Disponível' : 'Vendido'}
+                    </Badge>
+                    <ChevronRight className="size-4 text-muted-foreground" />
+                  </button>
+                ))}
+                {items.length === 0 && (
+                  <p className="p-6 text-center text-sm text-muted-foreground">
+                    Este produto ainda não possui SN recebido.
+                  </p>
+                )}
+              </div>
+              {error && (
+                <p className="mt-3 rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+              {cursor && (
+                <Button
+                  className="mt-3 h-11 w-full rounded-xl"
+                  disabled={loading}
+                  onClick={() => void loadPage(cursor)}
+                  variant="outline"
+                >
+                  {loading ? 'Carregando…' : 'Carregar mais SNs'}
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+        <div className="shrink-0 border-t bg-background p-3 text-right">
+          <Button
+            className="h-10 min-w-28"
+            onClick={() => onOpenChange(false)}
+            variant="outline"
+          >
+            Fechar
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -313,6 +628,9 @@ function StockReport({
 }) {
   const [level, setLevel] = useState<'summary' | 'serials'>('summary');
   const [includePhotos, setIncludePhotos] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState('');
+  const reportRef = useRef<HTMLElement | null>(null);
   const needsDetails = level === 'serials' || includePhotos;
   const detailsComplete =
     detailsStarted &&
@@ -374,6 +692,7 @@ function StockReport({
           <article
             className="report-document mx-auto max-w-3xl rounded-2xl bg-white p-4 text-slate-950 shadow-sm ring-1 ring-slate-200 sm:p-7"
             data-print-report
+            ref={reportRef}
           >
             <header className="border-b border-slate-200 pb-4">
               <p className="text-xs font-bold uppercase tracking-[.16em] text-slate-500">
@@ -420,7 +739,7 @@ function StockReport({
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {byModel.map((item) => (
                   <div
-                    className="flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    className="report-row flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
                     key={item.model}
                   >
                     <span>{item.model}</span>
@@ -443,8 +762,13 @@ function StockReport({
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="font-bold">{row.model}</h3>
-                      <p className="text-sm text-slate-600">
-                        {row.color} · {row.memory}
+                      <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-600">
+                        <ProductColorSwatch color={row.color} />
+                        <span>{row.color}</span>
+                        <span aria-hidden>·</span>
+                        <strong className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-900">
+                          {row.memory}
+                        </strong>
                       </p>
                     </div>
                     <strong>{row.available} disponíveis</strong>
@@ -474,7 +798,7 @@ function StockReport({
                       <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
                         {row.photos.map((photo) => (
                           <a
-                            className="block overflow-hidden rounded-lg border border-slate-200"
+                            className="report-row block overflow-hidden rounded-lg border border-slate-200"
                             href={photo.url}
                             key={photo.id}
                             rel="noreferrer"
@@ -499,6 +823,11 @@ function StockReport({
           className="shrink-0 border-t bg-background p-3"
           data-report-controls
         >
+          {pdfError && (
+            <p className="mr-auto text-left text-sm font-semibold text-destructive">
+              {pdfError}
+            </p>
+          )}
           <Button onClick={() => onOpenChange(false)} variant="outline">
             Fechar
           </Button>
@@ -510,10 +839,25 @@ function StockReport({
               </Button>
             )}
           <Button
-            disabled={needsDetails && !detailsComplete}
-            onClick={() => window.print()}
+            disabled={pdfBusy || (needsDetails && !detailsComplete)}
+            onClick={async () => {
+              if (!reportRef.current) return;
+              setPdfBusy(true);
+              setPdfError('');
+              try {
+                await downloadReportPdf({
+                  element: reportRef.current,
+                  fileName: `estoque-${dateFileKey(generatedAt)}`,
+                });
+              } catch (error) {
+                setPdfError(messageOf(error));
+              } finally {
+                setPdfBusy(false);
+              }
+            }}
           >
-            <Printer /> Imprimir / salvar PDF
+            {pdfBusy ? <LoaderCircle className="animate-spin" /> : <Download />}
+            {pdfBusy ? 'Gerando PDF…' : 'Baixar PDF'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -612,13 +956,19 @@ function ReportMetric({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-function displayCode(code: string) {
-  return code.replace(/^0+(?=\d)/, '');
-}
 function formatDateTime(value: number) {
   return new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',
     dateStyle: 'short',
     timeStyle: 'short',
+  }).format(new Date(value));
+}
+
+function dateFileKey(value: number) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
   }).format(new Date(value));
 }

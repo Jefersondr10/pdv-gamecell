@@ -1,7 +1,7 @@
 import { requireSession } from '@/lib/server/auth';
 import { apiError, HttpError, json } from '@/lib/server/http';
 import { runtime } from '@/lib/server/runtime';
-import { normalizeSerial } from '@/lib/server/security';
+import { normalizeAppleSerial, serialAliases } from '@/lib/server/security';
 
 type SerialLookupRow = {
   serial: string;
@@ -14,23 +14,24 @@ type SerialLookupRow = {
 export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
-    const values = Array.from(
+    const requested = Array.from(
       new Set(
         new URL(request.url).searchParams
           .getAll('serial')
           .slice(0, 2)
-          .map(normalizeSerial),
+          .map(normalizeAppleSerial),
       ),
     );
     if (
-      values.length === 0 ||
-      values.some(
+      requested.length === 0 ||
+      requested.some(
         (serial) =>
-          serial.length < 8 || serial.length > 18 || !/[A-Z]/.test(serial),
+          serial.length < 8 || serial.length > 17 || !/[A-Z]/.test(serial),
       )
     ) {
       throw new HttpError(400, 'SN inválido.', 'INVALID_SERIAL');
     }
+    const values = Array.from(new Set(requested.flatMap(serialAliases)));
     const db = runtime().DB;
     const result = await db
       .prepare(

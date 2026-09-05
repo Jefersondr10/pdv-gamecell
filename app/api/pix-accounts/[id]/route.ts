@@ -5,7 +5,6 @@ import {
   assertSameOrigin,
   boundedJson,
   HttpError,
-  integerField,
   json,
   stringField,
 } from '@/lib/server/http';
@@ -29,42 +28,29 @@ export async function PATCH(
     const now = Date.now();
     await consumeStoreWriteBudget(db, now, session.storeId!, 3);
     const exists = await db
-      .prepare('SELECT 1 FROM products WHERE id = ? AND store_id = ? LIMIT 1')
+      .prepare(
+        'SELECT 1 FROM pix_accounts WHERE id = ? AND store_id = ? LIMIT 1',
+      )
       .bind(id, session.storeId)
       .first();
     if (!exists) {
-      throw new HttpError(404, 'Produto não encontrado.', 'NOT_FOUND');
+      throw new HttpError(404, 'Conta não encontrada.', 'NOT_FOUND');
     }
 
     const updates: string[] = [];
     const bindings: unknown[] = [];
     const changed: Record<string, unknown> = {};
-    if (body.model !== undefined) {
-      const value = stringField(body.model, 'Modelo', { max: 100 });
-      updates.push('model = ?');
+    if (body.name !== undefined) {
+      const value = stringField(body.name, 'Nome da conta', { max: 100 });
+      updates.push('name = ?');
       bindings.push(value);
-      changed.model = value;
+      changed.name = value;
     }
-    if (body.color !== undefined) {
-      const value = stringField(body.color, 'Cor', { max: 80 });
-      updates.push('color = ?');
+    if (body.details !== undefined) {
+      const value = optionalString(body.details, 250);
+      updates.push('details = ?');
       bindings.push(value);
-      changed.color = value;
-    }
-    if (body.memory !== undefined) {
-      const value = stringField(body.memory, 'Memória', { max: 60 });
-      updates.push('memory = ?');
-      bindings.push(value);
-      changed.memory = value;
-    }
-    if (body.defaultPriceCents !== undefined) {
-      const value = integerField(body.defaultPriceCents, 'Preço', {
-        min: 0,
-        max: 1_000_000_000,
-      });
-      updates.push('default_price_cents = ?');
-      bindings.push(value);
-      changed.defaultPriceCents = value;
+      changed.details = value;
     }
     if (typeof body.active === 'boolean') {
       updates.push('active = ?');
@@ -84,7 +70,7 @@ export async function PATCH(
       const results = await db.batch([
         db
           .prepare(
-            `UPDATE products SET ${updates.join(', ')}
+            `UPDATE pix_accounts SET ${updates.join(', ')}
              WHERE id = ? AND store_id = ?`,
           )
           .bind(...bindings),
@@ -92,7 +78,7 @@ export async function PATCH(
           .prepare(
             `INSERT INTO audit_events
              (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
-             VALUES (?, ?, ?, 'product.updated', 'product', ?, ?, ?)`,
+             VALUES (?, ?, ?, 'pix_account.updated', 'pix_account', ?, ?, ?)`,
           )
           .bind(
             crypto.randomUUID(),
@@ -104,17 +90,17 @@ export async function PATCH(
           ),
       ]);
       if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
-        throw new HttpError(404, 'Produto não encontrado.', 'NOT_FOUND');
+        throw new HttpError(404, 'Conta não encontrada.', 'NOT_FOUND');
       }
     } catch (error) {
       if (
         error instanceof Error &&
-        /UNIQUE constraint failed:.*products.*store_id/i.test(error.message)
+        /UNIQUE constraint failed:.*pix_accounts.*store_id/i.test(error.message)
       ) {
         throw new HttpError(
           409,
-          'Já existe um produto com este modelo, cor e memória.',
-          'PRODUCT_EXISTS',
+          'Já existe uma conta com este nome.',
+          'PIX_ACCOUNT_EXISTS',
         );
       }
       throw error;
@@ -123,4 +109,9 @@ export async function PATCH(
   } catch (error) {
     return apiError(error);
   }
+}
+
+function optionalString(value: unknown, max: number) {
+  if (value === undefined || value === null || value === '') return null;
+  return stringField(value, 'Detalhes', { max });
 }

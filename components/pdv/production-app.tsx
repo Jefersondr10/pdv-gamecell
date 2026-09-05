@@ -11,9 +11,11 @@ import {
   Settings,
   ShoppingBag,
   Smartphone,
+  UsersRound,
   Warehouse,
 } from 'lucide-react';
 
+import { CatalogProductionView } from '@/components/pdv/views/catalog-production-view';
 import { EntryHistoryView } from '@/components/pdv/views/entry-history-view';
 import { SalesProductionView } from '@/components/pdv/views/sales-production-view';
 import { SettingsProductionView } from '@/components/pdv/views/settings-production-view';
@@ -50,9 +52,17 @@ import {
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { messageOf, requestJson } from '@/lib/client-api';
+import { displayCommercialCode } from '@/lib/commercial-code';
 import type { BootstrapData } from '@/lib/pdv-types';
 
-type View = 'sell' | 'entry' | 'stock' | 'sales' | 'entries' | 'settings';
+type View =
+  | 'sell'
+  | 'entry'
+  | 'stock'
+  | 'sales'
+  | 'catalog'
+  | 'entries'
+  | 'settings';
 
 type SessionResponse =
   | { authenticated: false }
@@ -88,6 +98,12 @@ const navigation: Array<{
   { view: 'stock', label: 'Estoque', short: 'Estoque', icon: Warehouse },
   { view: 'sales', label: 'Vendas', short: 'Vendas', icon: History },
   {
+    view: 'catalog',
+    label: 'Cadastros',
+    short: 'Cadastros',
+    icon: UsersRound,
+  },
+  {
     view: 'entries',
     label: 'Histórico de entradas',
     short: 'Hist.',
@@ -100,6 +116,15 @@ const navigation: Array<{
     icon: Settings,
   },
 ];
+
+const mobileViews = new Set<View>([
+  'sell',
+  'entry',
+  'stock',
+  'sales',
+  'catalog',
+]);
+const mobileNavigation = navigation.filter(({ view }) => mobileViews.has(view));
 
 export function ProductionApp() {
   const [session, setSession] = useState<SessionResponse | null>(null);
@@ -355,7 +380,9 @@ function CloudPdv({
           id: product.id,
           name: product.model,
           detail: product.detail,
-          code: code.code.replace(/^0+(?=\d)/, ''),
+          color: product.color,
+          memory: product.memory,
+          code: displayCommercialCode(code.code, code.kind),
         };
       }
     }
@@ -374,7 +401,11 @@ function CloudPdv({
     const form = new FormData();
     form.set(
       'payload',
-      JSON.stringify({ productId: entry.productId, serials: entry.serials }),
+      JSON.stringify({
+        productId: entry.productId,
+        gtin14: entry.gtin14,
+        serials: entry.serials,
+      }),
     );
     entry.photos.forEach((photo) => form.append('photos', photo));
     const result = await requestJson<{ added: number }>('/api/entries', {
@@ -466,7 +497,7 @@ function CloudPdv({
       </aside>
 
       <section className="mx-auto flex h-dvh min-h-0 max-w-[1500px] flex-col overflow-hidden lg:ml-64">
-        <header className="relative z-20 flex h-16 shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl sm:px-7 lg:h-[4.5rem] lg:px-10">
+        <header className="relative z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:h-[4.5rem] lg:px-10 lg:pt-0">
           <div className="lg:hidden">
             <Brand compact storeName={data.store.name} />
           </div>
@@ -478,7 +509,7 @@ function CloudPdv({
           </div>
           <div className="flex items-center gap-2">
             <Button
-              className="rounded-full lg:hidden"
+              className="h-10 rounded-full px-3 text-sm lg:hidden"
               onClick={() => setProfileOpen(true)}
               size="sm"
               variant="ghost"
@@ -527,6 +558,13 @@ function CloudPdv({
               onChanged={() => reload(true)}
             />
           )}
+          {activeView === 'catalog' && (
+            <CatalogProductionView
+              data={data}
+              key={`catalog-${run}`}
+              onChanged={() => reload(true)}
+            />
+          )}
           {activeView === 'entries' && (
             <EntryHistoryView key={`entries-${run}`} />
           )}
@@ -551,12 +589,20 @@ function CloudPdv({
       <MobileNavigation active={activeView} onChange={changeView} />
       <ProfileDialog
         data={data}
+        onEntries={() => {
+          setProfileOpen(false);
+          changeView('entries');
+        }}
         onGuide={() => {
           setProfileOpen(false);
           setGuideOpen(true);
         }}
         onLogout={() => void logout()}
         onOpenChange={setProfileOpen}
+        onSettings={() => {
+          setProfileOpen(false);
+          changeView('settings');
+        }}
         open={profileOpen}
       />
       <GuideDialog
@@ -1111,14 +1157,18 @@ function ProfileDialog({
   data,
   open,
   onOpenChange,
+  onEntries,
   onGuide,
   onLogout,
+  onSettings,
 }: {
   data: BootstrapData;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onEntries: () => void;
   onGuide: () => void;
   onLogout: () => void;
+  onSettings: () => void;
 }) {
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -1130,6 +1180,20 @@ function ProfileDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">
+          <Button
+            className="h-12 justify-start rounded-xl lg:hidden"
+            onClick={onEntries}
+            variant="outline"
+          >
+            <History /> Histórico de entradas
+          </Button>
+          <Button
+            className="h-12 justify-start rounded-xl lg:hidden"
+            onClick={onSettings}
+            variant="outline"
+          >
+            <Settings /> Ajustes e usuários
+          </Button>
           <Button
             className="h-12 justify-start rounded-xl"
             onClick={onGuide}
@@ -1175,13 +1239,14 @@ function GuideDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
           <GuideStep number="1" title="Cadastre a base">
-            Em Configurações, cadastre produtos com modelo, cor, memória, preço
-            e UPC/EAN; depois cadastre clientes, contas Pix e usuários.
+            Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
+            UPCs/EANs e contas Pix. Em Ajustes, o proprietário gerencia os
+            usuários da loja.
           </GuideStep>
           <GuideStep number="2" title="Dê entrada">
             Abra Entrada. Bipe o UPC/EAN, confirme o produto, bipe somente os
-            SNs e fotografe o recebimento. Códigos diferentes de SN são
-            ignorados.
+            SNs e fotografe o recebimento. O zero técnico do leitor e o prefixo
+            S do SN são reconhecidos automaticamente.
           </GuideStep>
           <GuideStep number="3" title="Venda por etapas">
             Pesquise o cliente, bipe um ou mais SNs, adicione fotos, confira ou
@@ -1192,11 +1257,17 @@ function GuideDialog({
             mostra um aviso na venda, na listagem e no relatório.
           </GuideStep>
           <GuideStep number="5" title="Relatórios e histórico">
-            Estoque tem resumo e SNs com fotos da entrada. Vendas têm relatório
-            simples, detalhado ou completo, sempre separado por venda. O menu
-            Histórico preserva cada entrada.
+            Toque em um produto no estoque para ver seus SNs e as fotos da
+            entrada. Baixe o relatório em PDF. Em Vendas, consulte por venda,
+            modelo, cliente ou vendedor e veja o ranking no período escolhido. O
+            menu Histórico preserva cada entrada.
           </GuideStep>
-          <GuideStep number="6" title="Usuários e lojas">
+          <GuideStep number="6" title="Status e anexos depois da venda">
+            Em Ajustes, crie os Status do pedido que sua loja usa. Em Vendas,
+            toque em Editar para mudar esse status e acrescentar comprovantes ou
+            fotos ao SN correto. Os dados originais da venda não são alterados.
+          </GuideStep>
+          <GuideStep number="7" title="Usuários e lojas">
             Cada loja é isolada. O proprietário cria funcionários e senhas;
             criar conta na tela inicial abre uma nova loja.
           </GuideStep>
@@ -1279,18 +1350,18 @@ function MobileNavigation({
 }) {
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-1 pb-[max(.45rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur-xl lg:hidden"
+      className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 px-1 pb-[max(.45rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur-xl lg:hidden"
       aria-label="Navegação principal"
     >
-      <div className="mx-auto grid max-w-2xl grid-cols-6">
-        {navigation.map(({ view, short, icon: Icon }) => (
+      <div className="mx-auto grid max-w-none grid-cols-5 lg:max-w-2xl">
+        {mobileNavigation.map(({ view, short, icon: Icon }) => (
           <button
-            className={`flex min-h-[3.7rem] min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-0.5 text-[.65rem] font-bold ${active === view ? 'text-primary' : 'text-muted-foreground'}`}
+            className={`mx-0.5 flex min-h-[4.15rem] min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-0.5 text-xs font-bold transition-colors ${active === view ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
             key={view}
             onClick={() => onChange(view)}
             type="button"
           >
-            <Icon className="size-[1.15rem]" />
+            <Icon className="size-5" />
             <span className="truncate">{short}</span>
           </button>
         ))}

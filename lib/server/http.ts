@@ -44,7 +44,7 @@ export function assertJsonRequest(request: Request) {
 export async function boundedJson(
   request: Request,
   maxBytes = 32 * 1024,
-): Promise<unknown> {
+): Promise<Record<string, unknown>> {
   assertJsonRequest(request);
   if (!request.body) {
     throw new HttpError(400, 'Dados da solicitação ausentes.', 'INVALID_JSON');
@@ -76,8 +76,9 @@ export async function boundedJson(
       return reader.cancel(reason);
     },
   });
+  let parsed: unknown;
   try {
-    return await new Response(limitedBody, {
+    parsed = await new Response(limitedBody, {
       headers: { 'content-type': 'application/json' },
     }).json();
   } catch {
@@ -90,6 +91,32 @@ export async function boundedJson(
     }
     throw new HttpError(400, 'JSON inválido.', 'INVALID_JSON');
   }
+  return asJsonObject(parsed);
+}
+
+export function parseJsonObject(
+  value: string,
+  message = 'Dados enviados inválidos.',
+  code = 'INVALID_PAYLOAD',
+) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new HttpError(400, message, code);
+  }
+  return asJsonObject(parsed, message, code);
+}
+
+function asJsonObject(
+  value: unknown,
+  message = 'JSON inválido.',
+  code = 'INVALID_JSON',
+) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpError(400, message, code);
+  }
+  return value as Record<string, unknown>;
 }
 
 export function assertSameOrigin(request: Request) {

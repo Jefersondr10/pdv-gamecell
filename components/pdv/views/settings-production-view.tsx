@@ -7,6 +7,8 @@ import {
   Building2,
   CircleUserRound,
   KeyRound,
+  ListChecks,
+  Pencil,
   Plus,
   RotateCcw,
   ScanBarcode,
@@ -15,6 +17,16 @@ import {
   WalletCards,
 } from 'lucide-react';
 
+import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
+import {
+  ORDER_STATUS_COLOR_OPTIONS,
+  OrderStatusBadge,
+  OrderStatusDot,
+} from '@/components/pdv/order-status-badge';
+import {
+  APPLE_COLOR_SUGGESTIONS,
+  appleMemoryOptions,
+} from '@/components/pdv/product-options';
 import { Badge } from '@/components/ui/badge';
 import { RecoveryCodesPanel } from '@/components/pdv/recovery-codes-panel';
 import { Button } from '@/components/ui/button';
@@ -41,13 +53,20 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { messageOf, requestJson } from '@/lib/client-api';
+import { displayCommercialCode } from '@/lib/commercial-code';
 import { parseMoneyInput } from '@/lib/money';
-import type { BootstrapData, UserRecord } from '@/lib/pdv-types';
+import {
+  type BootstrapData,
+  type OrderStatusColor,
+  type OrderStatusRecord,
+  type UserRecord,
+} from '@/lib/pdv-types';
 
 type Manager =
   | 'products'
   | 'clients'
   | 'pix'
+  | 'order-statuses'
   | 'users'
   | 'install'
   | 'recovery'
@@ -126,6 +145,14 @@ export function SettingsProductionView({
         </Tab>
         <Tab value="finance">
           <SettingsCard
+            icon={ListChecks}
+            title="Status do pedido"
+            detail={`${data.orderStatuses.length} de 30 cadastrados`}
+            description="Crie etapas como Pendente, Pagamento pendente e Faturado."
+            disabled={!canManage}
+            onManage={() => setManager('order-statuses')}
+          />
+          <SettingsCard
             icon={Building2}
             title="Contas Pix"
             detail={`${data.pixAccounts.filter((account) => account.active).length} ativas`}
@@ -191,6 +218,12 @@ export function SettingsProductionView({
         onOpenChange={(open) => !open && setManager(null)}
         open={manager === 'pix'}
       />
+      <OrderStatusesDialog
+        data={data}
+        onChanged={onChanged}
+        onOpenChange={(open) => !open && setManager(null)}
+        open={manager === 'order-statuses'}
+      />
       <UsersDialog
         data={data}
         onChanged={onChanged}
@@ -223,7 +256,7 @@ function ProductsDialog({
   const [values, setValues] = useState({
     model: '',
     color: '',
-    memory: '',
+    memory: '128 GB',
     codes: '',
     price: '',
   });
@@ -281,7 +314,7 @@ function ProductsDialog({
                   setValues({
                     model: '',
                     color: '',
-                    memory: '',
+                    memory: '128 GB',
                     codes: '',
                     price: '',
                   });
@@ -301,19 +334,39 @@ function ProductsDialog({
                 />
               </Field>
               <Field label="Cor">
-                <Input
-                  onChange={(event) => set('color', event.target.value)}
-                  required
-                  value={values.color}
-                />
+                <div className="relative">
+                  <ProductColorSwatch
+                    className="absolute left-3 top-1/2 z-10 size-5 -translate-y-1/2"
+                    color={values.color || 'Sem cor'}
+                  />
+                  <Input
+                    className="pl-11"
+                    list="settings-apple-product-colors"
+                    onChange={(event) => set('color', event.target.value)}
+                    required
+                    value={values.color}
+                  />
+                  <datalist id="settings-apple-product-colors">
+                    {APPLE_COLOR_SUGGESTIONS.map((color) => (
+                      <option key={color} value={color}>
+                        {color}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
               </Field>
               <Field label="Memória">
-                <Input
+                <NativeSelect
+                  className="h-11 w-full [&_select]:h-11"
                   onChange={(event) => set('memory', event.target.value)}
-                  placeholder="128 GB"
-                  required
                   value={values.memory}
-                />
+                >
+                  {appleMemoryOptions().map((memory) => (
+                    <NativeSelectOption key={memory} value={memory}>
+                      {memory}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
               </Field>
               <Field label="Preço padrão">
                 <MoneyInput
@@ -369,8 +422,11 @@ function ProductsDialog({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="font-bold">{selected.model}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {selected.detail}
+                      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <ProductColorSwatch color={selected.color} />
+                        <span>
+                          {selected.color} · {selected.memory}
+                        </span>
                       </p>
                     </div>
                     <Badge variant="secondary">
@@ -380,7 +436,9 @@ function ProductsDialog({
                   </div>
                   <p className="mt-2 break-words font-mono text-xs text-muted-foreground">
                     {selected.codes
-                      .map((code) => displayCode(code.code))
+                      .map((code) =>
+                        displayCommercialCode(code.code, code.kind),
+                      )
                       .join(' · ')}
                   </p>
                   <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
@@ -600,6 +658,253 @@ function PixDialog({ data, open, onOpenChange, onChanged }: CommonDialogProps) {
             <EmptyText>Nenhuma conta Pix cadastrada.</EmptyText>
           )}
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OrderStatusesDialog({
+  data,
+  open,
+  onOpenChange,
+  onChanged,
+}: CommonDialogProps) {
+  const [name, setName] = useState('');
+  const [color, setColor] = useState<OrderStatusColor>('slate');
+  const [editTarget, setEditTarget] = useState<OrderStatusRecord | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState<OrderStatusColor>('slate');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const close = () => {
+    setEditTarget(null);
+    setError('');
+    onOpenChange(false);
+  };
+  const beginEdit = (status: OrderStatusRecord) => {
+    setEditTarget(status);
+    setEditName(status.name);
+    setEditColor(status.color);
+    setError('');
+  };
+  return (
+    <Dialog
+      onOpenChange={(next) => {
+        if (!next && !busy) close();
+      }}
+      open={open}
+    >
+      <DialogContent
+        className="flex h-dvh max-h-dvh max-w-none flex-col overflow-hidden rounded-none p-0 pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-2xl sm:rounded-2xl sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2"
+        showCloseButton={!busy}
+      >
+        <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
+          <DialogTitle>Status do pedido</DialogTitle>
+          <DialogDescription>
+            Crie os nomes usados para acompanhar cada venda. Cancelamento
+            continua sendo controlado separadamente.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain">
+          {error && <ErrorBox>{error}</ErrorBox>}
+          <form
+            className="grid gap-3 rounded-2xl border bg-muted/25 p-4 sm:grid-cols-[minmax(0,1fr)_11rem_auto] sm:items-end"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setBusy(true);
+              setError('');
+              try {
+                await postJson('/api/order-statuses', data.csrfToken, {
+                  name,
+                  color,
+                });
+                setName('');
+                setColor('slate');
+                await onChanged();
+              } catch (caught) {
+                setError(messageOf(caught));
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <Field label="Nome do status">
+              <Input
+                maxLength={60}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Pagamento pendente"
+                required
+                value={name}
+              />
+            </Field>
+            <Field label="Cor">
+              <NativeSelect
+                className="h-10 w-full [&_select]:h-10"
+                onChange={(event) =>
+                  setColor(event.target.value as OrderStatusColor)
+                }
+                value={color}
+              >
+                {ORDER_STATUS_COLOR_OPTIONS.map((option) => (
+                  <NativeSelectOption key={option.value} value={option.value}>
+                    {option.label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Button
+              className="h-10"
+              disabled={busy || data.orderStatuses.length >= 30}
+              type="submit"
+            >
+              <Plus /> Criar
+            </Button>
+          </form>
+          {data.orderStatuses.length >= 30 && (
+            <p className="mt-2 text-xs font-semibold text-amber-800">
+              Limite de 30 atingido. Renomeie ou reative um status já
+              cadastrado; desativar não apaga o histórico.
+            </p>
+          )}
+
+          <div className="mt-4 divide-y rounded-2xl border">
+            {data.orderStatuses.map((status) => (
+              <div className="p-3" key={status.id}>
+                {editTarget?.id === status.id ? (
+                  <form
+                    className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      setBusy(true);
+                      setError('');
+                      try {
+                        await patchJson(
+                          `/api/order-statuses/${status.id}`,
+                          data.csrfToken,
+                          { name: editName, color: editColor },
+                        );
+                        setEditTarget(null);
+                        await onChanged();
+                      } catch (caught) {
+                        setError(messageOf(caught));
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    <Field label="Nome">
+                      <Input
+                        maxLength={60}
+                        onChange={(event) => setEditName(event.target.value)}
+                        required
+                        value={editName}
+                      />
+                    </Field>
+                    <Field label="Cor">
+                      <NativeSelect
+                        className="h-10 w-full [&_select]:h-10"
+                        onChange={(event) =>
+                          setEditColor(event.target.value as OrderStatusColor)
+                        }
+                        value={editColor}
+                      >
+                        {ORDER_STATUS_COLOR_OPTIONS.map((option) => (
+                          <NativeSelectOption
+                            key={option.value}
+                            value={option.value}
+                          >
+                            {option.label}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </Field>
+                    <div className="flex gap-1">
+                      <Button
+                        className="min-h-11"
+                        disabled={busy}
+                        size="sm"
+                        type="submit"
+                      >
+                        Salvar
+                      </Button>
+                      <Button
+                        className="min-h-11"
+                        disabled={busy}
+                        onClick={() => setEditTarget(null)}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                      >
+                        Voltar
+                      </Button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <OrderStatusBadge status={status} />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {status.active
+                          ? 'Disponível para usar nas vendas.'
+                          : 'Inativo; permanece no histórico antigo.'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        aria-label={`Editar ${status.name}`}
+                        className="size-11"
+                        disabled={busy}
+                        onClick={() => beginEdit(status)}
+                        size="icon"
+                        variant="ghost"
+                      >
+                        <Pencil />
+                      </Button>
+                      <Button
+                        aria-label={`${status.active ? 'Desativar' : 'Ativar'} ${status.name}`}
+                        className="min-h-11"
+                        disabled={busy}
+                        onClick={async () => {
+                          setBusy(true);
+                          setError('');
+                          try {
+                            await patchJson(
+                              `/api/order-statuses/${status.id}`,
+                              data.csrfToken,
+                              { active: !status.active },
+                            );
+                            await onChanged();
+                          } catch (caught) {
+                            setError(messageOf(caught));
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                        size="sm"
+                        variant={status.active ? 'outline' : 'secondary'}
+                      >
+                        <OrderStatusDot color={status.color} />
+                        {status.active ? 'Desativar' : 'Ativar'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {data.orderStatuses.length === 0 && (
+              <EmptyText>Nenhum status cadastrado.</EmptyText>
+            )}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Você pode começar, por exemplo, com Pendente, Pagamento pendente e
+            Faturado. Os nomes são totalmente personalizáveis.
+          </p>
+        </div>
+        <DialogFooter className="m-0 shrink-0 rounded-none border-t p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]">
+          <Button disabled={busy} onClick={close} variant="outline">
+            Fechar
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -1107,9 +1412,6 @@ function moneyInput(cents: number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-}
-function displayCode(code: string) {
-  return code.replace(/^0+(?=\d)/, '');
 }
 function roleLabel(role: UserRecord['role']) {
   return role === 'owner'

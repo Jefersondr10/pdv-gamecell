@@ -1,5 +1,7 @@
 import { requiredSecret } from '@/lib/server/runtime';
 
+export { normalizeCommercialCode } from '@/lib/gtin';
+
 const encoder = new TextEncoder();
 export const PASSWORD_ITERATIONS = 600_000;
 const PBKDF2_OPERATION_LIMIT = 100_000;
@@ -133,23 +135,41 @@ export function normalizeStoreCode(value: string) {
     .slice(0, 40);
 }
 
-export function normalizeCommercialCode(value: string) {
-  const digits = value.replace(/\D/g, '');
-  if (![8, 12, 13, 14].includes(digits.length)) return '';
-  const values = digits.split('').map(Number);
-  const suppliedCheckDigit = values.pop();
-  const total = values
-    .reverse()
-    .reduce((sum, digit, index) => sum + digit * (index % 2 === 0 ? 3 : 1), 0);
-  if (suppliedCheckDigit !== (10 - (total % 10)) % 10) return '';
-  return digits.padStart(14, '0');
-}
-
 export function normalizeSerial(value: string) {
   return value
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
+}
+
+export function normalizeAppleSerial(value: string) {
+  const normalized = normalizeSerial(value);
+  const withoutTechnicalPrefix = normalized.startsWith('S')
+    ? normalized.slice(1)
+    : normalized;
+  return /^[A-Z0-9]{8,17}$/.test(withoutTechnicalPrefix)
+    ? withoutTechnicalPrefix
+    : normalized;
+}
+
+export function serialAliases(value: string) {
+  const normalized = normalizeAppleSerial(value);
+  if (
+    normalized.length < 8 ||
+    normalized.length > 17 ||
+    !/[A-Z]/.test(normalized)
+  ) {
+    return [];
+  }
+  const alternate = `S${normalized}`;
+  return Array.from(
+    new Set(
+      [normalized, alternate].filter(
+        (serial) =>
+          serial.length >= 8 && serial.length <= 18 && /[A-Z]/.test(serial),
+      ),
+    ),
+  );
 }
 
 export function normalizeRecoveryCode(value: string) {

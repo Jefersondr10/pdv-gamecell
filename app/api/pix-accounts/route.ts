@@ -43,22 +43,66 @@ export async function POST(request: Request) {
         'PIX_ACCOUNT_LIMIT',
       );
     }
-    await db.batch([
-      db
-        .prepare(
-          `INSERT INTO pix_accounts
-           (id, store_id, name, details, active, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
-        )
-        .bind(id, session.storeId, name, details, session.id, now, now),
-      db
-        .prepare(
-          `INSERT INTO audit_events
-           (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
-           VALUES (?, ?, ?, 'pix_account.created', 'pix_account', ?, NULL, ?)`,
-        )
-        .bind(crypto.randomUUID(), session.storeId, session.id, id, now),
-    ]);
+    try {
+      const results = await db.batch([
+        db
+          .prepare(
+            `INSERT INTO pix_accounts
+             (id, store_id, name, details, active, created_by, created_at, updated_at)
+             SELECT ?, ?, ?, ?, 1, ?, ?, ?
+             WHERE (
+               SELECT COUNT(*) FROM pix_accounts WHERE store_id = ?
+             ) < 100`,
+          )
+          .bind(
+            id,
+            session.storeId,
+            name,
+            details,
+            session.id,
+            now,
+            now,
+            session.storeId,
+          ),
+        db
+          .prepare(
+            `INSERT INTO audit_events
+             (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
+             SELECT ?, ?, ?, 'pix_account.created', 'pix_account', ?, NULL, ?
+             WHERE EXISTS (
+               SELECT 1 FROM pix_accounts WHERE id = ? AND store_id = ?
+             )`,
+          )
+          .bind(
+            crypto.randomUUID(),
+            session.storeId,
+            session.id,
+            id,
+            now,
+            id,
+            session.storeId,
+          ),
+      ]);
+      if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
+        throw new HttpError(
+          409,
+          'Esta loja atingiu o limite de 100 contas Pix.',
+          'PIX_ACCOUNT_LIMIT',
+        );
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /UNIQUE constraint failed:.*pix_accounts.*store_id/i.test(error.message)
+      ) {
+        throw new HttpError(
+          409,
+          'Já existe uma conta com este nome.',
+          'PIX_ACCOUNT_EXISTS',
+        );
+      }
+      throw error;
+    }
     return json({ ok: true, id }, { status: 201 });
   } catch (error) {
     return apiError(error);

@@ -13,8 +13,8 @@ import {
   HttpError,
   integerField,
   json,
+  parseJsonObject,
   stringField,
-  utf8Prefix,
 } from '@/lib/server/http';
 import {
   consumeFixedWindowLimits,
@@ -22,14 +22,18 @@ import {
   consumeStoreWriteBudget,
 } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { parseSalesFilters } from '@/lib/server/sales-filters';
 import { normalizeSerial } from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import type {
   AttachmentRecord,
+  OrderStatusColor,
   SaleItemRecord,
   SalePaymentRecord,
   SaleRecord,
+  SalesAnalytics,
   SalesGroupRecord,
+  SalesGrouping,
   SalesPage,
 } from '@/lib/pdv-types';
 
@@ -52,7 +56,14 @@ type SaleAttachmentRow = {
   kind: 'item_photo' | 'receipt';
   saleItemId: string | null;
 };
-type SaleListRow = Omit<SaleRecord, 'items' | 'payments' | 'receipts'>;
+type SaleListRow = Omit<
+  SaleRecord,
+  'items' | 'payments' | 'receipts' | 'orderStatus'
+> & {
+  orderStatusId: string | null;
+  orderStatusName: string | null;
+  orderStatusColor: OrderStatusColor | null;
+};
 type SaleItemListRow = Omit<SaleItemRecord, 'photos'> & { saleId: string };
 type SalePaymentListRow = SalePaymentRecord & { saleId: string };
 type SaleAttachmentListRow = Omit<AttachmentRecord, 'url'> & {
@@ -70,65 +81,20 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const grouping = url.searchParams.get('group');
     const group =
-      grouping === 'model' || grouping === 'customer' ? grouping : 'sale';
-    const pageSize = Math.min(
-      99,
-      Math.max(10, Math.trunc(Number(url.searchParams.get('limit')) || 50)),
-    );
-    let from = optionalMillis(url.searchParams.get('from'), 'Data inicial');
-    let to = optionalMillis(url.searchParams.get('to'), 'Data final');
-    if (from === null && to === null) {
-      to = Date.now() + 24 * 60 * 60 * 1000;
-      from = to - 367 * 24 * 60 * 60 * 1000;
-    }
-    if (to === null)
-      to = Math.min(
-        Date.now() + 24 * 60 * 60 * 1000,
-        from! + 367 * 24 * 60 * 60 * 1000,
-      );
-    if (from === null) from = to - 367 * 24 * 60 * 60 * 1000;
-    if (from !== null && to !== null && from >= to) {
-      throw new HttpError(400, 'Período inválido.', 'INVALID_PERIOD');
-    }
-    if (to - from > 367 * 24 * 60 * 60 * 1000) {
-      throw new HttpError(
-        400,
-        'Consulte no máximo 12 meses por vez.',
-        'PERIOD_TOO_LARGE',
-      );
-    }
-    const query = utf8Prefix((url.searchParams.get('q') ?? '').trim(), 48);
-    const where = ['s.store_id = ?'];
-    const bindings: Array<string | number> = [storeId];
-    if (from !== null) {
-      where.push('s.created_at >= ?');
-      bindings.push(from);
-    }
-    if (to !== null) {
-      where.push('s.created_at < ?');
-      bindings.push(to);
-    }
-    if (query) {
-      const pattern = `%${query}%`;
-      where.push(`(
-        CAST(s.number AS TEXT) LIKE ? OR s.customer_name LIKE ? COLLATE NOCASE
-        OR s.seller_name LIKE ? COLLATE NOCASE OR EXISTS (
-          SELECT 1 FROM sale_items search_item
-          WHERE search_item.sale_id = s.id AND search_item.store_id = s.store_id
-            AND (search_item.product_name LIKE ? COLLATE NOCASE
-              OR search_item.product_detail LIKE ? COLLATE NOCASE
-              OR search_item.serial LIKE ? COLLATE NOCASE)
-        )
-      )`);
-      bindings.push(pattern, pattern, pattern, pattern, pattern, pattern);
-    }
+      grouping === 'model' ||
+      grouping === 'customer' ||
+      grouping === 'seller' ||
+      grouping === 'all'
+        ? grouping
+        : 'sale';
+    const { bindings, where } = parseSalesFilters(url, storeId);
     const filterSql = where.join(' AND ');
     const db = runtime().DB;
     await consumeStoreReadBudget(
       db,
       Date.now(),
       storeId,
-      group === 'sale' ? 10 : 12,
+      group === 'sale' ? 10 : group === 'all' ? 16 : 12,
     );
     const aggregateStatement = db
       .prepare(
@@ -147,38 +113,37 @@ export async function GET(request: Request) {
       )
       .bind(...bindings);
 
+    if (group === 'all') {
+      const results = await db.batch([
+        aggregateStatement,
+        salesGroupStatement(db, 'model', filterSql, bindings),
+        salesGroupStatement(db, 'customer', filterSql, bindings),
+        salesGroupStatement(db, 'seller', filterSql, bindings),
+      ]);
+      const aggregate = firstRow<{
+        total: number;
+        amountCents: number;
+        itemCount: number;
+        alertCount: number;
+      }>(results[0]);
+      return json({
+        groups: {
+          model: numericSalesGroups(results[1]),
+          customer: numericSalesGroups(results[2]),
+          seller: numericSalesGroups(results[3]),
+        },
+        total: Number(aggregate?.total ?? 0),
+        aggregates: numericSalesAggregates(aggregate),
+      } satisfies SalesAnalytics);
+    }
+
     if (group !== 'sale') {
-      const groupStatement =
-        group === 'model'
-          ? db
-              .prepare(
-                `SELECT si.product_name AS key, si.product_name AS label,
-                        COUNT(DISTINCT s.id) AS saleCount,
-                        COUNT(*) AS itemCount,
-                        COALESCE(SUM(si.sold_price_cents), 0) AS totalCents
-                 FROM sales s
-                 JOIN sale_items si ON si.sale_id = s.id AND si.store_id = s.store_id
-                 WHERE ${filterSql} AND s.status = 'completed'
-                 GROUP BY si.product_name
-                 ORDER BY totalCents DESC, label COLLATE NOCASE`,
-              )
-              .bind(...bindings)
-          : db
-              .prepare(
-                `SELECT COALESCE(s.customer_id, s.customer_name) AS key,
-                        s.customer_name AS label, COUNT(*) AS saleCount,
-                        COALESCE(SUM((
-                          SELECT COUNT(*) FROM sale_items customer_item
-                          WHERE customer_item.sale_id = s.id
-                            AND customer_item.store_id = s.store_id
-                        )), 0) AS itemCount,
-                        COALESCE(SUM(s.products_total_cents), 0) AS totalCents
-                 FROM sales s
-                 WHERE ${filterSql} AND s.status = 'completed'
-                 GROUP BY COALESCE(s.customer_id, s.customer_name), s.customer_name
-                 ORDER BY totalCents DESC, label COLLATE NOCASE`,
-              )
-              .bind(...bindings);
+      const groupStatement = salesGroupStatement(
+        db,
+        group,
+        filterSql,
+        bindings,
+      );
       const results = await db.batch([aggregateStatement, groupStatement]);
       const aggregate = firstRow<{
         total: number;
@@ -188,13 +153,17 @@ export async function GET(request: Request) {
       }>(results[0]);
       return json({
         items: [],
-        groups: resultRows<SalesGroupRecord>(results[1]),
+        groups: numericSalesGroups(results[1]),
         nextCursor: null,
         total: Number(aggregate?.total ?? 0),
         aggregates: numericSalesAggregates(aggregate),
       } satisfies SalesPage);
     }
 
+    const pageSize = Math.min(
+      99,
+      Math.max(10, Math.trunc(Number(url.searchParams.get('limit')) || 50)),
+    );
     const pageWhere = [...where];
     const pageBindings = [...bindings];
     const cursor = parseCursor(url.searchParams.get('cursor'));
@@ -206,6 +175,9 @@ export async function GET(request: Request) {
       .prepare(
         `SELECT s.id, s.number, s.customer_id AS customerId,
                 s.customer_name AS customerName, s.seller_name AS sellerName,
+                order_status.id AS orderStatusId,
+                order_status.name AS orderStatusName,
+                order_status.color AS orderStatusColor,
                 s.products_total_cents AS productsTotalCents,
                 s.received_total_cents AS receivedTotalCents,
                 s.received_difference_cents AS receivedDifferenceCents,
@@ -217,6 +189,9 @@ export async function GET(request: Request) {
                 s.cancellation_reason AS cancellationReason
          FROM sales s
          LEFT JOIN users cancelled_by ON cancelled_by.id = s.cancelled_by
+         LEFT JOIN order_statuses order_status
+           ON order_status.id = s.order_status_id
+          AND order_status.store_id = s.store_id
          WHERE ${pageWhere.join(' AND ')}
          ORDER BY s.created_at DESC, s.id DESC LIMIT ?`,
       )
@@ -327,7 +302,7 @@ export async function POST(request: Request) {
         'PAYLOAD_TOO_LARGE',
       );
     }
-    const payload = JSON.parse(payloadValue) as Record<string, unknown>;
+    const payload = parseJsonObject(payloadValue, 'Dados da venda inválidos.');
     const customerId = stringField(payload.customerId, 'Cliente', { max: 80 });
     const items = parseItems(payload.items);
     const payments = parsePayments(payload.payments);
@@ -514,13 +489,13 @@ export async function POST(request: Request) {
               account_name, amount_cents, created_at)
            SELECT incoming.id, ?, ?, incoming.method,
                   incoming.pix_account_id,
-                  CASE WHEN incoming.pix_account_id IS NULL THEN NULL ELSE (
-                    SELECT name FROM pix_accounts
-                    WHERE id = incoming.pix_account_id AND store_id = ?
-                      AND active = 1
-                  ) END,
+                  pix_account.name,
                   incoming.amount_cents, ?
-           FROM incoming`,
+           FROM incoming
+           LEFT JOIN pix_accounts pix_account
+             ON pix_account.id = incoming.pix_account_id
+            AND pix_account.store_id = ? AND pix_account.active = 1
+           WHERE incoming.method = 'cash' OR pix_account.id IS NOT NULL`,
         )
         .bind(
           ...rows.flatMap((payment) => [
@@ -531,8 +506,8 @@ export async function POST(request: Request) {
           ]),
           session.storeId,
           saleId,
-          session.storeId,
           now,
+          session.storeId,
         );
     });
     const attachmentRows: SaleAttachmentRow[] = [
@@ -563,14 +538,18 @@ export async function POST(request: Request) {
             seller_user_id, seller_name, products_total_cents,
             received_total_cents, received_difference_cents,
             reference_total_cents, price_difference_cents, status, created_at)
-           SELECT ?, stores.id, stores.next_sale_number, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+           SELECT ?, stores.id, stores.next_sale_number,
+                  active_customer.id, active_customer.name,
+                  ?, ?, ?, ?, ?, ?, ?,
                   'completed', ?
-           FROM stores WHERE stores.id = ?`,
+           FROM stores
+           JOIN clients active_customer
+             ON active_customer.id = ? AND active_customer.store_id = stores.id
+            AND active_customer.active = 1
+           WHERE stores.id = ?`,
         )
         .bind(
           saleId,
-          customer.id,
-          customer.name,
           session.id,
           session.displayName,
           productsTotalCents,
@@ -579,19 +558,22 @@ export async function POST(request: Request) {
           referenceTotalCents,
           priceDifferenceCents,
           now,
+          customer.id,
           session.storeId,
         ),
       db
         .prepare(
           `UPDATE stores
-           SET next_sale_number = next_sale_number + 1, updated_at = ?
-           WHERE id = ? AND EXISTS (
-             SELECT 1 FROM sales
-             WHERE id = ? AND store_id = stores.id
-               AND number = stores.next_sale_number
-           )`,
+           SET next_sale_number = CASE WHEN EXISTS (
+                 SELECT 1 FROM sales
+                 WHERE id = ? AND store_id = stores.id
+                   AND number = stores.next_sale_number
+               )
+             THEN next_sale_number + 1 ELSE NULL END,
+             updated_at = ?
+           WHERE id = ?`,
         )
-        .bind(now, session.storeId, saleId),
+        .bind(saleId, now, session.storeId),
       db
         .prepare(
           `UPDATE inventory_units
@@ -607,6 +589,22 @@ export async function POST(request: Request) {
         ),
       ...saleItemStatements,
       ...paymentStatements,
+      db
+        .prepare(
+          `UPDATE sales
+           SET customer_name = CASE WHEN (
+             SELECT COUNT(*) FROM payments
+             WHERE sale_id = ? AND store_id = ?
+           ) = ? THEN customer_name ELSE NULL END
+           WHERE id = ? AND store_id = ?`,
+        )
+        .bind(
+          saleId,
+          session.storeId,
+          payments.length,
+          saleId,
+          session.storeId,
+        ),
       ...attachmentStatements,
     ];
     statements.push(
@@ -617,9 +615,6 @@ export async function POST(request: Request) {
            VALUES (?, ?, ?, 'sale.created', 'sale',
              CASE WHEN (
                  SELECT COUNT(*) FROM sale_items
-                 WHERE sale_id = ? AND store_id = ?
-               ) = ? AND (
-                 SELECT COUNT(*) FROM payments
                  WHERE sale_id = ? AND store_id = ?
                ) = ?
              THEN ? ELSE NULL END,
@@ -632,9 +627,6 @@ export async function POST(request: Request) {
           saleId,
           session.storeId,
           items.length,
-          saleId,
-          session.storeId,
-          payments.length,
           saleId,
           JSON.stringify({
             items: items.length,
@@ -709,6 +701,44 @@ export async function POST(request: Request) {
           409,
           'Um dos aparelhos acabou de ser vendido em outra operação. Atualize e tente novamente.',
           'SERIAL_UNAVAILABLE',
+        ),
+      );
+    }
+    if (
+      error instanceof Error &&
+      /NOT NULL constraint failed:\s*sales\.customer_name/i.test(error.message)
+    ) {
+      return apiError(
+        new HttpError(
+          409,
+          'Uma conta Pix foi alterada durante o envio. Selecione uma conta ativa e tente novamente.',
+          'PIX_ACCOUNT_INVALID',
+        ),
+      );
+    }
+    if (
+      error instanceof Error &&
+      /NOT NULL constraint failed:\s*stores\.next_sale_number/i.test(
+        error.message,
+      )
+    ) {
+      return apiError(
+        new HttpError(
+          409,
+          'O cliente foi alterado durante o envio. Selecione um cliente ativo e tente novamente.',
+          'CUSTOMER_NOT_FOUND',
+        ),
+      );
+    }
+    if (
+      error instanceof Error &&
+      /FOREIGN KEY constraint failed/i.test(error.message)
+    ) {
+      return apiError(
+        new HttpError(
+          409,
+          'O cliente foi alterado durante o envio. Selecione um cliente ativo e tente novamente.',
+          'CUSTOMER_NOT_FOUND',
         ),
       );
     }
@@ -926,9 +956,19 @@ async function hydrateSales(
     });
     paymentsBySale.set(payment.saleId, payments);
   }
-  return sales.map(
-    (sale): SaleRecord => ({
-      ...sale,
+  return sales.map((sale): SaleRecord => {
+    const { orderStatusId, orderStatusName, orderStatusColor, ...baseSale } =
+      sale;
+    return {
+      ...baseSale,
+      orderStatus:
+        orderStatusId && orderStatusName && orderStatusColor
+          ? {
+              id: orderStatusId,
+              name: orderStatusName,
+              color: orderStatusColor,
+            }
+          : null,
       number: Number(sale.number),
       productsTotalCents: Number(sale.productsTotalCents),
       receivedTotalCents: Number(sale.receivedTotalCents),
@@ -940,8 +980,8 @@ async function hydrateSales(
       items: itemsBySale.get(sale.id) ?? [],
       payments: paymentsBySale.get(sale.id) ?? [],
       receipts: receiptsBySale.get(sale.id) ?? [],
-    }),
-  );
+    };
+  });
 }
 
 function attachmentRecord(file: Omit<AttachmentRecord, 'url'>) {
@@ -952,6 +992,95 @@ function attachmentRecord(file: Omit<AttachmentRecord, 'url'>) {
     sizeBytes: Number(file.sizeBytes),
     url: `/api/files/${file.id}`,
   } satisfies AttachmentRecord;
+}
+
+function salesGroupStatement(
+  db: D1Database,
+  group: SalesGrouping,
+  filterSql: string,
+  bindings: Array<string | number>,
+) {
+  if (group === 'model') {
+    return db
+      .prepare(
+        `SELECT si.product_name AS key, si.product_name AS label,
+                COUNT(DISTINCT s.id) AS saleCount,
+                COUNT(si.id) AS itemCount,
+                COALESCE(SUM(si.sold_price_cents), 0) AS totalCents
+         FROM sales s
+         JOIN sale_items si ON si.sale_id = s.id AND si.store_id = s.store_id
+         WHERE ${filterSql} AND s.status = 'completed'
+         GROUP BY si.product_name
+         ORDER BY totalCents DESC, label COLLATE NOCASE
+         LIMIT 1000`,
+      )
+      .bind(...bindings);
+  }
+  if (group === 'customer') {
+    return db
+      .prepare(
+        `SELECT COALESCE(s.customer_id, 'legacy:' || s.customer_name) AS key,
+                COALESCE(c.name, s.customer_name) AS label,
+                COUNT(DISTINCT s.id) AS saleCount,
+                COUNT(si.id) AS itemCount,
+                COALESCE(SUM(si.sold_price_cents), 0) AS totalCents
+         FROM sales s
+         JOIN sale_items si ON si.sale_id = s.id AND si.store_id = s.store_id
+         LEFT JOIN clients c ON c.id = s.customer_id AND c.store_id = s.store_id
+         WHERE ${filterSql} AND s.status = 'completed'
+         GROUP BY COALESCE(s.customer_id, 'legacy:' || s.customer_name),
+                  COALESCE(c.name, s.customer_name)
+         ORDER BY totalCents DESC, label COLLATE NOCASE
+         LIMIT 5000`,
+      )
+      .bind(...bindings);
+  }
+  return db
+    .prepare(
+      `WITH seller_totals AS (
+         SELECT COALESCE(s.seller_user_id, 'legacy:' || s.seller_name) AS key,
+                COALESCE(NULLIF(u.display_name, ''), s.seller_name,
+                         'Sem vendedor') AS label,
+                COUNT(DISTINCT s.id) AS saleCount,
+                COUNT(si.id) AS itemCount,
+                COALESCE(SUM(si.sold_price_cents), 0) AS totalCents
+         FROM sales s
+         JOIN sale_items si ON si.sale_id = s.id AND si.store_id = s.store_id
+         LEFT JOIN users u ON u.id = s.seller_user_id
+         WHERE ${filterSql} AND s.status = 'completed'
+         GROUP BY COALESCE(s.seller_user_id, 'legacy:' || s.seller_name),
+                  COALESCE(NULLIF(u.display_name, ''), s.seller_name,
+                           'Sem vendedor')
+       )
+       SELECT key, label, saleCount, itemCount, totalCents,
+              DENSE_RANK() OVER (
+                ORDER BY itemCount DESC
+              ) AS rankByItems,
+              DENSE_RANK() OVER (
+                ORDER BY totalCents DESC
+              ) AS rankByValue
+       FROM seller_totals
+       ORDER BY itemCount DESC, totalCents DESC, label COLLATE NOCASE
+       LIMIT 100`,
+    )
+    .bind(...bindings);
+}
+
+function numericSalesGroups(result: D1Result<unknown>) {
+  return resultRows<SalesGroupRecord>(result).map((row) => ({
+    ...row,
+    saleCount: Number(row.saleCount),
+    itemCount: Number(row.itemCount),
+    totalCents: Number(row.totalCents),
+    rankByItems:
+      row.rankByItems === undefined || row.rankByItems === null
+        ? undefined
+        : Number(row.rankByItems),
+    rankByValue:
+      row.rankByValue === undefined || row.rankByValue === null
+        ? undefined
+        : Number(row.rankByValue),
+  }));
 }
 
 function numericSalesAggregates(
@@ -969,15 +1098,6 @@ function numericSalesAggregates(
     itemCount: Number(value?.itemCount ?? 0),
     alertCount: Number(value?.alertCount ?? 0),
   };
-}
-
-function optionalMillis(value: string | null, label: string) {
-  if (value === null || value === '') return null;
-  const number = Number(value);
-  if (!Number.isSafeInteger(number) || number < 0) {
-    throw new HttpError(400, `${label} inválida.`, 'INVALID_DATE');
-  }
-  return number;
 }
 
 function encodeCursor(createdAt: number, id: string) {
