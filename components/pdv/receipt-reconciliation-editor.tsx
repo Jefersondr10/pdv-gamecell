@@ -278,7 +278,7 @@ export function ReconciliationSummary({
           : reconciled
             ? 'Conciliado'
             : divergent
-              ? 'Verificar venda'
+              ? 'Comprovantes não conferem'
               : 'Conciliação pendente'}
       </p>
       <p className="mt-0.5">
@@ -287,7 +287,7 @@ export function ReconciliationSummary({
           : reconciled
             ? `Comprovantes: ${formatMoney(reconciliation.confirmedTotalCents)} · venda: ${formatMoney(targetCents)}.`
             : divergent
-              ? `${(reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} nos comprovantes.`
+              ? `Os comprovantes estão ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} ${(reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do valor da venda.`
               : `${reconciliation.pendingReceiptCount} comprovante(s) ainda sem valor confirmado.`}
       </p>
     </div>
@@ -308,7 +308,6 @@ export function SavedReceiptValueEditor({
   value: ReceiptValueInput;
 }) {
   const [state, setState] = useState<AnalysisState | null>(null);
-  const autoAttemptedRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
   const onAutoValueFoundRef = useRef(onAutoValueFound);
   const onValueChangeRef = useRef(onValueChange);
@@ -332,127 +331,38 @@ export function SavedReceiptValueEditor({
     valueRef.current = value;
   }, [onAutoValueFound, onValueChange, receiptIdentity, value]);
 
-  const readSavedReceipt = useCallback(
-    async (automatic = false) => {
-      if (readingReceiptRef.current === receiptIdentity) return;
+  const readSavedReceipt = useCallback(async () => {
+    if (readingReceiptRef.current === receiptIdentity) return;
 
-      const currentValue = valueRef.current;
-      if (currentValue.amountCents !== null && currentValue.source !== 'ocr') {
-        setState({
-          message:
-            'O valor manual foi preservado. Apague-o para usar a leitura automática.',
-          progress: 1,
-          status: 'manual',
-        });
-        return;
-      }
-
-      readingReceiptRef.current = receiptIdentity;
+    const currentValue = valueRef.current;
+    if (currentValue.amountCents !== null && currentValue.source !== 'ocr') {
       setState({
-        message: automatic
-          ? 'Leitura automática: baixando o comprovante…'
-          : 'Baixando o comprovante neste aparelho…',
-        progress: 0,
-        status: 'reading',
+        message:
+          'O valor manual foi preservado. Apague-o para usar a leitura automática.',
+        progress: 1,
+        status: 'manual',
       });
-      try {
-        const response = await fetch(receipt.url, {
-          cache: 'no-store',
-          credentials: 'same-origin',
-        });
-        if (!response.ok) throw new Error('receipt download failed');
-        const blob = await response.blob();
-        const file = new File([blob], receipt.name, {
-          type: receipt.mimeType || blob.type,
-        });
-        const { readReceiptAmount } = await import('@/lib/client-receipt-ocr');
-        const suggestion = await readReceiptAmount(file, (progress) => {
-          if (
-            !mountedRef.current ||
-            receiptIdentityRef.current !== receiptIdentity ||
-            (valueRef.current.amountCents !== null &&
-              valueRef.current.source !== 'ocr')
-          ) {
-            return;
-          }
-          setState({
-            message:
-              progress < 0.4
-                ? automatic
-                  ? 'Preparando a leitura automática…'
-                  : 'Preparando leitura local…'
-                : automatic
-                  ? 'Leitura automática do valor em andamento…'
-                  : 'Lendo valor da transação…',
-            progress,
-            status: 'reading',
-          });
-        });
-        if (
-          !mountedRef.current ||
-          receiptIdentityRef.current !== receiptIdentity
-        ) {
-          return;
-        }
+      return;
+    }
 
-        const latestValue = valueRef.current;
-        if (latestValue.amountCents !== null && latestValue.source !== 'ocr') {
-          return;
-        }
-
-        if (!suggestion) {
-          setState({
-            message:
-              'Valor não identificado. Digite abaixo ou tente novamente.',
-            progress: 1,
-            status: 'missing',
-          });
-          return;
-        }
-
-        const nextValue: ReceiptValueInput = {
-          amountCents: suggestion.amountCents,
-          source: 'ocr',
-        };
-        valueRef.current = nextValue;
-        onValueChangeRef.current(nextValue);
-
-        const persistAutomatically = onAutoValueFoundRef.current;
-        if (persistAutomatically) {
-          try {
-            await persistAutomatically(nextValue);
-          } catch {
-            if (
-              mountedRef.current &&
-              receiptIdentityRef.current === receiptIdentity &&
-              valueRef.current.source !== 'manual'
-            ) {
-              setState({
-                message:
-                  'Valor encontrado. Salve as alterações para confirmar.',
-                progress: 1,
-                status: 'found',
-              });
-            }
-            return;
-          }
-        }
-
-        if (
-          !mountedRef.current ||
-          receiptIdentityRef.current !== receiptIdentity ||
-          valueRef.current.source === 'manual'
-        ) {
-          return;
-        }
-        setState({
-          message: persistAutomatically
-            ? 'Valor encontrado e salvo automaticamente.'
-            : 'Valor encontrado. Confira antes de salvar.',
-          progress: 1,
-          status: 'found',
-        });
-      } catch {
+    readingReceiptRef.current = receiptIdentity;
+    setState({
+      message: 'Baixando o comprovante neste aparelho…',
+      progress: 0,
+      status: 'reading',
+    });
+    try {
+      const response = await fetch(receipt.url, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) throw new Error('receipt download failed');
+      const blob = await response.blob();
+      const file = new File([blob], receipt.name, {
+        type: receipt.mimeType || blob.type,
+      });
+      const { readReceiptAmount } = await import('@/lib/client-receipt-ocr');
+      const suggestion = await readReceiptAmount(file, (progress) => {
         if (
           !mountedRef.current ||
           receiptIdentityRef.current !== receiptIdentity ||
@@ -463,33 +373,95 @@ export function SavedReceiptValueEditor({
         }
         setState({
           message:
-            'Não foi possível ler automaticamente. Digite o valor ou tente novamente.',
-          progress: 1,
-          status: 'error',
+            progress < 0.4
+              ? 'Preparando leitura local…'
+              : 'Lendo valor da transação…',
+          progress,
+          status: 'reading',
         });
-      } finally {
-        if (readingReceiptRef.current === receiptIdentity) {
-          readingReceiptRef.current = null;
+      });
+      if (
+        !mountedRef.current ||
+        receiptIdentityRef.current !== receiptIdentity
+      ) {
+        return;
+      }
+
+      const latestValue = valueRef.current;
+      if (latestValue.amountCents !== null && latestValue.source !== 'ocr') {
+        return;
+      }
+
+      if (!suggestion) {
+        setState({
+          message: 'Valor não identificado. Digite abaixo ou tente novamente.',
+          progress: 1,
+          status: 'missing',
+        });
+        return;
+      }
+
+      const nextValue: ReceiptValueInput = {
+        amountCents: suggestion.amountCents,
+        source: 'ocr',
+      };
+      valueRef.current = nextValue;
+      onValueChangeRef.current(nextValue);
+
+      const persistAutomatically = onAutoValueFoundRef.current;
+      if (persistAutomatically) {
+        try {
+          await persistAutomatically(nextValue);
+        } catch {
+          if (
+            mountedRef.current &&
+            receiptIdentityRef.current === receiptIdentity &&
+            valueRef.current.source !== 'manual'
+          ) {
+            setState({
+              message: 'Valor encontrado. Salve as alterações para confirmar.',
+              progress: 1,
+              status: 'found',
+            });
+          }
+          return;
         }
       }
-    },
-    [receipt.mimeType, receipt.name, receipt.url, receiptIdentity],
-  );
 
-  useEffect(() => {
-    if (autoAttemptedRef.current === receiptIdentity) return;
-    if (value.amountCents !== null) {
-      autoAttemptedRef.current = receiptIdentity;
-      return;
+      if (
+        !mountedRef.current ||
+        receiptIdentityRef.current !== receiptIdentity ||
+        valueRef.current.source === 'manual'
+      ) {
+        return;
+      }
+      setState({
+        message: persistAutomatically
+          ? 'Valor encontrado e salvo.'
+          : 'Valor encontrado. Confira antes de salvar.',
+        progress: 1,
+        status: 'found',
+      });
+    } catch {
+      if (
+        !mountedRef.current ||
+        receiptIdentityRef.current !== receiptIdentity ||
+        (valueRef.current.amountCents !== null &&
+          valueRef.current.source !== 'ocr')
+      ) {
+        return;
+      }
+      setState({
+        message: 'Não foi possível ler. Digite o valor ou tente novamente.',
+        progress: 1,
+        status: 'error',
+      });
+    } finally {
+      if (readingReceiptRef.current === receiptIdentity) {
+        readingReceiptRef.current = null;
+      }
     }
-    if (disabled) return;
-    const timeoutId = window.setTimeout(() => {
-      if (autoAttemptedRef.current === receiptIdentity) return;
-      autoAttemptedRef.current = receiptIdentity;
-      void readSavedReceipt(true);
-    }, 0);
-    return () => window.clearTimeout(timeoutId);
-  }, [disabled, readSavedReceipt, receiptIdentity, value.amountCents]);
+  }, [receipt.mimeType, receipt.name, receipt.url, receiptIdentity]);
 
   return (
     <div className="rounded-xl border bg-muted/20 p-2.5">
@@ -504,7 +476,7 @@ export function SavedReceiptValueEditor({
         </a>
         <Button
           disabled={disabled || reading}
-          onClick={() => void readSavedReceipt(false)}
+          onClick={() => void readSavedReceipt()}
           size="sm"
           type="button"
           variant="outline"

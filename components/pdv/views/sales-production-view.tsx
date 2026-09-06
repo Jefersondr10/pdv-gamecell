@@ -11,7 +11,6 @@ import {
   Camera,
   CircleAlert,
   Download,
-  Equal,
   FileCheck2,
   FileText,
   ImagePlus,
@@ -2417,7 +2416,7 @@ function SaleReport({
                       getPaymentComparison(sale) === 'under' &&
                         'border-rose-200 bg-rose-50 text-rose-950',
                       getPaymentComparison(sale) === 'equal' &&
-                        'border-blue-200 bg-blue-50 text-blue-950',
+                        'border-emerald-200 bg-emerald-50 text-emerald-950',
                       getPaymentComparison(sale) === 'over' &&
                         'border-violet-200 bg-violet-50 text-violet-950',
                       getPaymentComparison(sale) === 'unset' &&
@@ -3045,7 +3044,7 @@ function SalesPeriodReport({
                                   'border-violet-300 bg-violet-50/30',
                                 sale.status === 'completed' &&
                                   sale.receivedDifferenceCents === 0 &&
-                                  'border-blue-300 bg-blue-50/30',
+                                  'border-emerald-300 bg-emerald-50/30',
                               )}
                               key={sale.id}
                             >
@@ -3058,7 +3057,7 @@ function SalesPeriodReport({
                                       ? 'bg-rose-100/80'
                                       : sale.receivedDifferenceCents > 0
                                         ? 'bg-violet-100/80'
-                                        : 'bg-blue-100/80',
+                                        : 'bg-emerald-100/80',
                                 )}
                               >
                                 <div className="min-w-0">
@@ -3513,7 +3512,7 @@ function SalePaymentComparison({ sale }: { sale: SaleRecord }) {
       className={cn(
         'w-full rounded-xl border px-2.5 py-2 sm:mr-2 sm:w-auto sm:min-w-[12rem]',
         comparison === 'equal' &&
-          'border-blue-200 bg-blue-50/90 dark:border-blue-900 dark:bg-blue-950/35',
+          'border-emerald-300 bg-emerald-50/90 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-50',
         comparison === 'under' &&
           'border-rose-200 bg-rose-50/90 dark:border-rose-900 dark:bg-rose-950/35',
         comparison === 'over' &&
@@ -3523,20 +3522,49 @@ function SalePaymentComparison({ sale }: { sale: SaleRecord }) {
       )}
     >
       <PaymentComparisonLabel comparison={comparison} />
-      <dl className="mt-1 grid grid-cols-2 gap-x-3 text-right">
+      <dl
+        className={cn(
+          'grid grid-cols-2 gap-x-3 text-right',
+          comparison !== 'equal' && 'mt-1',
+        )}
+      >
         <div>
-          <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
+          <dt
+            className={cn(
+              'text-[.6rem] font-bold uppercase',
+              comparison === 'equal'
+                ? 'text-emerald-700 dark:text-emerald-300'
+                : 'text-muted-foreground',
+            )}
+          >
             Valor da venda
           </dt>
-          <dd className="text-sm font-extrabold tabular-nums">
+          <dd
+            className={cn(
+              'text-sm font-extrabold tabular-nums',
+              comparison === 'equal' && 'text-emerald-950 dark:text-emerald-50',
+            )}
+          >
             {formatMoney(sale.productsTotalCents)}
           </dd>
         </div>
         <div>
-          <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
+          <dt
+            className={cn(
+              'text-[.6rem] font-bold uppercase',
+              comparison === 'equal'
+                ? 'text-emerald-700 dark:text-emerald-300'
+                : 'text-muted-foreground',
+            )}
+          >
             Total pago
           </dt>
-          <dd className="text-sm font-extrabold tabular-nums">
+          <dd
+            className={cn(
+              'text-sm font-extrabold tabular-nums',
+              comparison === 'equal' && 'text-emerald-950 dark:text-emerald-50',
+            )}
+          >
             {formatMoney(sale.receivedTotalCents)}
           </dd>
         </div>
@@ -3554,33 +3582,27 @@ function PaymentComparisonLabel({
   className?: string;
   surface?: 'app' | 'report';
 }) {
+  if (comparison === 'equal') return null;
+
   const Icon =
-    comparison === 'equal'
-      ? Equal
-      : comparison === 'under'
-        ? ArrowDown
-        : comparison === 'over'
-          ? ArrowUp
-          : CircleAlert;
+    comparison === 'under'
+      ? ArrowDown
+      : comparison === 'over'
+        ? ArrowUp
+        : CircleAlert;
   const text =
-    comparison === 'equal'
-      ? 'Pago igual à venda'
-      : comparison === 'under'
-        ? 'Pago abaixo da venda'
-        : comparison === 'over'
-          ? 'Pago acima da venda'
-          : comparison === 'cancelled'
-            ? 'Venda cancelada'
-            : 'Valor não definido';
+    comparison === 'under'
+      ? 'Pago abaixo da venda'
+      : comparison === 'over'
+        ? 'Pago acima da venda'
+        : comparison === 'cancelled'
+          ? 'Venda cancelada'
+          : 'Valor não definido';
 
   return (
     <p
       className={cn(
         'flex items-center justify-end gap-1 text-xs font-black uppercase tracking-wide',
-        comparison === 'equal' &&
-          (surface === 'report'
-            ? 'text-blue-800'
-            : 'text-blue-700 dark:text-blue-300'),
         comparison === 'under' &&
           (surface === 'report'
             ? 'text-rose-800'

@@ -28,6 +28,7 @@ type ReceiptOcrContext = {
 type ReceiptValue = { amountCents: number | null };
 
 const QUEUE_KEY_PREFIX = 'atacadoapple:receipt-ocr:v1';
+const MAX_ATTEMPTS = 3;
 const RETRY_START_MS = 30_000;
 const RETRY_MAX_MS = 60 * 60_000;
 
@@ -138,6 +139,7 @@ async function runQueue() {
       scheduleRunner(Math.min(waitMs, RETRY_MAX_MS));
       return;
     }
+    if (navigator.onLine === false) return;
 
     try {
       const updated = await processJob(next, context);
@@ -147,6 +149,11 @@ async function runQueue() {
     } catch (error) {
       if (error instanceof QueuePausedError) return;
       if (error instanceof PermanentJobError) {
+        await removeJob(next);
+        sourceFiles.delete(jobIdOf(next));
+        continue;
+      }
+      if (next.attempts + 1 >= MAX_ATTEMPTS) {
         await removeJob(next);
         sourceFiles.delete(jobIdOf(next));
         continue;

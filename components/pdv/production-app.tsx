@@ -1378,11 +1378,12 @@ function GuideDialog({
             do valor acontece automaticamente no próprio aparelho. Você pode
             salvar a venda enquanto ela continua; quando terminar, a venda é
             atualizada sem recarregar a página. Também é possível salvar sem
-            informar pagamento e completar depois.
+            informar pagamento e completar depois. Ao reabrir uma venda, a
+            leitura não é repetida; use Ler novamente somente quando desejar.
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
-            compara visualmente Valor da venda e Total pago: azul quando são
+            compara visualmente Valor da venda e Total pago: verde quando são
             iguais, vermelho quando falta receber e violeta quando foi pago a
             mais. A conferência dos comprovantes aparece separadamente, em roxo,
             para não ser confundida com pagamento pendente. Alterar o preço de
