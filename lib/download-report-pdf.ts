@@ -44,7 +44,7 @@ export async function downloadReportPdf({
     scale,
     useCORS: true,
     width: contentWidth,
-    windowWidth: contentWidth,
+    windowWidth: Math.max(window.innerWidth, contentWidth),
   });
   if (!canvas.width || !canvas.height) {
     throw new Error('O relatório não possui conteúdo para baixar.');

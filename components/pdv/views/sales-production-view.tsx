@@ -5,18 +5,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  CalendarDays,
   Camera,
+  CircleAlert,
   Download,
   FileCheck2,
   FileText,
   ImagePlus,
+  ListFilter,
   LoaderCircle,
   Paperclip,
   Pencil,
   Plus,
+  ReceiptText,
   Search,
+  SlidersHorizontal,
   Smartphone,
+  Trophy,
   UserRound,
+  UsersRound,
   WalletCards,
   XCircle,
 } from 'lucide-react';
@@ -103,6 +110,9 @@ const PERIOD_OPTIONS: Array<{ label: string; value: PeriodFilter }> = [
   { label: 'Todo período', value: 'all' },
 ];
 const ANALYTICS_CACHE_MS = 5 * 60 * 1000;
+const PERIOD_REPORT_SALES_LIMIT = 250;
+const PERIOD_REPORT_MEDIA_LIMIT = 40;
+const PERIOD_REPORT_MEDIA_BYTES_LIMIT = 25 * 1024 * 1024;
 
 function emptySalesPage(): SalesPage {
   return {
@@ -145,6 +155,8 @@ export function SalesProductionView({
   const [issueFilter, setIssueFilter] = useState<IssueFilter>('all');
   const [orderStatusFilter, setOrderStatusFilter] = useState('all');
   const [sellerRanking, setSellerRanking] = useState<SellerRanking>('items');
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [periodReportOpen, setPeriodReportOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<SelectedGroup | null>(
     null,
   );
@@ -360,10 +372,36 @@ export function SalesProductionView({
         ? listError
         : ''
       : analyticsError;
+  const reportFilterSummary = useMemo(() => {
+    const pieces = [periodDescription(period, selectedDay, selectedMonth)];
+    if (query) pieces.push(`Busca: ${query}`);
+    if (alertOnly) pieces.push('Somente vendas com avisos');
+    if (issueFilter === 'missing_receipt') pieces.push('Sem comprovante');
+    if (issueFilter === 'pending_payment') pieces.push('Pagamento pendente');
+    if (orderStatusFilter === 'none') pieces.push('Sem status de pedido');
+    else if (orderStatusFilter !== 'all') {
+      const status = data.orderStatuses.find(
+        (candidate) => candidate.id === orderStatusFilter,
+      );
+      if (status) pieces.push(`Status: ${status.name}`);
+    }
+    return pieces.join(' · ');
+  }, [
+    alertOnly,
+    data.orderStatuses,
+    issueFilter,
+    orderStatusFilter,
+    period,
+    query,
+    selectedDay,
+    selectedMonth,
+  ]);
   const activeCount =
     grouping === 'sale' ? page.items.length : groupRows.length;
   const activeTotal =
     grouping === 'sale' ? page.total : (analytics?.total ?? 0);
+  const additionalFilterCount =
+    Number(issueFilter !== 'all') + Number(orderStatusFilter !== 'all');
 
   const reloadActive = async () => {
     if (grouping === 'sale') await loadSales(null, false, true);
@@ -371,18 +409,29 @@ export function SalesProductionView({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-3 py-3 sm:px-6 sm:py-5 lg:px-10">
-      <div className="mb-3 shrink-0">
-        <p className="eyebrow">Comercial</p>
-        <h1 className="mt-0.5 text-2xl font-bold tracking-[-.04em] sm:text-3xl">
-          Vendas
-        </h1>
-        <p className="mt-1 hidden text-sm text-muted-foreground sm:block">
-          Filtre o período, veja por venda, modelo, cliente ou vendedor e abra
-          os SNs de cada grupo.
-        </p>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden px-2 py-2 sm:px-6 sm:py-5 lg:px-10">
+      <div className="mb-2 flex shrink-0 items-end justify-between gap-3 sm:mb-3">
+        <div className="min-w-0">
+          <p className="eyebrow hidden sm:block">Comercial</p>
+          <h1 className="text-xl font-black tracking-[-.04em] sm:mt-0.5 sm:text-3xl">
+            Vendas
+          </h1>
+          <p className="mt-1 hidden text-sm text-muted-foreground sm:block">
+            Filtre o período, veja por venda, modelo, cliente ou vendedor e abra
+            os SNs de cada grupo.
+          </p>
+        </div>
+        <Button
+          className="h-9 rounded-xl bg-gradient-to-r from-blue-700 to-cyan-600 px-3 font-extrabold text-white shadow-sm hover:from-blue-800 hover:to-cyan-700"
+          onClick={() => setPeriodReportOpen(true)}
+          type="button"
+        >
+          <Download />
+          <span className="sm:hidden">Relatório</span>
+          <span className="hidden sm:inline">Relatório de vendas</span>
+        </Button>
       </div>
-      <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-4">
+      <div className="mb-2 grid shrink-0 grid-cols-4 gap-1 sm:mb-3 sm:grid-cols-2 sm:gap-2 lg:grid-cols-4">
         <Metric
           active={grouping === 'sale' && !alertOnly}
           comparison={
@@ -398,6 +447,7 @@ export function SalesProductionView({
               : null
           }
           label="Vendas concluídas"
+          mobileLabel="Vendas"
           onClick={() => {
             setAlertOnly(false);
             setIssueFilter('all');
@@ -422,6 +472,8 @@ export function SalesProductionView({
               : null
           }
           label="Montante vendido"
+          mobileLabel="Valor"
+          mobileValue={formatCompactMoney(activeAggregates.amountCents)}
           onClick={() => {
             setAlertOnly(false);
             setIssueFilter('all');
@@ -446,6 +498,7 @@ export function SalesProductionView({
               : null
           }
           label="Aparelhos"
+          mobileLabel="Aparelhos"
           onClick={() => {
             setAlertOnly(false);
             setIssueFilter('all');
@@ -470,6 +523,7 @@ export function SalesProductionView({
               : null
           }
           label="Avisos"
+          mobileLabel="Avisos"
           onClick={() => {
             setAlertOnly(true);
             setIssueFilter('all');
@@ -481,71 +535,112 @@ export function SalesProductionView({
         />
       </div>
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 space-y-2 border-b bg-gradient-to-r from-slate-50/80 via-background to-blue-50/60 p-3 dark:from-slate-950/40 dark:to-blue-950/20 sm:p-4">
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_auto_auto_auto]">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-10 rounded-xl bg-background pl-9 font-semibold shadow-sm"
-                onChange={(event) => setQueryDraft(event.target.value)}
-                placeholder="Cliente, vendedor, modelo, venda ou SN"
-                value={queryDraft}
-              />
-            </div>
-            <NativeSelect
-              aria-label="Período das vendas"
-              className="h-10 w-full rounded-xl bg-background shadow-sm xl:w-48 [&_select]:h-10 [&_select]:font-bold [&_select]:tracking-[-.01em]"
-              onChange={(event) =>
-                setPeriod(event.target.value as PeriodFilter)
-              }
-              value={period}
-            >
-              {PERIOD_OPTIONS.map((option) => (
-                <NativeSelectOption key={option.value} value={option.value}>
-                  {option.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <NativeSelect
-              aria-label="Pendência da venda"
-              className="h-10 w-full rounded-xl bg-background shadow-sm xl:w-52 [&_select]:h-10 [&_select]:font-bold [&_select]:tracking-[-.01em]"
-              onChange={(event) => {
-                const next = event.target.value as IssueFilter;
-                setIssueFilter(next);
-                if (next !== 'all') {
-                  setAlertOnly(false);
-                  setGrouping('sale');
+        <CardHeader className="shrink-0 space-y-2 border-b bg-gradient-to-r from-slate-50/80 via-background to-blue-50/60 p-2 dark:from-slate-950/40 dark:to-blue-950/20 sm:p-4">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_13rem_14rem_14rem]">
+            <label className="col-span-2 min-w-0 md:col-span-1">
+              <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
+                <Search className="size-3 text-blue-600" /> Pesquisar vendas
+              </span>
+              <span className="relative block">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-blue-600" />
+                <Input
+                  className="h-11 rounded-xl border-blue-200/80 bg-background pl-9 font-bold tracking-[-.01em] shadow-sm placeholder:font-medium dark:border-blue-900/70"
+                  onChange={(event) => setQueryDraft(event.target.value)}
+                  placeholder="Cliente, vendedor, modelo, venda ou SN"
+                  value={queryDraft}
+                />
+              </span>
+            </label>
+            <label className="min-w-0">
+              <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
+                <CalendarDays className="size-3 text-emerald-600" /> Período
+              </span>
+              <NativeSelect
+                aria-label="Período das vendas"
+                className="h-11 w-full rounded-xl bg-emerald-50/70 shadow-sm dark:bg-emerald-950/20 [&_select]:h-11 [&_select]:border-emerald-200/80 [&_select]:font-extrabold [&_select]:tracking-[-.01em] dark:[&_select]:border-emerald-900/70"
+                onChange={(event) =>
+                  setPeriod(event.target.value as PeriodFilter)
                 }
-              }}
-              value={issueFilter}
+                value={period}
+              >
+                {PERIOD_OPTIONS.map((option) => (
+                  <NativeSelectOption key={option.value} value={option.value}>
+                    {option.label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <Button
+              aria-expanded={mobileFiltersOpen}
+              className="mt-[1.05rem] h-11 rounded-xl border-violet-200 bg-violet-50 px-3 font-extrabold text-violet-900 shadow-sm hover:bg-violet-100 md:hidden dark:border-violet-900/70 dark:bg-violet-950/30 dark:text-violet-100"
+              onClick={() => setMobileFiltersOpen((current) => !current)}
+              type="button"
+              variant="outline"
             >
-              <NativeSelectOption value="all">
-                Todas as pendências
-              </NativeSelectOption>
-              <NativeSelectOption value="missing_receipt">
-                Sem comprovante
-              </NativeSelectOption>
-              <NativeSelectOption value="pending_payment">
-                Pagamento pendente
-              </NativeSelectOption>
-            </NativeSelect>
-            <NativeSelect
-              aria-label="Status do pedido"
-              className="h-10 w-full rounded-xl bg-background shadow-sm xl:w-52 [&_select]:h-10 [&_select]:font-bold [&_select]:tracking-[-.01em]"
-              onChange={(event) => setOrderStatusFilter(event.target.value)}
-              value={orderStatusFilter}
+              <SlidersHorizontal />
+              {mobileFiltersOpen
+                ? 'Ocultar'
+                : `Filtros${additionalFilterCount ? ` (${additionalFilterCount})` : ''}`}
+            </Button>
+            <div
+              className={cn(
+                'col-span-2 grid-cols-2 gap-2 md:contents',
+                mobileFiltersOpen ? 'grid' : 'hidden',
+              )}
             >
-              <NativeSelectOption value="all">
-                Todos os status
-              </NativeSelectOption>
-              <NativeSelectOption value="none">Sem status</NativeSelectOption>
-              {data.orderStatuses.map((status) => (
-                <NativeSelectOption key={status.id} value={status.id}>
-                  {status.name}
-                  {status.active ? '' : ' (inativo)'}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <label className="min-w-0">
+                <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
+                  <CircleAlert className="size-3 text-amber-600" /> Pendência
+                </span>
+                <NativeSelect
+                  aria-label="Pendência da venda"
+                  className="h-11 w-full rounded-xl bg-amber-50/70 shadow-sm dark:bg-amber-950/20 [&_select]:h-11 [&_select]:border-amber-200/80 [&_select]:font-extrabold [&_select]:tracking-[-.01em] dark:[&_select]:border-amber-900/70"
+                  onChange={(event) => {
+                    const next = event.target.value as IssueFilter;
+                    setIssueFilter(next);
+                    if (next !== 'all') {
+                      setAlertOnly(false);
+                      setGrouping('sale');
+                    }
+                  }}
+                  value={issueFilter}
+                >
+                  <NativeSelectOption value="all">
+                    Todas as pendências
+                  </NativeSelectOption>
+                  <NativeSelectOption value="missing_receipt">
+                    Sem comprovante
+                  </NativeSelectOption>
+                  <NativeSelectOption value="pending_payment">
+                    Pagamento pendente
+                  </NativeSelectOption>
+                </NativeSelect>
+              </label>
+              <label className="min-w-0">
+                <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
+                  <ListFilter className="size-3 text-fuchsia-600" /> Status
+                </span>
+                <NativeSelect
+                  aria-label="Status do pedido"
+                  className="h-11 w-full rounded-xl bg-fuchsia-50/70 shadow-sm dark:bg-fuchsia-950/20 [&_select]:h-11 [&_select]:border-fuchsia-200/80 [&_select]:font-extrabold [&_select]:tracking-[-.01em] dark:[&_select]:border-fuchsia-900/70"
+                  onChange={(event) => setOrderStatusFilter(event.target.value)}
+                  value={orderStatusFilter}
+                >
+                  <NativeSelectOption value="all">
+                    Todos os status
+                  </NativeSelectOption>
+                  <NativeSelectOption value="none">
+                    Sem status
+                  </NativeSelectOption>
+                  {data.orderStatuses.map((status) => (
+                    <NativeSelectOption key={status.id} value={status.id}>
+                      {status.name}
+                      {status.active ? '' : ' (inativo)'}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </label>
+            </div>
           </div>
           <div className="grid gap-2 md:grid-cols-[auto_1fr]">
             {(period === 'day' || period === 'month') && (
@@ -553,7 +648,7 @@ export function SalesProductionView({
                 aria-label={
                   period === 'day' ? 'Dia das vendas' : 'Mês das vendas'
                 }
-                className="h-9 rounded-xl md:w-44"
+                className="h-9 rounded-xl border-emerald-200 bg-emerald-50/70 font-bold md:w-44 dark:border-emerald-900/70 dark:bg-emerald-950/20"
                 onChange={(event) => {
                   if (!event.target.value) return;
                   if (period === 'day') setSelectedDay(event.target.value);
@@ -563,33 +658,81 @@ export function SalesProductionView({
                 value={period === 'day' ? selectedDay : selectedMonth}
               />
             )}
-            <div className="grid grid-cols-4 gap-1 rounded-2xl bg-muted/60 p-1 md:ml-auto md:w-[34rem]">
+            <div className="grid grid-cols-4 gap-1 rounded-2xl bg-slate-200/65 p-1 dark:bg-slate-900/70 md:ml-auto md:w-[36rem]">
               {(
                 [
-                  ['sale', 'Por venda'],
-                  ['model', 'Por modelo'],
-                  ['customer', 'Por cliente'],
-                  ['seller', 'Ranking'],
+                  [
+                    'sale',
+                    'Por venda',
+                    'Venda',
+                    ReceiptText,
+                    'bg-gradient-to-br from-blue-600 to-blue-800 text-white shadow-md shadow-blue-600/20',
+                    'text-blue-800 hover:bg-blue-100/80 dark:text-blue-200 dark:hover:bg-blue-950/60',
+                  ],
+                  [
+                    'model',
+                    'Por modelo',
+                    'Modelo',
+                    Smartphone,
+                    'bg-gradient-to-br from-violet-600 to-violet-800 text-white shadow-md shadow-violet-600/20',
+                    'text-violet-800 hover:bg-violet-100/80 dark:text-violet-200 dark:hover:bg-violet-950/60',
+                  ],
+                  [
+                    'customer',
+                    'Por cliente',
+                    'Cliente',
+                    UsersRound,
+                    'bg-gradient-to-br from-emerald-600 to-emerald-800 text-white shadow-md shadow-emerald-600/20',
+                    'text-emerald-800 hover:bg-emerald-100/80 dark:text-emerald-200 dark:hover:bg-emerald-950/60',
+                  ],
+                  [
+                    'seller',
+                    'Ranking',
+                    'Ranking',
+                    Trophy,
+                    'bg-gradient-to-br from-amber-400 to-orange-500 text-slate-950 shadow-md shadow-amber-500/20',
+                    'text-amber-800 hover:bg-amber-100/80 dark:text-amber-200 dark:hover:bg-amber-950/60',
+                  ],
                 ] as const
-              ).map(([value, label]) => (
-                <Button
-                  className="h-9 rounded-xl px-1 text-[.7rem] font-extrabold tracking-[-.01em] shadow-none sm:px-3 sm:text-sm"
-                  key={value}
-                  onClick={() => {
-                    setGrouping(value);
-                    if (value !== 'sale') setAlertOnly(false);
-                  }}
-                  size="sm"
-                  variant={grouping === value ? 'default' : 'ghost'}
-                >
-                  {label}
-                </Button>
-              ))}
+              ).map(
+                ([
+                  value,
+                  label,
+                  mobileLabel,
+                  Icon,
+                  activeClass,
+                  inactiveClass,
+                ]) => {
+                  const selected = grouping === value;
+                  return (
+                    <Button
+                      aria-pressed={selected}
+                      className={cn(
+                        'h-9 gap-1 rounded-xl px-1 text-[.68rem] font-black uppercase tracking-[.035em] shadow-none transition-all sm:px-3 sm:text-xs',
+                        selected ? activeClass : inactiveClass,
+                      )}
+                      key={value}
+                      onClick={() => {
+                        setGrouping(value);
+                        if (value !== 'sale') setAlertOnly(false);
+                      }}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      <Icon className="size-3.5 shrink-0" />
+                      <span className="sm:hidden">{mobileLabel}</span>
+                      <span className="hidden sm:inline">{label}</span>
+                    </Button>
+                  );
+                },
+              )}
             </div>
           </div>
           {grouping === 'seller' && (
             <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
-              <span className="font-semibold">Ranking de vendedores</span>
+              <span className="mr-auto flex items-center gap-1 font-extrabold sm:mr-0">
+                <Trophy className="size-3.5 text-amber-500" /> Ordenar ranking
+              </span>
               <Button
                 className="h-7 px-2 text-xs"
                 onClick={() => setSellerRanking('items')}
@@ -711,6 +854,13 @@ export function SalesProductionView({
         sale={reportSale}
         storeName={data.store.name}
       />
+      <SalesPeriodReport
+        filterParams={filterParams}
+        filterSummary={reportFilterSummary}
+        onOpenChange={setPeriodReportOpen}
+        open={periodReportOpen}
+        storeName={data.store.name}
+      />
       <EditSaleDialog
         data={data}
         key={editSale?.id ?? 'closed-sale-editor'}
@@ -770,12 +920,12 @@ function SaleList({
         <article
           className={
             sale.status === 'cancelled'
-              ? 'bg-muted/35 px-4 py-3 opacity-75 sm:px-5'
-              : 'px-4 py-3 sm:px-5'
+              ? 'bg-muted/35 px-3 py-2 opacity-75 sm:px-5 sm:py-3'
+              : 'px-3 py-2 sm:px-5 sm:py-3'
           }
           key={sale.id}
         >
-          <div className="grid gap-3 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+          <div className="grid gap-1.5 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3">
             <div className="flex items-center gap-2 sm:block">
               <Badge
                 variant={
@@ -845,14 +995,16 @@ function SaleList({
                 <strong>{formatMoney(sale.receivedTotalCents)}</strong>
               </div>
               <Button
+                className="h-8 border-blue-200 bg-blue-50 px-2 font-extrabold text-blue-900 hover:bg-blue-100 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100"
                 onClick={() => onReport(sale)}
                 size="sm"
                 variant="outline"
               >
-                <FileText /> Relatório
+                <FileText /> PDF
               </Button>
               {sale.status === 'completed' && (
                 <Button
+                  className="h-8 px-2"
                   onClick={() => onEdit(sale)}
                   size="sm"
                   variant="outline"
@@ -2473,6 +2625,554 @@ function SaleReport({
   );
 }
 
+function SalesPeriodReport({
+  open,
+  storeName,
+  filterParams,
+  filterSummary,
+  onOpenChange,
+}: {
+  open: boolean;
+  storeName: string;
+  filterParams: string;
+  filterSummary: string;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [level, setLevel] = useState<ReportLevel>('simple');
+  const [sales, setSales] = useState<SaleRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [loadRevision, setLoadRevision] = useState(0);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState('');
+  const [generatedAt, setGeneratedAt] = useState(() => Date.now());
+  const reportRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let ignore = false;
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      setLoadError('');
+      setPdfError('');
+      setSales([]);
+      setGeneratedAt(Date.now());
+      void fetchSalesForPeriodReport(filterParams)
+        .then((records) => {
+          if (!ignore) setSales(records);
+        })
+        .catch((error) => {
+          if (!ignore) setLoadError(messageOf(error));
+        })
+        .finally(() => {
+          if (!ignore) setLoading(false);
+        });
+    }, 0);
+    return () => {
+      ignore = true;
+      window.clearTimeout(timer);
+    };
+  }, [filterParams, loadRevision, open]);
+
+  const completedSales = useMemo(
+    () => sales.filter((sale) => sale.status === 'completed'),
+    [sales],
+  );
+  const modelGroups = useMemo(
+    () => groupModelsAcrossSales(completedSales),
+    [completedSales],
+  );
+  const amountCents = completedSales.reduce(
+    (sum, sale) => sum + sale.productsTotalCents,
+    0,
+  );
+  const itemCount = completedSales.reduce(
+    (sum, sale) => sum + sale.items.length,
+    0,
+  );
+  const alertCount = completedSales.filter(
+    (sale) =>
+      sale.receivedDifferenceCents !== 0 ||
+      sale.receipts.length === 0 ||
+      sale.reconciliation.status !== 'reconciled',
+  ).length;
+  const cancelledCount = sales.length - completedSales.length;
+  const completeMediaStats = useMemo(
+    () =>
+      completedSales.reduce(
+        (total, sale) => {
+          sale.receipts.forEach((receipt) => {
+            total.count += 1;
+            total.bytes += receipt.sizeBytes;
+          });
+          sale.items.forEach((item) => {
+            item.photos.forEach((photo) => {
+              total.count += 1;
+              total.bytes += photo.sizeBytes;
+            });
+          });
+          return total;
+        },
+        { bytes: 0, count: 0 },
+      ),
+    [completedSales],
+  );
+  const completeMediaTooLarge =
+    completeMediaStats.count > PERIOD_REPORT_MEDIA_LIMIT ||
+    completeMediaStats.bytes > PERIOD_REPORT_MEDIA_BYTES_LIMIT;
+
+  return (
+    <Dialog
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && pdfBusy) return;
+        onOpenChange(nextOpen);
+      }}
+      open={open}
+    >
+      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[92dvh] sm:max-w-5xl sm:rounded-2xl">
+        <DialogHeader
+          className="shrink-0 border-b px-4 py-3 pr-12"
+          data-report-controls
+        >
+          <DialogTitle>Relatório de vendas</DialogTitle>
+          <DialogDescription>
+            Reúne todas as vendas do filtro selecionado, separadas por venda.
+          </DialogDescription>
+        </DialogHeader>
+        <div
+          className="shrink-0 border-b bg-muted/30 p-2 sm:p-3"
+          data-report-controls
+        >
+          <div className="grid grid-cols-3 gap-1">
+            {(['simple', 'detailed', 'complete'] as const).map((value) => (
+              <Button
+                className="h-10 px-2 text-xs font-extrabold sm:text-sm"
+                disabled={loading || pdfBusy}
+                key={value}
+                onClick={() => setLevel(value)}
+                variant={level === value ? 'default' : 'outline'}
+              >
+                {value === 'simple'
+                  ? 'Simplificado'
+                  : value === 'detailed'
+                    ? 'Detalhado'
+                    : 'Completo'}
+              </Button>
+            ))}
+          </div>
+          <p className="mt-2 truncate px-1 text-xs font-semibold text-muted-foreground">
+            {filterSummary}
+          </p>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto bg-muted/25 p-2 overscroll-contain sm:p-5">
+          {loading ? (
+            <div className="grid min-h-60 place-items-center text-center">
+              <div>
+                <LoaderCircle className="mx-auto size-7 animate-spin text-primary" />
+                <p className="mt-3 text-sm font-bold">
+                  Preparando as vendas do período…
+                </p>
+              </div>
+            </div>
+          ) : loadError ? (
+            <div className="grid min-h-60 place-items-center p-6 text-center">
+              <div>
+                <AlertTriangle className="mx-auto size-8 text-destructive" />
+                <p className="mt-3 text-sm font-semibold text-destructive">
+                  {loadError}
+                </p>
+                <Button
+                  className="mt-3"
+                  onClick={() => setLoadRevision((value) => value + 1)}
+                >
+                  Tentar novamente
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <article
+              className="report-document mx-auto max-w-4xl rounded-2xl bg-white p-4 text-slate-950 shadow-sm ring-1 ring-slate-200 sm:p-7"
+              data-print-report
+              ref={reportRef}
+            >
+              <header className="border-b border-slate-200 pb-4">
+                <p className="text-xs font-bold uppercase tracking-[.16em] text-slate-500">
+                  {storeName}
+                </p>
+                <h2 className="mt-1 text-xl font-extrabold">
+                  Relatório de vendas · {reportName(level)}
+                </h2>
+                <p className="mt-1 text-sm font-semibold text-slate-600">
+                  {filterSummary}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Gerado em {formatDateTime(generatedAt)}
+                </p>
+              </header>
+
+              <dl className="report-section mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <ReportMetric
+                  label="Montante vendido"
+                  value={formatMoney(amountCents)}
+                />
+                <ReportMetric
+                  label="Vendas concluídas"
+                  value={String(completedSales.length)}
+                />
+                <ReportMetric label="Aparelhos" value={String(itemCount)} />
+                <ReportMetric label="Avisos" value={String(alertCount)} />
+              </dl>
+
+              {cancelledCount > 0 && (
+                <p className="report-section mt-3 rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                  {cancelledCount}{' '}
+                  {cancelledCount === 1
+                    ? 'venda cancelada aparece'
+                    : 'vendas canceladas aparecem'}{' '}
+                  apenas para registro e não entram nos totais.
+                </p>
+              )}
+
+              {level === 'complete' && completeMediaTooLarge && (
+                <div className="report-section mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                  <p className="font-extrabold">
+                    Reduza o período para incluir as fotos com segurança.
+                  </p>
+                  <p className="mt-1">
+                    Este filtro possui {completeMediaStats.count} arquivos (
+                    {formatMediaBytes(completeMediaStats.bytes)}). O relatório
+                    completo aceita até {PERIOD_REPORT_MEDIA_LIMIT} arquivos e{' '}
+                    {formatMediaBytes(PERIOD_REPORT_MEDIA_BYTES_LIMIT)} por vez
+                    para não travar o celular. Os relatórios simplificado e
+                    detalhado continuam disponíveis.
+                  </p>
+                </div>
+              )}
+
+              <section className="report-section mt-5">
+                <h3 className="font-extrabold">Quantidade por aparelho</h3>
+                <div className="mt-2 space-y-2">
+                  {modelGroups.length === 0 ? (
+                    <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">
+                      Nenhum aparelho vendido neste filtro.
+                    </p>
+                  ) : (
+                    modelGroups.map((group) => (
+                      <div
+                        className="report-row rounded-lg border border-slate-200 p-3"
+                        key={group.key}
+                      >
+                        <div className="flex justify-between gap-3">
+                          <span>
+                            <strong>{group.name}</strong>
+                            <span className="block text-xs text-slate-600">
+                              {group.detail}
+                            </span>
+                          </span>
+                          <strong>{group.items.length}</strong>
+                        </div>
+                        {level !== 'simple' && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {group.items.map(({ item, sale }) => (
+                              <code
+                                className="rounded bg-slate-100 px-2 py-1 text-xs"
+                                key={`${sale.id}:${item.id}`}
+                              >
+                                {item.serial} · #
+                                {String(sale.number).padStart(5, '0')}
+                              </code>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              <section className="report-section mt-5">
+                <h3 className="font-extrabold">Vendas do período</h3>
+                <div className="mt-2 space-y-3">
+                  {sales.length === 0 ? (
+                    <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">
+                      Nenhuma venda encontrada neste filtro.
+                    </p>
+                  ) : (
+                    sales.map((sale) => (
+                      <section
+                        className="report-row rounded-xl border border-slate-200 p-3"
+                        key={sale.id}
+                      >
+                        <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2">
+                          <div>
+                            <p className="font-extrabold">
+                              Venda #{String(sale.number).padStart(5, '0')} ·{' '}
+                              {sale.customerName}
+                            </p>
+                            <p className="text-xs text-slate-600">
+                              {formatDateTime(sale.createdAt)} ·{' '}
+                              {sale.sellerName}
+                            </p>
+                          </div>
+                          <strong className="shrink-0">
+                            {sale.status === 'cancelled'
+                              ? 'Cancelada'
+                              : formatMoney(sale.productsTotalCents)}
+                          </strong>
+                        </div>
+
+                        <div className="mt-2 divide-y divide-slate-100">
+                          {sale.items.map((item) => (
+                            <div
+                              className="flex items-start justify-between gap-3 py-2 text-sm"
+                              key={item.id}
+                            >
+                              <span className="min-w-0">
+                                <strong>{item.productName}</strong>
+                                <span className="block text-xs text-slate-600">
+                                  {item.productDetail}
+                                  {level !== 'simple'
+                                    ? ` · SN ${item.serial}`
+                                    : ''}
+                                </span>
+                              </span>
+                              <strong className="shrink-0">
+                                {formatMoney(item.soldPriceCents)}
+                              </strong>
+                            </div>
+                          ))}
+                        </div>
+
+                        {level !== 'simple' && sale.status === 'completed' && (
+                          <div className="mt-2 rounded-lg bg-slate-50 p-2 text-xs">
+                            <p className="font-extrabold">Pagamentos</p>
+                            {sale.payments.length === 0 ? (
+                              <p className="mt-1 text-amber-800">
+                                Pagamento não informado — pendente
+                              </p>
+                            ) : (
+                              sale.payments.map((payment) => (
+                                <p
+                                  className="mt-1 flex justify-between gap-3"
+                                  key={payment.id}
+                                >
+                                  <span>
+                                    {payment.method === 'pix'
+                                      ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                      : 'Dinheiro'}
+                                  </span>
+                                  <strong>
+                                    {formatMoney(payment.amountCents)}
+                                  </strong>
+                                </p>
+                              ))
+                            )}
+                          </div>
+                        )}
+
+                        {level === 'complete' &&
+                          sale.status === 'completed' && (
+                            <div className="mt-2 space-y-2">
+                              <div
+                                className={cn(
+                                  'rounded-lg px-3 py-2 text-xs',
+                                  sale.reconciliation.status === 'reconciled' &&
+                                    'bg-emerald-50 text-emerald-950',
+                                  sale.reconciliation.status === 'pending' &&
+                                    'bg-amber-50 text-amber-950',
+                                  sale.reconciliation.status === 'divergent' &&
+                                    'bg-rose-50 text-rose-950',
+                                )}
+                              >
+                                <p className="font-extrabold">
+                                  {sale.reconciliation.status === 'reconciled'
+                                    ? 'Conciliado'
+                                    : sale.reconciliation.status === 'divergent'
+                                      ? 'Verificar venda'
+                                      : 'Conciliação pendente'}
+                                </p>
+                                <p>
+                                  Comprovantes:{' '}
+                                  {formatMoney(
+                                    sale.reconciliation.confirmedTotalCents,
+                                  )}{' '}
+                                  · Venda:{' '}
+                                  {formatMoney(sale.productsTotalCents)}
+                                  {sale.reconciliation.status === 'divergent'
+                                    ? ` · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`
+                                    : ''}
+                                </p>
+                              </div>
+
+                              {!completeMediaTooLarge &&
+                                sale.items.some(
+                                  (item) => item.photos.length > 0,
+                                ) && (
+                                  <div>
+                                    <p className="text-xs font-extrabold">
+                                      Fotos dos aparelhos
+                                    </p>
+                                    <div className="mt-1 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                                      {sale.items.flatMap((item) =>
+                                        item.photos.map((photo) => (
+                                          <a
+                                            href={photo.url}
+                                            key={photo.id}
+                                            rel="noreferrer"
+                                            target="_blank"
+                                          >
+                                            <img
+                                              alt={`${item.productName} · SN ${item.serial}`}
+                                              className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                              src={photo.url}
+                                            />
+                                          </a>
+                                        )),
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                              {!completeMediaTooLarge &&
+                                sale.receipts.length > 0 && (
+                                  <div>
+                                    <p className="text-xs font-extrabold">
+                                      Comprovantes da venda #
+                                      {String(sale.number).padStart(5, '0')}
+                                    </p>
+                                    <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                      {sale.receipts.map((receipt) =>
+                                        receipt.mimeType ===
+                                        'application/pdf' ? (
+                                          <a
+                                            className="rounded-lg border border-slate-200 p-3 text-xs font-bold"
+                                            href={receipt.url}
+                                            key={receipt.id}
+                                            rel="noreferrer"
+                                            target="_blank"
+                                          >
+                                            <FileText className="mb-1 size-4" />
+                                            {receipt.name}
+                                          </a>
+                                        ) : (
+                                          <a
+                                            href={receipt.url}
+                                            key={receipt.id}
+                                            rel="noreferrer"
+                                            target="_blank"
+                                          >
+                                            <img
+                                              alt={receipt.name}
+                                              className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                              src={receipt.url}
+                                            />
+                                          </a>
+                                        ),
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                            </div>
+                          )}
+                      </section>
+                    ))
+                  )}
+                </div>
+              </section>
+            </article>
+          )}
+        </div>
+        <DialogFooter
+          className="m-0 shrink-0 rounded-none border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]"
+          data-report-controls
+        >
+          {pdfError && (
+            <p className="mr-auto text-left text-sm font-semibold text-destructive">
+              {pdfError}
+            </p>
+          )}
+          <Button
+            disabled={pdfBusy}
+            onClick={() => onOpenChange(false)}
+            variant="outline"
+          >
+            Fechar
+          </Button>
+          <Button
+            disabled={
+              loading ||
+              Boolean(loadError) ||
+              pdfBusy ||
+              sales.length === 0 ||
+              (level === 'complete' && completeMediaTooLarge)
+            }
+            onClick={async () => {
+              if (!reportRef.current) return;
+              setPdfBusy(true);
+              setPdfError('');
+              try {
+                await downloadReportPdf({
+                  element: reportRef.current,
+                  fileName: `relatorio-vendas-${dateKey(Date.now())}-${reportName(level)}`,
+                  pdfAttachments:
+                    level === 'complete'
+                      ? completedSales.flatMap((sale) =>
+                          sale.receipts
+                            .filter(
+                              (receipt) =>
+                                receipt.mimeType === 'application/pdf',
+                            )
+                            .map((receipt) => ({
+                              name: `venda-${String(sale.number).padStart(5, '0')}-${receipt.name}`,
+                              url: receipt.url,
+                            })),
+                        )
+                      : [],
+                });
+              } catch (error) {
+                setPdfError(messageOf(error));
+              } finally {
+                setPdfBusy(false);
+              }
+            }}
+          >
+            {pdfBusy ? <LoaderCircle className="animate-spin" /> : <Download />}
+            {pdfBusy ? 'Gerando PDF…' : 'Baixar PDF'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+async function fetchSalesForPeriodReport(filterParams: string) {
+  const records: SaleRecord[] = [];
+  let cursor: string | null = null;
+  const seenCursors = new Set<string>();
+
+  while (true) {
+    const params = new URLSearchParams(filterParams);
+    params.set('group', 'sale');
+    params.set('limit', '99');
+    if (cursor) params.set('cursor', cursor);
+    const page = await requestJson<SalesPage>(
+      `/api/sales?${params.toString()}`,
+    );
+    if (page.total > PERIOD_REPORT_SALES_LIMIT) {
+      throw new Error(
+        `Este filtro possui ${page.total} vendas. Selecione um período menor, com até ${PERIOD_REPORT_SALES_LIMIT}, para gerar o PDF com segurança no celular.`,
+      );
+    }
+    records.push(...page.items);
+    if (!page.nextCursor) return records;
+    if (seenCursors.has(page.nextCursor)) {
+      throw new Error('Não foi possível continuar a leitura das vendas.');
+    }
+    seenCursors.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
+}
+
 function CancelDialog({
   sale,
   data,
@@ -2599,14 +3299,18 @@ function SuccessBadge({ text }: { text: string }) {
 }
 function Metric({
   label,
+  mobileLabel,
   value,
+  mobileValue,
   active = false,
   comparison,
   onClick,
   tone = 'blue',
 }: {
   label: string;
+  mobileLabel?: string;
   value: string;
+  mobileValue?: string;
   active?: boolean;
   comparison?: {
     current: number;
@@ -2635,6 +3339,13 @@ function Metric({
         comparison.label,
       )
     : null;
+  const mobileComparisonText = comparison
+    ? metricMobileComparisonText(
+        comparison.current,
+        comparison.previous,
+        comparison.label,
+      )
+    : null;
   const movedUp = comparison ? comparison.current > comparison.previous : false;
   const movedDown = comparison
     ? comparison.current < comparison.previous
@@ -2644,33 +3355,52 @@ function Metric({
   const content = (
     <Card
       className={cn(
-        'h-full overflow-hidden transition-all',
+        'gap-0 overflow-hidden rounded-lg py-0 transition-all sm:h-full sm:rounded-xl sm:py-3',
         toneClasses[tone],
         onClick && 'hover:border-primary/45 hover:bg-secondary/35',
         active && 'border-primary ring-2 ring-primary/25',
       )}
       size="sm"
     >
-      <CardContent className="p-3 sm:p-3.5">
-        <p className="truncate text-[.68rem] font-extrabold uppercase tracking-[.08em] text-muted-foreground sm:text-xs">
-          {label}
+      <CardContent className="p-1.5 sm:p-3.5">
+        <p className="truncate text-xs font-black uppercase tracking-[-.02em] text-muted-foreground sm:tracking-[.08em]">
+          <span className="sm:hidden">{mobileLabel ?? label}</span>
+          <span className="hidden sm:inline">{label}</span>
         </p>
-        <p className="mt-1 truncate text-lg font-black tracking-[-.035em] sm:text-xl">
-          {value}
+        <p
+          className="mt-0.5 truncate text-sm font-black tracking-[-.045em] sm:mt-1 sm:text-xl sm:tracking-[-.035em]"
+          title={value}
+        >
+          <span className="sm:hidden">{mobileValue ?? value}</span>
+          <span className="hidden sm:inline">{value}</span>
         </p>
         {comparisonText && (
-          <p
-            className={cn(
-              'mt-1 truncate text-[.66rem] font-bold sm:text-xs',
-              favorable && 'text-emerald-700 dark:text-emerald-300',
-              unfavorable && 'text-rose-700 dark:text-rose-300',
-              !favorable && !unfavorable && 'text-muted-foreground',
-            )}
-            title={comparisonText}
-          >
-            {movedUp ? '↑ ' : movedDown ? '↓ ' : '→ '}
-            {comparisonText}
-          </p>
+          <>
+            <p
+              className={cn(
+                'mt-0.5 truncate text-[.65rem] font-extrabold leading-none sm:hidden',
+                favorable && 'text-emerald-700 dark:text-emerald-300',
+                unfavorable && 'text-rose-700 dark:text-rose-300',
+                !favorable && !unfavorable && 'text-muted-foreground',
+              )}
+              title={comparisonText}
+            >
+              {movedUp ? '↑ ' : movedDown ? '↓ ' : '→ '}
+              {mobileComparisonText}
+            </p>
+            <p
+              className={cn(
+                'mt-1 hidden truncate text-xs font-bold sm:block',
+                favorable && 'text-emerald-700 dark:text-emerald-300',
+                unfavorable && 'text-rose-700 dark:text-rose-300',
+                !favorable && !unfavorable && 'text-muted-foreground',
+              )}
+              title={comparisonText}
+            >
+              {movedUp ? '↑ ' : movedDown ? '↓ ' : '→ '}
+              {comparisonText}
+            </p>
+          </>
         )}
       </CardContent>
     </Card>
@@ -2678,8 +3408,9 @@ function Metric({
   if (!onClick) return content;
   return (
     <button
+      aria-label={`${label}: ${value}${comparisonText ? `. Comparação: ${comparisonText}` : ''}`}
       aria-pressed={active}
-      className="min-w-0 rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="min-w-0 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:rounded-xl"
       onClick={onClick}
       type="button"
     >
@@ -2695,10 +3426,22 @@ function metricComparisonText(
   label: string,
 ) {
   if (previous === 0) {
-    return current === 0 ? `Igual a ${label}: 0` : `Novo · ${label}: 0`;
+    return current === 0
+      ? `Sem mudança · ${label}: 0`
+      : `Período anterior (${label}): 0`;
   }
   const percent = Math.round(((current - previous) / previous) * 100);
-  return `${percent > 0 ? '+' : ''}${percent}% · ${label}: ${previousDisplay}`;
+  return `${percent > 0 ? '+' : ''}${percent}% vs. ${label} (${previousDisplay})`;
+}
+
+function metricMobileComparisonText(
+  current: number,
+  previous: number,
+  label: string,
+) {
+  if (previous === 0) return `${label}: 0`;
+  const percent = Math.round(((current - previous) / previous) * 100);
+  return `${percent > 0 ? '+' : ''}${percent}%`;
 }
 function ReportMetric({ label, value }: { label: string; value: string }) {
   return (
@@ -2730,6 +3473,37 @@ function groupModels(sale: SaleRecord | null) {
   });
   return Array.from(groups.values());
 }
+
+function groupModelsAcrossSales(sales: SaleRecord[]) {
+  const groups = new Map<
+    string,
+    {
+      key: string;
+      name: string;
+      detail: string;
+      items: Array<{ item: SaleRecord['items'][number]; sale: SaleRecord }>;
+    }
+  >();
+  sales.forEach((sale) => {
+    sale.items.forEach((item) => {
+      const key = `${item.productName}\u0000${item.productDetail}`;
+      const group = groups.get(key) ?? {
+        key,
+        name: item.productName,
+        detail: item.productDetail,
+        items: [],
+      };
+      group.items.push({ item, sale });
+      groups.set(key, group);
+    });
+  });
+  return Array.from(groups.values()).sort(
+    (left, right) =>
+      right.items.length - left.items.length ||
+      left.name.localeCompare(right.name, 'pt-BR'),
+  );
+}
+
 function paymentLabel(sale: SaleRecord) {
   if (sale.payments.length === 0) return 'Pagamento não informado';
   return sale.payments
@@ -2752,6 +3526,39 @@ function formatMoney(cents: number) {
     style: 'currency',
     currency: 'BRL',
   }).format(cents / 100);
+}
+
+function formatCompactMoney(cents: number) {
+  const amount = cents / 100;
+  if (Math.abs(amount) >= 1_000_000) {
+    return `R$${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(amount / 1_000_000)}mi`;
+  }
+  if (Math.abs(amount) >= 1_000) {
+    return `R$${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(amount / 1_000)}mil`;
+  }
+  return `R$${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 }).format(amount)}`;
+}
+
+function periodDescription(
+  period: PeriodFilter,
+  selectedDay: string,
+  selectedMonth: string,
+) {
+  if (period === 'day') {
+    return `Dia ${new Intl.DateTimeFormat('pt-BR', {
+      dateStyle: 'short',
+      timeZone: 'America/Sao_Paulo',
+    }).format(new Date(`${selectedDay}T12:00:00-03:00`))}`;
+  }
+  if (period === 'month') {
+    const [year, month] = selectedMonth.split('-').map(Number);
+    return new Intl.DateTimeFormat('pt-BR', {
+      month: 'long',
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+    }).format(new Date(Date.UTC(year, month - 1, 15)));
+  }
+  return PERIOD_OPTIONS.find((option) => option.value === period)?.label ?? '';
 }
 
 function formatMoneyInput(cents: number) {

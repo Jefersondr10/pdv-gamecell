@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.05-catalogo-conciliacao-v6';
+export const GUIDE_VERSION = '2026.09.05-relatorios-mobile-v7';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 

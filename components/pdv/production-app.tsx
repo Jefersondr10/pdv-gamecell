@@ -1338,10 +1338,10 @@ function GuideDialog({
           <GuideStep number="1" title="Cadastre a base">
             Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
             UPCs, EANs, JANs e contas Pix. O catálogo padrão do sistema já traz
-            o iPhone 16 (exceto o Pro Max) e toda a linha iPhone 17, com suas
-            variações, e pode acrescentar códigos de mercados diferentes sem
-            substituir seus preços. Em Ajustes, o proprietário gerencia os
-            usuários da loja.
+            o iPhone 16 (exceto o Pro Max) e toda a linha iPhone 17, com códigos
+            verificados dos Estados Unidos e do Japão. Códigos de outros
+            mercados podem ser acrescentados sem substituir seus preços. Em
+            Ajustes, o proprietário gerencia os usuários da loja.
           </GuideStep>
           <GuideStep number="2" title="Dê entrada">
             Abra Entrada. Bipe o UPC/EAN, confirme o produto, bipe somente os
@@ -1366,9 +1366,10 @@ function GuideDialog({
           <GuideStep number="5" title="Relatórios e histórico">
             O estoque abre somente com variações disponíveis. Nos detalhes,
             alterne entre SNs disponíveis e vendidos; um SN vendido abre sua
-            venda. O relatório ignora estoque zerado. Em Vendas, use os cards e
-            o período compacto como filtros. O menu Histórico preserva cada
-            entrada.
+            venda. O relatório ignora estoque zerado. Em Vendas, o botão
+            Relatório de vendas baixa o período filtrado nos formatos
+            simplificado, detalhado ou completo; cada venda também mantém seu
+            próprio PDF. O menu Histórico preserva cada entrada.
           </GuideStep>
           <GuideStep
             number="6"
@@ -1386,9 +1387,9 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="8" title="Menu e comparações">
             No celular, toque no nome da loja para abrir o menu. Em Vendas, os
-            cards coloridos funcionam como filtros e comparam o resultado com o
-            período anterior equivalente; os filtros também localizam vendas sem
-            comprovante, com pagamento pendente ou por status.
+            indicadores compactos funcionam como filtros e comparam o resultado
+            com o período anterior equivalente. Toque em Filtros para localizar
+            vendas sem comprovante, com pagamento pendente ou por status.
           </GuideStep>
         </div>
         <DialogFooter>

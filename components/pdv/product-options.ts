@@ -42,11 +42,17 @@ export const APPLE_COLOR_SUGGESTIONS = [
 ] as const;
 
 export const PRODUCT_MARKET_OPTIONS = [
-  'Estados Unidos',
-  'Japão',
-  'Canadá',
-  'Europa',
   'Brasil',
+  'Canadá',
+  'China continental',
+  'Estados Unidos',
+  'Europa — Alemanha',
+  'Europa — Portugal/Espanha',
+  'Europa — Países Baixos',
+  'Hong Kong',
+  'Japão',
+  'México',
+  'Reino Unido',
   'Internacional',
 ] as const;
 
