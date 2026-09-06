@@ -1799,11 +1799,14 @@ function PaymentStage({
               role="alert"
             >
               <p className="font-bold">
-                Recebimento {remaining < 0 ? 'acima' : 'abaixo'} dos produtos
+                {remaining > 0
+                  ? `Falta receber ${formatMoney(remaining)}`
+                  : `Recebido a mais ${formatMoney(-remaining)}`}
               </p>
               <p className="mt-0.5 text-xs">
-                Diferença de {formatMoney(Math.abs(remaining))}. A venda pode
-                ser concluída e ficará sinalizada em Vendas e nos relatórios.
+                Valor vendido: {formatMoney(total)} · Valor recebido:{' '}
+                {formatMoney(paid)}. A venda pode ser concluída e ficará
+                sinalizada em Vendas e nos relatórios.
               </p>
             </div>
           )}
@@ -2045,14 +2048,14 @@ function SaleReview({
               role="alert"
             >
               <p className="font-bold">
-                {payments.length === 0
-                  ? 'Pagamento não informado'
-                  : `Recebido ${paid > total ? 'acima' : 'abaixo'} do total dos produtos`}
+                {paid < total
+                  ? `Falta receber ${formatMoney(total - paid)}`
+                  : `Recebido a mais ${formatMoney(paid - total)}`}
               </p>
               <p className="mt-0.5 text-xs">
-                {payments.length === 0
-                  ? `A venda será salva com ${formatMoney(total)} pendentes e poderá receber pagamentos depois.`
-                  : `Produtos: ${formatMoney(total)} · Recebido: ${formatMoney(paid)} · Diferença: ${formatMoney(Math.abs(paid - total))}. A venda será salva com este aviso.`}
+                Valor vendido: {formatMoney(total)} · Valor recebido:{' '}
+                {formatMoney(paid)}. A venda será salva com este aviso e poderá
+                receber pagamentos depois.
               </p>
             </div>
           )}
@@ -2136,7 +2139,7 @@ function SaleReview({
                     ? 'Conciliado com o total da venda'
                     : reconciliation.status === 'divergent'
                       ? `${(reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} nos comprovantes · verificar venda`
-                      : 'Valor do comprovante ainda não confirmado'}
+                      : 'Leitura em andamento · você já pode salvar a venda'}
                 </p>
               )}
             </div>

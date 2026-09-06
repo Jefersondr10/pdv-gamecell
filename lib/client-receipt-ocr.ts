@@ -21,6 +21,10 @@ type OcrWorker = {
 let workerPromise: Promise<OcrWorker> | null = null;
 let analysisQueue = Promise.resolve();
 let workerCleanupTimer: number | null = null;
+const analysisByFile = new WeakMap<
+  File,
+  Promise<ReceiptAmountSuggestion | null>
+>();
 
 const LANGUAGE_CACHE_PATH = 'atacadoapple-receipt-ocr-v1';
 const LANGUAGE_CACHE_KEY = `${LANGUAGE_CACHE_PATH}/por.traineddata`;
@@ -29,12 +33,21 @@ export async function readReceiptAmount(
   file: File,
   onProgress?: (progress: number) => void,
 ): Promise<ReceiptAmountSuggestion | null> {
+  const existing = analysisByFile.get(file);
+  if (existing) return existing;
+
   const task = analysisQueue.then(() => readReceiptAmountNow(file, onProgress));
+  analysisByFile.set(file, task);
   analysisQueue = task.then(
     () => undefined,
     () => undefined,
   );
-  return task;
+  try {
+    return await task;
+  } catch (error) {
+    analysisByFile.delete(file);
+    throw error;
+  }
 }
 
 async function readReceiptAmountNow(

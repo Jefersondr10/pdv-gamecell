@@ -365,6 +365,9 @@ export async function POST(
       addedCount: rows.length,
       receiptsAdded: receiptUploads.length,
       itemPhotosAdded: itemUploads.length,
+      receipts: receiptUploads.map(({ pending }) =>
+        receiptUploadResponse(pending),
+      ),
     });
   } catch (error) {
     if (uploaded.length && !committed) {
@@ -403,6 +406,16 @@ export async function POST(
   } finally {
     if (reservationId && !committed) await releaseUpload(reservationId);
   }
+}
+
+function receiptUploadResponse(pending: ReturnType<typeof prepareFile>) {
+  return {
+    id: pending.id,
+    name: pending.file.name.slice(0, 200) || 'comprovante',
+    mimeType: pending.file.type,
+    sizeBytes: pending.file.size,
+    url: `/api/files/${pending.id}`,
+  };
 }
 
 function buildAttachmentStatements(

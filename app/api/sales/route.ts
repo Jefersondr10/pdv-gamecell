@@ -336,6 +336,7 @@ export async function POST(request: Request) {
         productsTotalCents: replay.productsTotalCents,
         receivedTotalCents: replay.receivedTotalCents,
         receivedDifferenceCents: replay.receivedDifferenceCents,
+        receipts: replay.receipts,
         replayed: true,
       });
     }
@@ -705,6 +706,9 @@ export async function POST(request: Request) {
         productsTotalCents,
         receivedTotalCents,
         receivedDifferenceCents: receivedTotalCents - productsTotalCents,
+        receipts: receiptUploads.map(({ pending }) =>
+          receiptUploadResponse(pending),
+        ),
       },
       { status: 201 },
     );
@@ -744,6 +748,7 @@ export async function POST(request: Request) {
           productsTotalCents: saved.productsTotalCents,
           receivedTotalCents: saved.receivedTotalCents,
           receivedDifferenceCents: saved.receivedDifferenceCents,
+          receipts: saved.receipts,
           replayed: true,
         });
       }
@@ -862,11 +867,19 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
       .all<SaleInputPayment>(),
     db
       .prepare(
-        `SELECT id FROM attachments
-         WHERE sale_id = ? AND store_id = ? ORDER BY id`,
+        `SELECT id, kind, file_name AS name, mime_type AS mimeType,
+                size_bytes AS sizeBytes
+         FROM attachments
+         WHERE sale_id = ? AND store_id = ? ORDER BY created_at, rowid`,
       )
       .bind(saleId, storeId)
-      .all<{ id: string }>(),
+      .all<{
+        id: string;
+        kind: 'item_photo' | 'receipt';
+        name: string;
+        mimeType: string;
+        sizeBytes: number;
+      }>(),
   ]);
   const details = saleOperationDetails(sale.operationDetailsJson);
   const productsTotalCents = Number(sale.productsTotalCents);
@@ -893,7 +906,26 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
       amountCents: Number(payment.amountCents),
     })),
     attachmentIds: attachments.results.map((attachment) => attachment.id),
+    receipts: attachments.results
+      .filter((attachment) => attachment.kind === 'receipt')
+      .map((attachment) => ({
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: Number(attachment.sizeBytes),
+        url: `/api/files/${attachment.id}`,
+      })),
     operationFingerprint: details.operationFingerprint,
+  };
+}
+
+function receiptUploadResponse(pending: ReturnType<typeof prepareFile>) {
+  return {
+    id: pending.id,
+    name: pending.file.name.slice(0, 200) || 'comprovante',
+    mimeType: pending.file.type,
+    sizeBytes: pending.file.size,
+    url: `/api/files/${pending.id}`,
   };
 }
 

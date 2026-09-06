@@ -50,6 +50,13 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { messageOf, requestJson } from '@/lib/client-api';
 import {
@@ -58,6 +65,10 @@ import {
   prepareMediaSelection,
 } from '@/lib/client-media';
 import { createOperationId } from '@/lib/client-operation-id';
+import {
+  enqueueReceiptOcrJobs,
+  type ReceiptOcrAttachment,
+} from '@/lib/client-receipt-background';
 import { downloadReportPdf } from '@/lib/download-report-pdf';
 import { parseMoneyInput } from '@/lib/money';
 import {
@@ -99,15 +110,37 @@ type QueuedPayment = {
   accountName: string | null;
   amountCents: number;
 };
+type FilterOption<T extends string> = {
+  detail?: string;
+  label: string;
+  value: T;
+};
 
-const PERIOD_OPTIONS: Array<{ label: string; value: PeriodFilter }> = [
-  { label: 'Hoje', value: 'today' },
-  { label: 'Ontem', value: 'yesterday' },
-  { label: 'Semana', value: '7d' },
-  { label: '15 dias', value: '15d' },
-  { label: 'Escolher dia', value: 'day' },
-  { label: 'Mês escolhido', value: 'month' },
-  { label: 'Todo período', value: 'all' },
+const PERIOD_OPTIONS: Array<FilterOption<PeriodFilter>> = [
+  { detail: 'Vendas realizadas hoje', label: 'Hoje', value: 'today' },
+  { detail: 'Vendas do dia anterior', label: 'Ontem', value: 'yesterday' },
+  { detail: 'Últimos sete dias', label: 'Semana', value: '7d' },
+  { detail: 'Últimos quinze dias', label: '15 dias', value: '15d' },
+  { detail: 'Selecione uma data', label: 'Escolher dia', value: 'day' },
+  { detail: 'Selecione um mês', label: 'Mês escolhido', value: 'month' },
+  { detail: 'Histórico completo', label: 'Todo período', value: 'all' },
+];
+const ISSUE_OPTIONS: Array<FilterOption<IssueFilter>> = [
+  {
+    detail: 'Exibe vendas com ou sem aviso',
+    label: 'Todas as pendências',
+    value: 'all',
+  },
+  {
+    detail: 'Venda ainda sem arquivo anexado',
+    label: 'Sem comprovante',
+    value: 'missing_receipt',
+  },
+  {
+    detail: 'Ainda existe valor a receber',
+    label: 'Pagamento pendente',
+    value: 'pending_payment',
+  },
 ];
 const ANALYTICS_CACHE_MS = 5 * 60 * 1000;
 const PERIOD_REPORT_SALES_LIMIT = 250;
@@ -305,6 +338,18 @@ export function SalesProductionView({
     },
     [analyticsState?.key, filterKey, filterParams],
   );
+
+  useEffect(() => {
+    const refreshSales = () => {
+      analyticsCacheRef.current.clear();
+      listDataKeyRef.current = '';
+      setAnalyticsState(null);
+      if (grouping === 'sale') void loadSales(null, false, true);
+      else void loadAnalytics(true);
+    };
+    window.addEventListener('pdv:sales-changed', refreshSales);
+    return () => window.removeEventListener('pdv:sales-changed', refreshSales);
+  }, [grouping, loadAnalytics, loadSales]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -551,25 +596,18 @@ export function SalesProductionView({
                 />
               </span>
             </label>
-            <label className="min-w-0">
+            <div className="min-w-0">
               <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
                 <CalendarDays className="size-3 text-emerald-600" /> Período
               </span>
-              <NativeSelect
+              <SalesFilterSelect
                 aria-label="Período das vendas"
-                className="h-11 w-full rounded-xl bg-emerald-50/70 shadow-sm dark:bg-emerald-950/20 [&_select]:h-11 [&_select]:border-emerald-200/80 [&_select]:font-extrabold [&_select]:tracking-[-.01em] dark:[&_select]:border-emerald-900/70"
-                onChange={(event) =>
-                  setPeriod(event.target.value as PeriodFilter)
-                }
+                onValueChange={setPeriod}
+                options={PERIOD_OPTIONS}
+                tone="emerald"
                 value={period}
-              >
-                {PERIOD_OPTIONS.map((option) => (
-                  <NativeSelectOption key={option.value} value={option.value}>
-                    {option.label}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </label>
+              />
+            </div>
             <Button
               aria-expanded={mobileFiltersOpen}
               className="mt-[1.05rem] h-11 rounded-xl border-violet-200 bg-violet-50 px-3 font-extrabold text-violet-900 shadow-sm hover:bg-violet-100 md:hidden dark:border-violet-900/70 dark:bg-violet-950/30 dark:text-violet-100"
@@ -588,58 +626,54 @@ export function SalesProductionView({
                 mobileFiltersOpen ? 'grid' : 'hidden',
               )}
             >
-              <label className="min-w-0">
+              <div className="min-w-0">
                 <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
                   <CircleAlert className="size-3 text-amber-600" /> Pendência
                 </span>
-                <NativeSelect
+                <SalesFilterSelect
                   aria-label="Pendência da venda"
-                  className="h-11 w-full rounded-xl bg-amber-50/70 shadow-sm dark:bg-amber-950/20 [&_select]:h-11 [&_select]:border-amber-200/80 [&_select]:font-extrabold [&_select]:tracking-[-.01em] dark:[&_select]:border-amber-900/70"
-                  onChange={(event) => {
-                    const next = event.target.value as IssueFilter;
+                  onValueChange={(next) => {
                     setIssueFilter(next);
                     if (next !== 'all') {
                       setAlertOnly(false);
                       setGrouping('sale');
                     }
                   }}
+                  options={ISSUE_OPTIONS}
+                  tone="amber"
                   value={issueFilter}
-                >
-                  <NativeSelectOption value="all">
-                    Todas as pendências
-                  </NativeSelectOption>
-                  <NativeSelectOption value="missing_receipt">
-                    Sem comprovante
-                  </NativeSelectOption>
-                  <NativeSelectOption value="pending_payment">
-                    Pagamento pendente
-                  </NativeSelectOption>
-                </NativeSelect>
-              </label>
-              <label className="min-w-0">
+                />
+              </div>
+              <div className="min-w-0">
                 <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
                   <ListFilter className="size-3 text-fuchsia-600" /> Status
                 </span>
-                <NativeSelect
+                <SalesFilterSelect
                   aria-label="Status do pedido"
-                  className="h-11 w-full rounded-xl bg-fuchsia-50/70 shadow-sm dark:bg-fuchsia-950/20 [&_select]:h-11 [&_select]:border-fuchsia-200/80 [&_select]:font-extrabold [&_select]:tracking-[-.01em] dark:[&_select]:border-fuchsia-900/70"
-                  onChange={(event) => setOrderStatusFilter(event.target.value)}
+                  onValueChange={setOrderStatusFilter}
+                  options={[
+                    {
+                      detail: 'Exibe qualquer acompanhamento',
+                      label: 'Todos os status',
+                      value: 'all',
+                    },
+                    {
+                      detail: 'Pedidos ainda sem classificação',
+                      label: 'Sem status',
+                      value: 'none',
+                    },
+                    ...data.orderStatuses.map((status) => ({
+                      detail: status.active
+                        ? 'Status cadastrado pela loja'
+                        : 'Status inativo',
+                      label: `${status.name}${status.active ? '' : ' (inativo)'}`,
+                      value: status.id,
+                    })),
+                  ]}
+                  tone="fuchsia"
                   value={orderStatusFilter}
-                >
-                  <NativeSelectOption value="all">
-                    Todos os status
-                  </NativeSelectOption>
-                  <NativeSelectOption value="none">
-                    Sem status
-                  </NativeSelectOption>
-                  {data.orderStatuses.map((status) => (
-                    <NativeSelectOption key={status.id} value={status.id}>
-                      {status.name}
-                      {status.active ? '' : ' (inativo)'}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </label>
+                />
+              </div>
             </div>
           </div>
           <div className="grid gap-2 md:grid-cols-[auto_1fr]">
@@ -859,17 +893,18 @@ export function SalesProductionView({
         filterSummary={reportFilterSummary}
         onOpenChange={setPeriodReportOpen}
         open={periodReportOpen}
+        period={period}
         storeName={data.store.name}
       />
       <EditSaleDialog
         data={data}
         key={editSale?.id ?? 'closed-sale-editor'}
         onChanged={async () => {
-          await onChanged();
           analyticsCacheRef.current.clear();
           listDataKeyRef.current = '';
           setAnalyticsState(null);
           await loadSales(null, false, true);
+          void onChanged();
         }}
         onOpenChange={(open) => {
           if (!open) setEditSale(null);
@@ -951,9 +986,7 @@ function SaleList({
                 )}
                 {sale.status === 'completed' &&
                   sale.receivedDifferenceCents !== 0 && (
-                    <WarningBadge
-                      text={`${sale.receivedDifferenceCents > 0 ? 'Recebido acima' : 'Recebido abaixo'} em ${formatMoney(Math.abs(sale.receivedDifferenceCents))}`}
-                    />
+                    <WarningBadge text={paymentDifferenceText(sale)!} />
                   )}
                 {sale.status === 'completed' && sale.receipts.length === 0 && (
                   <WarningBadge text="Sem comprovante" />
@@ -988,12 +1021,33 @@ function SaleList({
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
-              <div className="mr-2 text-right">
-                <p className="text-[.65rem] font-bold uppercase text-muted-foreground">
-                  Recebido
-                </p>
-                <strong>{formatMoney(sale.receivedTotalCents)}</strong>
-              </div>
+              {sale.receivedDifferenceCents === 0 ? (
+                <div className="mr-2 text-right">
+                  <p className="text-[.65rem] font-bold uppercase text-muted-foreground">
+                    Recebido
+                  </p>
+                  <strong>{formatMoney(sale.receivedTotalCents)}</strong>
+                </div>
+              ) : (
+                <dl className="mr-2 grid grid-cols-2 gap-x-3 text-right">
+                  <div>
+                    <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
+                      Vendido
+                    </dt>
+                    <dd className="text-sm font-extrabold">
+                      {formatMoney(sale.productsTotalCents)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
+                      Recebido
+                    </dt>
+                    <dd className="text-sm font-extrabold">
+                      {formatMoney(sale.receivedTotalCents)}
+                    </dd>
+                  </div>
+                </dl>
+              )}
               <Button
                 className="h-8 border-blue-200 bg-blue-50 px-2 font-extrabold text-blue-900 hover:bg-blue-100 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100"
                 onClick={() => onReport(sale)}
@@ -1785,6 +1839,24 @@ function EditSaleDialog({
                       <SavedReceiptValueEditor
                         disabled={preparing || uploadBusy}
                         key={receipt.id}
+                        onAutoValueFound={async (value) => {
+                          await requestJson(
+                            `/api/sales/${sale.id}/receipt-values`,
+                            {
+                              method: 'PATCH',
+                              headers: {
+                                'content-type': 'application/json',
+                                'x-csrf-token': data.csrfToken,
+                              },
+                              body: JSON.stringify({
+                                onlyIfPending: true,
+                                operationId: createOperationId(),
+                                receipts: [{ id: receipt.id, ...value }],
+                              }),
+                            },
+                          );
+                          await onChanged();
+                        }}
                         onValueChange={(value) =>
                           setSavedReceiptValues((current) => ({
                             ...current,
@@ -2076,14 +2148,23 @@ function EditSaleDialog({
                             form.append(`itemPhotos:${itemId}`, file),
                           );
                         });
-                        await requestJson(`/api/sales/${sale.id}/attachments`, {
+                        const attachmentResult = await requestJson<{
+                          receipts: ReceiptOcrAttachment[];
+                        }>(`/api/sales/${sale.id}/attachments`, {
                           method: 'POST',
                           headers: { 'x-csrf-token': data.csrfToken },
                           body: form,
                         });
+                        void enqueueReceiptOcrJobs({
+                          attachments: attachmentResult.receipts ?? [],
+                          files: receiptFiles,
+                          receiptValues,
+                          saleId: sale.id,
+                          storeId: data.store.id,
+                        }).catch(() => {});
                         attachmentsSaved = true;
                       }
-                      void onChanged();
+                      await onChanged();
                       onOpenChange(false);
                     } catch (caught) {
                       const savedParts = [
@@ -2094,7 +2175,7 @@ function EditSaleDialog({
                           : '',
                         attachmentsSaved ? 'os anexos' : '',
                       ].filter(Boolean);
-                      if (savedParts.length > 0) void onChanged();
+                      if (savedParts.length > 0) await onChanged();
                       setError(
                         savedParts.length > 0
                           ? `${savedParts.join(' e ')} ${savedParts.length === 1 ? 'foi salvo' : 'foram salvos'}, mas faltou concluir o restante: ${messageOf(caught)}`
@@ -2341,9 +2422,9 @@ function SaleReport({
                 </div>
                 {sale.receivedDifferenceCents !== 0 && (
                   <p className="report-section mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-950">
-                    Produtos: {formatMoney(sale.productsTotalCents)} · Recebido{' '}
-                    {sale.receivedDifferenceCents > 0 ? 'acima' : 'abaixo'} em{' '}
-                    {formatMoney(Math.abs(sale.receivedDifferenceCents))}.
+                    {paymentDifferenceText(sale)} · Valor vendido:{' '}
+                    {formatMoney(sale.productsTotalCents)} · Valor recebido:{' '}
+                    {formatMoney(sale.receivedTotalCents)}.
                   </p>
                 )}
                 <div
@@ -2630,12 +2711,14 @@ function SalesPeriodReport({
   storeName,
   filterParams,
   filterSummary,
+  period,
   onOpenChange,
 }: {
   open: boolean;
   storeName: string;
   filterParams: string;
   filterSummary: string;
+  period: PeriodFilter;
   onOpenChange: (open: boolean) => void;
 }) {
   const [level, setLevel] = useState<ReportLevel>('simple');
@@ -2678,6 +2761,7 @@ function SalesPeriodReport({
     () => sales.filter((sale) => sale.status === 'completed'),
     [sales],
   );
+  const dayGroups = useMemo(() => groupSalesByDay(sales), [sales]);
   const modelGroups = useMemo(
     () => groupModelsAcrossSales(completedSales),
     [completedSales],
@@ -2810,11 +2894,15 @@ function SalesPeriodReport({
                 </p>
               </header>
 
-              <dl className="report-section mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <ReportMetric
-                  label="Montante vendido"
-                  value={formatMoney(amountCents)}
-                />
+              <dl className="report-section mt-4 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                <div className="col-span-3 overflow-hidden rounded-xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-cyan-600 p-4 text-white shadow-sm sm:col-span-2">
+                  <dt className="text-[.68rem] font-black uppercase tracking-[.12em] text-emerald-50/90">
+                    {reportAmountLabel(period)}
+                  </dt>
+                  <dd className="mt-1 text-2xl font-black tracking-[-.04em] sm:text-3xl">
+                    {formatMoney(amountCents)}
+                  </dd>
+                </div>
                 <ReportMetric
                   label="Vendas concluídas"
                   value={String(completedSales.length)}
@@ -2890,190 +2978,283 @@ function SalesPeriodReport({
                 </div>
               </section>
 
-              <section className="report-section mt-5">
-                <h3 className="font-extrabold">Vendas do período</h3>
-                <div className="mt-2 space-y-3">
+              <section className="mt-5">
+                <h3 className="report-section font-extrabold">
+                  Vendas separadas por dia
+                </h3>
+                <div className="mt-2 space-y-5">
                   {sales.length === 0 ? (
                     <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">
                       Nenhuma venda encontrada neste filtro.
                     </p>
                   ) : (
-                    sales.map((sale) => (
+                    dayGroups.map((day) => (
                       <section
-                        className="report-row rounded-xl border border-slate-200 p-3"
-                        key={sale.id}
+                        className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2 sm:p-3"
+                        key={day.key}
                       >
-                        <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2">
-                          <div>
-                            <p className="font-extrabold">
-                              Venda #{String(sale.number).padStart(5, '0')} ·{' '}
-                              {sale.customerName}
+                        <header className="report-section grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl bg-gradient-to-r from-slate-950 to-blue-950 px-3 py-3 text-white">
+                          <div className="min-w-0">
+                            <p className="break-words text-sm font-black leading-tight">
+                              {formatReportDay(day.newestAt)}
                             </p>
-                            <p className="text-xs text-slate-600">
-                              {formatDateTime(sale.createdAt)} ·{' '}
-                              {sale.sellerName}
+                            <p className="mt-1 text-xs font-semibold text-blue-100">
+                              {day.completedCount}{' '}
+                              {day.completedCount === 1
+                                ? 'venda concluída'
+                                : 'vendas concluídas'}{' '}
+                              · {day.itemCount}{' '}
+                              {day.itemCount === 1 ? 'aparelho' : 'aparelhos'}
                             </p>
                           </div>
-                          <strong className="shrink-0">
-                            {sale.status === 'cancelled'
-                              ? 'Cancelada'
-                              : formatMoney(sale.productsTotalCents)}
-                          </strong>
-                        </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-[.62rem] font-black uppercase tracking-[.12em] text-blue-200">
+                              Total do dia
+                            </p>
+                            <strong className="mt-0.5 block text-lg leading-none">
+                              {formatMoney(day.totalCents)}
+                            </strong>
+                          </div>
+                        </header>
 
-                        <div className="mt-2 divide-y divide-slate-100">
-                          {sale.items.map((item) => (
-                            <div
-                              className="flex items-start justify-between gap-3 py-2 text-sm"
-                              key={item.id}
+                        <div className="mt-3 space-y-3">
+                          {day.sales.map((sale) => (
+                            <section
+                              className={cn(
+                                'report-row rounded-xl border-2 p-3 shadow-sm',
+                                sale.status === 'cancelled' &&
+                                  'border-slate-300 bg-slate-100/80',
+                                sale.status === 'completed' &&
+                                  sale.receivedDifferenceCents !== 0 &&
+                                  'border-amber-300 bg-amber-50/30',
+                                sale.status === 'completed' &&
+                                  sale.receivedDifferenceCents === 0 &&
+                                  'border-blue-200 bg-white',
+                              )}
+                              key={sale.id}
                             >
-                              <span className="min-w-0">
-                                <strong>{item.productName}</strong>
-                                <span className="block text-xs text-slate-600">
-                                  {item.productDetail}
-                                  {level !== 'simple'
-                                    ? ` · SN ${item.serial}`
-                                    : ''}
-                                </span>
-                              </span>
-                              <strong className="shrink-0">
-                                {formatMoney(item.soldPriceCents)}
-                              </strong>
-                            </div>
-                          ))}
-                        </div>
-
-                        {level !== 'simple' && sale.status === 'completed' && (
-                          <div className="mt-2 rounded-lg bg-slate-50 p-2 text-xs">
-                            <p className="font-extrabold">Pagamentos</p>
-                            {sale.payments.length === 0 ? (
-                              <p className="mt-1 text-amber-800">
-                                Pagamento não informado — pendente
-                              </p>
-                            ) : (
-                              sale.payments.map((payment) => (
-                                <p
-                                  className="mt-1 flex justify-between gap-3"
-                                  key={payment.id}
-                                >
-                                  <span>
-                                    {payment.method === 'pix'
-                                      ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                                      : 'Dinheiro'}
-                                  </span>
-                                  <strong>
-                                    {formatMoney(payment.amountCents)}
-                                  </strong>
-                                </p>
-                              ))
-                            )}
-                          </div>
-                        )}
-
-                        {level === 'complete' &&
-                          sale.status === 'completed' && (
-                            <div className="mt-2 space-y-2">
                               <div
                                 className={cn(
-                                  'rounded-lg px-3 py-2 text-xs',
-                                  sale.reconciliation.status === 'reconciled' &&
-                                    'bg-emerald-50 text-emerald-950',
-                                  sale.reconciliation.status === 'pending' &&
-                                    'bg-amber-50 text-amber-950',
-                                  sale.reconciliation.status === 'divergent' &&
-                                    'bg-rose-50 text-rose-950',
+                                  'grid gap-3 rounded-lg p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center',
+                                  sale.status === 'cancelled'
+                                    ? 'bg-slate-200/70'
+                                    : sale.receivedDifferenceCents !== 0
+                                      ? 'bg-amber-100/80'
+                                      : 'bg-blue-50',
                                 )}
                               >
-                                <p className="font-extrabold">
-                                  {sale.reconciliation.status === 'reconciled'
-                                    ? 'Conciliado'
-                                    : sale.reconciliation.status === 'divergent'
-                                      ? 'Verificar venda'
-                                      : 'Conciliação pendente'}
-                                </p>
-                                <p>
-                                  Comprovantes:{' '}
-                                  {formatMoney(
-                                    sale.reconciliation.confirmedTotalCents,
-                                  )}{' '}
-                                  · Venda:{' '}
-                                  {formatMoney(sale.productsTotalCents)}
-                                  {sale.reconciliation.status === 'divergent'
-                                    ? ` · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`
-                                    : ''}
-                                </p>
+                                <div className="min-w-0">
+                                  <p className="break-words font-extrabold leading-tight">
+                                    Venda #
+                                    {String(sale.number).padStart(5, '0')} ·{' '}
+                                    {sale.customerName}
+                                  </p>
+                                  <p className="mt-1 break-words text-xs text-slate-600">
+                                    {formatDateTime(sale.createdAt)} ·{' '}
+                                    {sale.sellerName}
+                                  </p>
+                                </div>
+
+                                {sale.status === 'cancelled' ? (
+                                  <strong className="rounded-full bg-slate-700 px-3 py-1 text-center text-xs text-white sm:justify-self-end">
+                                    Cancelada
+                                  </strong>
+                                ) : (
+                                  <dl className="grid grid-cols-2 gap-2 sm:min-w-64">
+                                    <div className="rounded-lg bg-white/80 px-2 py-2">
+                                      <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
+                                        Valor vendido
+                                      </dt>
+                                      <dd className="mt-0.5 break-words text-sm font-extrabold">
+                                        {formatMoney(sale.productsTotalCents)}
+                                      </dd>
+                                    </div>
+                                    <div className="rounded-lg bg-white/80 px-2 py-2">
+                                      <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
+                                        Valor recebido
+                                      </dt>
+                                      <dd className="mt-0.5 break-words text-sm font-extrabold">
+                                        {formatMoney(sale.receivedTotalCents)}
+                                      </dd>
+                                    </div>
+                                  </dl>
+                                )}
                               </div>
 
-                              {!completeMediaTooLarge &&
-                                sale.items.some(
-                                  (item) => item.photos.length > 0,
-                                ) && (
-                                  <div>
-                                    <p className="text-xs font-extrabold">
-                                      Fotos dos aparelhos
-                                    </p>
-                                    <div className="mt-1 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                                      {sale.items.flatMap((item) =>
-                                        item.photos.map((photo) => (
-                                          <a
-                                            href={photo.url}
-                                            key={photo.id}
-                                            rel="noreferrer"
-                                            target="_blank"
-                                          >
-                                            <img
-                                              alt={`${item.productName} · SN ${item.serial}`}
-                                              className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
-                                              src={photo.url}
-                                            />
-                                          </a>
-                                        )),
-                                      )}
-                                    </div>
+                              {sale.status === 'completed' &&
+                                sale.receivedDifferenceCents !== 0 && (
+                                  <p className="mt-2 rounded-lg border border-amber-200 bg-amber-100 px-3 py-2 text-sm font-extrabold text-amber-950">
+                                    {paymentDifferenceText(sale)}
+                                  </p>
+                                )}
+
+                              <div className="mt-2 divide-y divide-slate-100">
+                                {sale.items.map((item) => (
+                                  <div
+                                    className="flex items-start justify-between gap-3 py-2 text-sm"
+                                    key={item.id}
+                                  >
+                                    <span className="min-w-0">
+                                      <strong>{item.productName}</strong>
+                                      <span className="block text-xs text-slate-600">
+                                        {item.productDetail}
+                                        {level !== 'simple'
+                                          ? ` · SN ${item.serial}`
+                                          : ''}
+                                      </span>
+                                    </span>
+                                    <strong className="shrink-0">
+                                      {formatMoney(item.soldPriceCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {level !== 'simple' &&
+                                sale.status === 'completed' && (
+                                  <div className="mt-2 rounded-lg bg-slate-50 p-2 text-xs">
+                                    <p className="font-extrabold">Pagamentos</p>
+                                    {sale.payments.length === 0 ? (
+                                      <p className="mt-1 text-amber-800">
+                                        Pagamento não informado — pendente
+                                      </p>
+                                    ) : (
+                                      sale.payments.map((payment) => (
+                                        <p
+                                          className="mt-1 flex justify-between gap-3"
+                                          key={payment.id}
+                                        >
+                                          <span>
+                                            {payment.method === 'pix'
+                                              ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                              : 'Dinheiro'}
+                                          </span>
+                                          <strong>
+                                            {formatMoney(payment.amountCents)}
+                                          </strong>
+                                        </p>
+                                      ))
+                                    )}
                                   </div>
                                 )}
 
-                              {!completeMediaTooLarge &&
-                                sale.receipts.length > 0 && (
-                                  <div>
-                                    <p className="text-xs font-extrabold">
-                                      Comprovantes da venda #
-                                      {String(sale.number).padStart(5, '0')}
-                                    </p>
-                                    <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                                      {sale.receipts.map((receipt) =>
-                                        receipt.mimeType ===
-                                        'application/pdf' ? (
-                                          <a
-                                            className="rounded-lg border border-slate-200 p-3 text-xs font-bold"
-                                            href={receipt.url}
-                                            key={receipt.id}
-                                            rel="noreferrer"
-                                            target="_blank"
-                                          >
-                                            <FileText className="mb-1 size-4" />
-                                            {receipt.name}
-                                          </a>
-                                        ) : (
-                                          <a
-                                            href={receipt.url}
-                                            key={receipt.id}
-                                            rel="noreferrer"
-                                            target="_blank"
-                                          >
-                                            <img
-                                              alt={receipt.name}
-                                              className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
-                                              src={receipt.url}
-                                            />
-                                          </a>
-                                        ),
+                              {level === 'complete' &&
+                                sale.status === 'completed' && (
+                                  <div className="mt-2 space-y-2">
+                                    <div
+                                      className={cn(
+                                        'rounded-lg px-3 py-2 text-xs',
+                                        sale.reconciliation.status ===
+                                          'reconciled' &&
+                                          'bg-emerald-50 text-emerald-950',
+                                        sale.reconciliation.status ===
+                                          'pending' &&
+                                          'bg-amber-50 text-amber-950',
+                                        sale.reconciliation.status ===
+                                          'divergent' &&
+                                          'bg-rose-50 text-rose-950',
                                       )}
+                                    >
+                                      <p className="font-extrabold">
+                                        {sale.reconciliation.status ===
+                                        'reconciled'
+                                          ? 'Conciliado'
+                                          : sale.reconciliation.status ===
+                                              'divergent'
+                                            ? 'Verificar venda'
+                                            : 'Conciliação pendente'}
+                                      </p>
+                                      <p>
+                                        Comprovantes:{' '}
+                                        {formatMoney(
+                                          sale.reconciliation
+                                            .confirmedTotalCents,
+                                        )}{' '}
+                                        · Venda:{' '}
+                                        {formatMoney(sale.productsTotalCents)}
+                                        {sale.reconciliation.status ===
+                                        'divergent'
+                                          ? ` · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`
+                                          : ''}
+                                      </p>
                                     </div>
+
+                                    {!completeMediaTooLarge &&
+                                      sale.items.some(
+                                        (item) => item.photos.length > 0,
+                                      ) && (
+                                        <div>
+                                          <p className="text-xs font-extrabold">
+                                            Fotos dos aparelhos
+                                          </p>
+                                          <div className="mt-1 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                                            {sale.items.flatMap((item) =>
+                                              item.photos.map((photo) => (
+                                                <a
+                                                  href={photo.url}
+                                                  key={photo.id}
+                                                  rel="noreferrer"
+                                                  target="_blank"
+                                                >
+                                                  <img
+                                                    alt={`${item.productName} · SN ${item.serial}`}
+                                                    className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                                    src={photo.url}
+                                                  />
+                                                </a>
+                                              )),
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                    {!completeMediaTooLarge &&
+                                      sale.receipts.length > 0 && (
+                                        <div>
+                                          <p className="text-xs font-extrabold">
+                                            Comprovantes da venda #
+                                            {String(sale.number).padStart(
+                                              5,
+                                              '0',
+                                            )}
+                                          </p>
+                                          <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                            {sale.receipts.map((receipt) =>
+                                              receipt.mimeType ===
+                                              'application/pdf' ? (
+                                                <a
+                                                  className="rounded-lg border border-slate-200 p-3 text-xs font-bold"
+                                                  href={receipt.url}
+                                                  key={receipt.id}
+                                                  rel="noreferrer"
+                                                  target="_blank"
+                                                >
+                                                  <FileText className="mb-1 size-4" />
+                                                  {receipt.name}
+                                                </a>
+                                              ) : (
+                                                <a
+                                                  href={receipt.url}
+                                                  key={receipt.id}
+                                                  rel="noreferrer"
+                                                  target="_blank"
+                                                >
+                                                  <img
+                                                    alt={receipt.name}
+                                                    className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                                    src={receipt.url}
+                                                  />
+                                                </a>
+                                              ),
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
                                   </div>
                                 )}
-                            </div>
-                          )}
+                            </section>
+                          ))}
+                        </div>
                       </section>
                     ))
                   )}
@@ -3443,6 +3624,83 @@ function metricMobileComparisonText(
   const percent = Math.round(((current - previous) / previous) * 100);
   return `${percent > 0 ? '+' : ''}${percent}%`;
 }
+
+function SalesFilterSelect<T extends string>({
+  'aria-label': ariaLabel,
+  onValueChange,
+  options,
+  tone,
+  value,
+}: {
+  'aria-label': string;
+  onValueChange: (value: T) => void;
+  options: Array<FilterOption<T>>;
+  tone: 'amber' | 'emerald' | 'fuchsia';
+  value: T;
+}) {
+  const selected = options.find((option) => option.value === value);
+  const tones = {
+    amber:
+      'border-amber-200/90 bg-amber-50/80 text-amber-950 hover:bg-amber-100/80 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-50',
+    emerald:
+      'border-emerald-200/90 bg-emerald-50/80 text-emerald-950 hover:bg-emerald-100/80 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-50',
+    fuchsia:
+      'border-fuchsia-200/90 bg-fuchsia-50/80 text-fuchsia-950 hover:bg-fuchsia-100/80 dark:border-fuchsia-900/70 dark:bg-fuchsia-950/30 dark:text-fuchsia-50',
+  } as const;
+  const selectedTones = {
+    amber: 'data-selected:bg-amber-100 data-selected:text-amber-950',
+    emerald: 'data-selected:bg-emerald-100 data-selected:text-emerald-950',
+    fuchsia: 'data-selected:bg-fuchsia-100 data-selected:text-fuchsia-950',
+  } as const;
+
+  return (
+    <Select
+      onValueChange={(next) => {
+        if (next) onValueChange(next as T);
+      }}
+      value={value}
+    >
+      <SelectTrigger
+        aria-label={ariaLabel}
+        className={cn(
+          'h-11 w-full rounded-xl px-3 text-left font-extrabold tracking-[-.01em] shadow-sm focus-visible:ring-2',
+          tones[tone],
+        )}
+      >
+        <SelectValue>{selected?.label ?? 'Selecionar'}</SelectValue>
+      </SelectTrigger>
+      <SelectContent
+        align="start"
+        alignItemWithTrigger={false}
+        className="min-w-[min(21rem,calc(100vw-1rem))] rounded-2xl border bg-popover p-1.5 shadow-2xl"
+        sideOffset={6}
+      >
+        {options.map((option) => (
+          <SelectItem
+            className={cn(
+              'min-h-14 rounded-xl px-3 py-2.5 pr-9 focus:bg-accent',
+              selectedTones[tone],
+            )}
+            key={option.value}
+            value={option.value}
+          >
+            <span className="min-w-0">
+              <span className="block text-[.95rem] font-extrabold leading-tight tracking-[-.015em]">
+                {option.label}
+              </span>
+              {option.detail && (
+                <span className="mt-1 block text-xs font-medium leading-tight text-muted-foreground">
+                  {option.detail}
+                </span>
+              )}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 function ReportMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-lg bg-slate-100 p-3">
@@ -3504,6 +3762,59 @@ function groupModelsAcrossSales(sales: SaleRecord[]) {
   );
 }
 
+function groupSalesByDay(sales: SaleRecord[]) {
+  const groups = new Map<
+    string,
+    {
+      key: string;
+      newestAt: number;
+      sales: SaleRecord[];
+      completedCount: number;
+      itemCount: number;
+      totalCents: number;
+    }
+  >();
+
+  sales.forEach((sale) => {
+    const key = dateKey(sale.createdAt);
+    const group = groups.get(key) ?? {
+      key,
+      newestAt: sale.createdAt,
+      sales: [],
+      completedCount: 0,
+      itemCount: 0,
+      totalCents: 0,
+    };
+    group.sales.push(sale);
+    group.newestAt = Math.max(group.newestAt, sale.createdAt);
+    if (sale.status === 'completed') {
+      group.completedCount += 1;
+      group.itemCount += sale.items.length;
+      group.totalCents += sale.productsTotalCents;
+    }
+    groups.set(key, group);
+  });
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      sales: group.sales.sort(
+        (left, right) => right.createdAt - left.createdAt,
+      ),
+    }))
+    .sort((left, right) => right.newestAt - left.newestAt);
+}
+
+function paymentDifferenceText(sale: SaleRecord) {
+  if (sale.receivedDifferenceCents < 0) {
+    return `Falta receber ${formatMoney(-sale.receivedDifferenceCents)}`;
+  }
+  if (sale.receivedDifferenceCents > 0) {
+    return `Recebido a mais ${formatMoney(sale.receivedDifferenceCents)}`;
+  }
+  return null;
+}
+
 function paymentLabel(sale: SaleRecord) {
   if (sale.payments.length === 0) return 'Pagamento não informado';
   return sale.payments
@@ -3521,6 +3832,15 @@ function reportName(level: ReportLevel) {
       ? 'detalhado'
       : 'completo';
 }
+
+function reportAmountLabel(period: PeriodFilter) {
+  if (period === 'today') return 'Total vendido hoje';
+  if (period === 'yesterday' || period === 'day') {
+    return 'Total vendido no dia';
+  }
+  return 'Montante total do período';
+}
+
 function formatMoney(cents: number) {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
@@ -3575,6 +3895,15 @@ function dateKey(value: number) {
     day: '2-digit',
   }).format(new Date(value));
 }
+
+function formatReportDay(value: number) {
+  const label = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    dateStyle: 'full',
+  }).format(new Date(value));
+  return `${label.charAt(0).toLocaleUpperCase('pt-BR')}${label.slice(1)}`;
+}
+
 function formatDateTime(value: number) {
   return new Intl.DateTimeFormat('pt-BR', {
     timeZone: 'America/Sao_Paulo',

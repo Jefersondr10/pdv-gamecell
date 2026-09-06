@@ -45,6 +45,7 @@ export async function PATCH(
   let saleId = '';
   let storeId = '';
   let requestedCount = 0;
+  let onlyIfPending = false;
   try {
     assertSameOrigin(request);
     const session = await requireSession(request);
@@ -54,7 +55,10 @@ export async function PATCH(
     const body = await boundedJson(request, 16 * 1024);
     if (
       Object.keys(body).some(
-        (key) => key !== 'operationId' && key !== 'receipts',
+        (key) =>
+          key !== 'operationId' &&
+          key !== 'receipts' &&
+          key !== 'onlyIfPending',
       )
     ) {
       throw new HttpError(
@@ -63,13 +67,28 @@ export async function PATCH(
         'UNKNOWN_FIELD',
       );
     }
+    if (
+      Object.hasOwn(body, 'onlyIfPending') &&
+      typeof body.onlyIfPending !== 'boolean'
+    ) {
+      throw new HttpError(
+        400,
+        'A proteção da leitura automática é inválida.',
+        'INVALID_ONLY_IF_PENDING',
+      );
+    }
+    onlyIfPending = body.onlyIfPending === true;
     operationId = operationIdField(body.operationId);
     const receipts = parseReceiptUpdates(body.receipts);
     requestedCount = receipts.length;
     const normalized = [...receipts].sort((left, right) =>
       left.id.localeCompare(right.id),
     );
-    fingerprint = JSON.stringify({ saleId, receipts: normalized });
+    fingerprint = JSON.stringify(
+      onlyIfPending
+        ? { saleId, receipts: normalized, onlyIfPending: true }
+        : { saleId, receipts: normalized },
+    );
     const db = runtime().DB;
 
     const replay = await findOperation(db, operationId);
@@ -118,10 +137,15 @@ export async function PATCH(
     const currentById = new Map(
       current.map((receipt) => [receipt.id, receipt]),
     );
+    const receiptsToUpdate = onlyIfPending
+      ? receipts.filter(
+          (receipt) => currentById.get(receipt.id)!.receiptAmountCents === null,
+        )
+      : receipts;
     const now = Date.now();
     await consumeStoreWriteBudget(db, now, storeId, 3 + receipts.length);
 
-    const updateStatements = receipts.map((receipt) => {
+    const updateStatements = receiptsToUpdate.map((receipt) => {
       const previous = currentById.get(receipt.id)!;
       return db
         .prepare(
@@ -153,18 +177,19 @@ export async function PATCH(
           previous.receiptAmountConfirmedAt,
         );
     });
-    const desiredGuards = receipts
-      .map(
-        () =>
-          `EXISTS (
+    const desiredGuards =
+      receiptsToUpdate
+        .map(
+          () =>
+            `EXISTS (
              SELECT 1 FROM attachments
              WHERE id = ? AND store_id = ? AND sale_id = ? AND kind = 'receipt'
                AND receipt_amount_cents IS ? AND receipt_amount_source IS ?
                AND receipt_amount_confirmed_by IS ?
                AND receipt_amount_confirmed_at IS ?
            )`,
-      )
-      .join(' AND ');
+        )
+        .join(' AND ') || '1 = 1';
     try {
       const results = await db.batch([
         ...updateStatements,
@@ -186,7 +211,7 @@ export async function PATCH(
             session.id,
             saleId,
             storeId,
-            ...receipts.flatMap((receipt) => [
+            ...receiptsToUpdate.flatMap((receipt) => [
               receipt.id,
               storeId,
               saleId,
@@ -225,7 +250,11 @@ export async function PATCH(
       throw error;
     }
 
-    return json({ ok: true, updatedCount: receipts.length, replayed: false });
+    return json({
+      ok: true,
+      updatedCount: receiptsToUpdate.length,
+      replayed: false,
+    });
   } catch (error) {
     if (
       !(error instanceof HttpError) &&

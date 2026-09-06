@@ -424,6 +424,7 @@ const sale = await call('/api/sales', {
   body: saleForm,
 });
 assert.equal(sale.body.number, 1);
+assert.deepEqual(sale.body.receipts, []);
 const saleId = String(sale.body.id);
 const replaySaleForm = new FormData();
 replaySaleForm.set('payload', JSON.stringify(salePayload));
@@ -436,6 +437,7 @@ const replayedSale = await call('/api/sales', {
 assert.equal(replayedSale.body.id, saleId);
 assert.equal(replayedSale.body.number, 1);
 assert.equal(replayedSale.body.replayed, true);
+assert.deepEqual(replayedSale.body.receipts, []);
 const conflictingSaleForm = new FormData();
 conflictingSaleForm.set(
   'payload',
@@ -698,6 +700,48 @@ const appended = await call(`/api/sales/${saleId}/attachments`, {
 });
 assert.equal(appended.body.receiptsAdded, 1);
 assert.equal(appended.body.itemPhotosAdded, 1);
+const appendedReceipt = (
+  appended.body.receipts as Array<{
+    id: string;
+    mimeType: string;
+    name: string;
+    sizeBytes: number;
+    url: string;
+  }>
+)[0];
+assert.equal(appendedReceipt.name, 'comprovante-depois.pdf');
+assert.equal(appendedReceipt.mimeType, 'application/pdf');
+assert.ok(appendedReceipt.sizeBytes > 0);
+assert.equal(appendedReceipt.url, `/api/files/${appendedReceipt.id}`);
+
+await call(`/api/sales/${saleId}/receipt-values`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    receipts: [
+      { id: appendedReceipt.id, amountCents: 900_000, source: 'manual' },
+    ],
+  }),
+});
+const protectedAutomaticValue = await call(
+  `/api/sales/${saleId}/receipt-values`,
+  {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    headers: {
+      'x-csrf-token': ownerCsrf,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      onlyIfPending: true,
+      receipts: [{ id: appendedReceipt.id, amountCents: 1, source: 'ocr' }],
+    }),
+  },
+);
+assert.equal(protectedAutomaticValue.body.updatedCount, 0);
 
 await call(`/api/order-statuses/${pendingStatusId}`, {
   method: 'PATCH',
@@ -712,13 +756,19 @@ const editedSale = (
   editedSales.body.items as Array<{
     orderStatus: { id: string; name: string; color: string } | null;
     items: Array<{ id: string; photos: unknown[] }>;
-    receipts: unknown[];
+    receipts: Array<{
+      id: string;
+      receiptAmountCents: number | null;
+      receiptAmountSource: string | null;
+    }>;
   }>
 )[0];
 assert.equal(editedSale.orderStatus?.id, pendingStatusId);
 assert.equal(editedSale.orderStatus?.name, 'Pagamento pendente');
 assert.equal(editedSale.orderStatus?.color, 'orange');
 assert.equal(editedSale.receipts.length, 1);
+assert.equal(editedSale.receipts[0].receiptAmountCents, 900_000);
+assert.equal(editedSale.receipts[0].receiptAmountSource, 'manual');
 assert.equal(
   (editedSales.body.aggregates as { alertCount: number }).alertCount,
   0,
@@ -1083,7 +1133,7 @@ const completedSaleAlerts = await call(
   { cookie: staffCookie },
 );
 assert.ok(
-  !(completedSaleAlerts.body.items as Array<{ id: string }>).some(
+  (completedSaleAlerts.body.items as Array<{ id: string }>).some(
     (item) => item.id === activeSaleId,
   ),
 );

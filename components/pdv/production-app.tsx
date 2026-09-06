@@ -61,6 +61,11 @@ import {
 } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { messageOf, requestJson } from '@/lib/client-api';
+import {
+  activateReceiptOcrQueue,
+  enqueueReceiptOcrJobs,
+  type ReceiptOcrAttachment,
+} from '@/lib/client-receipt-background';
 import { displayCommercialCode } from '@/lib/commercial-code';
 import type { BootstrapData } from '@/lib/pdv-types';
 import { preloadScannerDecoder } from '@/lib/scanner';
@@ -317,6 +322,14 @@ function CloudPdv({
   }, [reload]);
 
   useEffect(() => {
+    if (!data?.store.id || !data.csrfToken) return;
+    return activateReceiptOcrQueue({
+      storeId: data.store.id,
+      csrfToken: data.csrfToken,
+    });
+  }, [data?.csrfToken, data?.store.id]);
+
+  useEffect(() => {
     if (!data?.systemCatalog.updateAvailable) return;
     const version = data.systemCatalog.currentVersion;
     if (catalogSyncRef.current === version) return;
@@ -499,11 +512,21 @@ function CloudPdv({
       ),
     );
     sale.receipts.forEach((receipt) => form.append('receipts', receipt));
-    await requestJson('/api/sales', {
+    const result = await requestJson<{
+      id: string;
+      receipts: ReceiptOcrAttachment[];
+    }>('/api/sales', {
       method: 'POST',
       headers: { 'x-csrf-token': data!.csrfToken },
       body: form,
     });
+    void enqueueReceiptOcrJobs({
+      storeId: data!.store.id,
+      saleId: result.id,
+      attachments: result.receipts ?? [],
+      files: sale.receipts,
+      receiptValues: sale.receiptValues,
+    }).catch(() => {});
     void reload(true);
   };
 
@@ -577,7 +600,7 @@ function CloudPdv({
               Loja {data.store.code}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <Button
               className="h-10 rounded-full px-3 text-sm lg:hidden"
               onClick={() => setProfileOpen(true)}
@@ -585,7 +608,7 @@ function CloudPdv({
               variant="ghost"
             >
               <CircleUserRound />{' '}
-              <span className="hidden min-[390px]:inline">
+              <span className="hidden min-[430px]:inline">
                 {firstName(data.user.displayName)}
               </span>
             </Button>
@@ -1352,9 +1375,10 @@ function GuideDialog({
           <GuideStep number="3" title="Venda por etapas">
             Pesquise ou cadastre o cliente, bipe um ou mais SNs, adicione fotos,
             confira ou altere o preço e anexe ou pule o comprovante. A leitura
-            do valor da transação acontece no próprio aparelho; confira o valor
-            sugerido antes de continuar. Também é possível salvar sem informar
-            pagamento e completar depois.
+            do valor acontece automaticamente no próprio aparelho. Você pode
+            salvar a venda enquanto ela continua; quando terminar, a venda é
+            atualizada sem recarregar a página. Também é possível salvar sem
+            informar pagamento e completar depois.
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
@@ -1368,8 +1392,9 @@ function GuideDialog({
             alterne entre SNs disponíveis e vendidos; um SN vendido abre sua
             venda. O relatório ignora estoque zerado. Em Vendas, o botão
             Relatório de vendas baixa o período filtrado nos formatos
-            simplificado, detalhado ou completo; cada venda também mantém seu
-            próprio PDF. O menu Histórico preserva cada entrada.
+            simplificado, detalhado ou completo, separa os resultados por dia e
+            destaca o total diário; cada venda também mantém seu próprio PDF. O
+            menu Histórico preserva cada entrada.
           </GuideStep>
           <GuideStep
             number="6"
@@ -1555,7 +1580,7 @@ function Brand({
   storeName: string;
 }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex min-w-0 items-center gap-2 sm:gap-3">
       <span
         className={`grid place-items-center rounded-xl ${light ? 'bg-white/12 text-white' : 'bg-primary text-primary-foreground'} ${compact ? 'size-9' : 'size-11'}`}
       >
