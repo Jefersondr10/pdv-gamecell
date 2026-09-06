@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.05-valores-alertas-v9';
+export const GUIDE_VERSION = '2026.09.05-comparacao-pagamentos-v10';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 

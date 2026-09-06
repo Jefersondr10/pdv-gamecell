@@ -5,10 +5,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   Camera,
   CircleAlert,
   Download,
+  Equal,
   FileCheck2,
   FileText,
   ImagePlus,
@@ -1022,7 +1025,7 @@ function SaleList({
                 {sale.status === 'completed' &&
                   sale.reconciliation.status === 'divergent' && (
                     <WarningBadge
-                      text={`Verificar venda · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'falta' : 'sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`}
+                      text={receiptDifferenceText(sale)!}
                       tone="reconciliation"
                     />
                   )}
@@ -1034,24 +1037,7 @@ function SaleList({
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
-              <dl className="mr-2 grid min-w-[12rem] grid-cols-2 gap-x-3 text-right">
-                <div>
-                  <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
-                    Valor da venda
-                  </dt>
-                  <dd className="text-sm font-extrabold">
-                    {formatMoney(sale.productsTotalCents)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
-                    Total pago
-                  </dt>
-                  <dd className="text-sm font-extrabold">
-                    {formatMoney(sale.receivedTotalCents)}
-                  </dd>
-                </div>
-              </dl>
+              <SalePaymentComparison sale={sale} />
               <Button
                 className="h-8 border-blue-200 bg-blue-50 px-2 font-extrabold text-blue-900 hover:bg-blue-100 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100"
                 onClick={() => onReport(sale)}
@@ -2424,19 +2410,35 @@ function SaleReport({
                   />
                   <ReportMetric label="Cliente" value={sale.customerName} />
                 </div>
-                {sale.receivedDifferenceCents !== 0 && (
-                  <p
+                {sale.status === 'completed' && (
+                  <div
                     className={cn(
                       'report-section mt-3 rounded-lg border px-3 py-2 text-sm font-semibold',
-                      sale.receivedDifferenceCents < 0
-                        ? 'border-rose-200 bg-rose-50 text-rose-950'
-                        : 'border-violet-200 bg-violet-50 text-violet-950',
+                      getPaymentComparison(sale) === 'under' &&
+                        'border-rose-200 bg-rose-50 text-rose-950',
+                      getPaymentComparison(sale) === 'equal' &&
+                        'border-blue-200 bg-blue-50 text-blue-950',
+                      getPaymentComparison(sale) === 'over' &&
+                        'border-violet-200 bg-violet-50 text-violet-950',
+                      getPaymentComparison(sale) === 'unset' &&
+                        'border-slate-200 bg-slate-50 text-slate-800',
                     )}
                   >
-                    {paymentDifferenceText(sale)} · Valor da venda:{' '}
-                    {formatMoney(sale.productsTotalCents)} · Total pago:{' '}
-                    {formatMoney(sale.receivedTotalCents)}.
-                  </p>
+                    <PaymentComparisonLabel
+                      className="justify-start"
+                      comparison={getPaymentComparison(sale)}
+                      surface="report"
+                    />
+                    <p className="mt-1">
+                      Valor da venda: {formatMoney(sale.productsTotalCents)}
+                      {' · '}Total pago: {formatMoney(sale.receivedTotalCents)}
+                    </p>
+                    {sale.receivedDifferenceCents !== 0 && (
+                      <p className="mt-1 font-extrabold">
+                        {paymentDifferenceText(sale)}
+                      </p>
+                    )}
+                  </div>
                 )}
                 <div
                   className={cn(
@@ -2455,7 +2457,7 @@ function SaleReport({
                       : sale.reconciliation.status === 'reconciled'
                         ? 'Conciliado'
                         : sale.reconciliation.status === 'divergent'
-                          ? 'Verificar venda'
+                          ? 'Comprovantes não conferem'
                           : 'Conciliação pendente'}
                   </p>
                   <p className="mt-0.5">
@@ -2463,7 +2465,7 @@ function SaleReport({
                     {formatMoney(sale.reconciliation.confirmedTotalCents)} ·
                     Total da venda: {formatMoney(sale.productsTotalCents)}
                     {sale.reconciliation.status === 'divergent'
-                      ? ` · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`
+                      ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} da venda`
                       : ''}
                   </p>
                 </div>
@@ -3043,7 +3045,7 @@ function SalesPeriodReport({
                                   'border-violet-300 bg-violet-50/30',
                                 sale.status === 'completed' &&
                                   sale.receivedDifferenceCents === 0 &&
-                                  'border-blue-200 bg-white',
+                                  'border-blue-300 bg-blue-50/30',
                               )}
                               key={sale.id}
                             >
@@ -3056,7 +3058,7 @@ function SalesPeriodReport({
                                       ? 'bg-rose-100/80'
                                       : sale.receivedDifferenceCents > 0
                                         ? 'bg-violet-100/80'
-                                        : 'bg-blue-50',
+                                        : 'bg-blue-100/80',
                                 )}
                               >
                                 <div className="min-w-0">
@@ -3076,24 +3078,31 @@ function SalesPeriodReport({
                                     Cancelada
                                   </strong>
                                 ) : (
-                                  <dl className="grid grid-cols-2 gap-2 sm:min-w-64">
-                                    <div className="rounded-lg bg-white/80 px-2 py-2">
-                                      <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
-                                        Valor da venda
-                                      </dt>
-                                      <dd className="mt-0.5 break-words text-sm font-extrabold">
-                                        {formatMoney(sale.productsTotalCents)}
-                                      </dd>
-                                    </div>
-                                    <div className="rounded-lg bg-white/80 px-2 py-2">
-                                      <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
-                                        Total pago
-                                      </dt>
-                                      <dd className="mt-0.5 break-words text-sm font-extrabold">
-                                        {formatMoney(sale.receivedTotalCents)}
-                                      </dd>
-                                    </div>
-                                  </dl>
+                                  <div className="sm:min-w-64">
+                                    <PaymentComparisonLabel
+                                      className="mb-1 justify-start sm:justify-end"
+                                      comparison={getPaymentComparison(sale)}
+                                      surface="report"
+                                    />
+                                    <dl className="grid grid-cols-2 gap-2">
+                                      <div className="rounded-lg bg-white/80 px-2 py-2">
+                                        <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
+                                          Valor da venda
+                                        </dt>
+                                        <dd className="mt-0.5 break-words text-sm font-extrabold">
+                                          {formatMoney(sale.productsTotalCents)}
+                                        </dd>
+                                      </div>
+                                      <div className="rounded-lg bg-white/80 px-2 py-2">
+                                        <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
+                                          Total pago
+                                        </dt>
+                                        <dd className="mt-0.5 break-words text-sm font-extrabold">
+                                          {formatMoney(sale.receivedTotalCents)}
+                                        </dd>
+                                      </div>
+                                    </dl>
+                                  </div>
                                 )}
                               </div>
 
@@ -3184,7 +3193,7 @@ function SalesPeriodReport({
                                           ? 'Conciliado'
                                           : sale.reconciliation.status ===
                                               'divergent'
-                                            ? 'Verificar venda'
+                                            ? 'Comprovantes não conferem'
                                             : 'Conciliação pendente'}
                                       </p>
                                       <p>
@@ -3197,7 +3206,7 @@ function SalesPeriodReport({
                                         {formatMoney(sale.productsTotalCents)}
                                         {sale.reconciliation.status ===
                                         'divergent'
-                                          ? ` · ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))}`
+                                          ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} da venda`
                                           : ''}
                                       </p>
                                     </div>
@@ -3485,6 +3494,114 @@ function Empty({ hasAny }: { hasAny: boolean }) {
     </div>
   );
 }
+
+type PaymentComparison = 'cancelled' | 'equal' | 'over' | 'under' | 'unset';
+
+function getPaymentComparison(sale: SaleRecord): PaymentComparison {
+  if (sale.status === 'cancelled') return 'cancelled';
+  if (sale.productsTotalCents <= 0) return 'unset';
+  if (sale.receivedDifferenceCents < 0) return 'under';
+  if (sale.receivedDifferenceCents > 0) return 'over';
+  return 'equal';
+}
+
+function SalePaymentComparison({ sale }: { sale: SaleRecord }) {
+  const comparison = getPaymentComparison(sale);
+
+  return (
+    <div
+      className={cn(
+        'w-full rounded-xl border px-2.5 py-2 sm:mr-2 sm:w-auto sm:min-w-[12rem]',
+        comparison === 'equal' &&
+          'border-blue-200 bg-blue-50/90 dark:border-blue-900 dark:bg-blue-950/35',
+        comparison === 'under' &&
+          'border-rose-200 bg-rose-50/90 dark:border-rose-900 dark:bg-rose-950/35',
+        comparison === 'over' &&
+          'border-violet-200 bg-violet-50/90 dark:border-violet-900 dark:bg-violet-950/35',
+        (comparison === 'unset' || comparison === 'cancelled') &&
+          'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60',
+      )}
+    >
+      <PaymentComparisonLabel comparison={comparison} />
+      <dl className="mt-1 grid grid-cols-2 gap-x-3 text-right">
+        <div>
+          <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
+            Valor da venda
+          </dt>
+          <dd className="text-sm font-extrabold tabular-nums">
+            {formatMoney(sale.productsTotalCents)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[.6rem] font-bold uppercase text-muted-foreground">
+            Total pago
+          </dt>
+          <dd className="text-sm font-extrabold tabular-nums">
+            {formatMoney(sale.receivedTotalCents)}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function PaymentComparisonLabel({
+  comparison,
+  className,
+  surface = 'app',
+}: {
+  comparison: PaymentComparison;
+  className?: string;
+  surface?: 'app' | 'report';
+}) {
+  const Icon =
+    comparison === 'equal'
+      ? Equal
+      : comparison === 'under'
+        ? ArrowDown
+        : comparison === 'over'
+          ? ArrowUp
+          : CircleAlert;
+  const text =
+    comparison === 'equal'
+      ? 'Pago igual à venda'
+      : comparison === 'under'
+        ? 'Pago abaixo da venda'
+        : comparison === 'over'
+          ? 'Pago acima da venda'
+          : comparison === 'cancelled'
+            ? 'Venda cancelada'
+            : 'Valor não definido';
+
+  return (
+    <p
+      className={cn(
+        'flex items-center justify-end gap-1 text-xs font-black uppercase tracking-wide',
+        comparison === 'equal' &&
+          (surface === 'report'
+            ? 'text-blue-800'
+            : 'text-blue-700 dark:text-blue-300'),
+        comparison === 'under' &&
+          (surface === 'report'
+            ? 'text-rose-800'
+            : 'text-rose-700 dark:text-rose-300'),
+        comparison === 'over' &&
+          (surface === 'report'
+            ? 'text-violet-800'
+            : 'text-violet-700 dark:text-violet-300'),
+        (comparison === 'unset' || comparison === 'cancelled') &&
+          (surface === 'report'
+            ? 'text-slate-700'
+            : 'text-slate-600 dark:text-slate-300'),
+        className,
+      )}
+    >
+      <Icon aria-hidden="true" className="size-3" />
+      {text}
+    </p>
+  );
+}
+
 type WarningTone =
   | 'information'
   | 'overpayment'
@@ -3867,6 +3984,17 @@ function paymentDifferenceText(sale: SaleRecord) {
   }
   if (sale.receivedDifferenceCents > 0) {
     return `Recebido a mais ${formatMoney(sale.receivedDifferenceCents)}`;
+  }
+  return null;
+}
+
+function receiptDifferenceText(sale: SaleRecord) {
+  const difference = sale.reconciliation.differenceCents ?? 0;
+  if (difference < 0) {
+    return `Comprovantes abaixo da venda · diferença ${formatMoney(-difference)}`;
+  }
+  if (difference > 0) {
+    return `Comprovantes acima da venda · diferença ${formatMoney(difference)}`;
   }
   return null;
 }

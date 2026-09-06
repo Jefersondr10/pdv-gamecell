@@ -1382,10 +1382,11 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
-            mostra um aviso na venda, na listagem e no relatório. Se a soma dos
-            comprovantes não bater com o total da venda, aparece Verificar venda
-            com o valor exato que falta ou sobra. Alterar o preço de venda não
-            gera aviso em comparação ao preço padrão.
+            compara visualmente Valor da venda e Total pago: azul quando são
+            iguais, vermelho quando falta receber e violeta quando foi pago a
+            mais. A conferência dos comprovantes aparece separadamente, em roxo,
+            para não ser confundida com pagamento pendente. Alterar o preço de
+            venda não gera aviso em comparação ao preço padrão.
           </GuideStep>
           <GuideStep number="5" title="Relatórios e histórico">
             O estoque abre somente com variações disponíveis. Nos detalhes,
