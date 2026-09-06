@@ -1804,7 +1804,7 @@ function PaymentStage({
                   : `Recebido a mais ${formatMoney(-remaining)}`}
               </p>
               <p className="mt-0.5 text-xs">
-                Valor vendido: {formatMoney(total)} · Valor recebido:{' '}
+                Valor da venda: {formatMoney(total)} · Total pago:{' '}
                 {formatMoney(paid)}. A venda pode ser concluída e ficará
                 sinalizada em Vendas e nos relatórios.
               </p>
@@ -2036,7 +2036,7 @@ function SaleReview({
               icon={Smartphone}
             />
             <SummaryTile
-              label="Recebido"
+              label="Total pago"
               value={formatMoney(paid)}
               icon={WalletCards}
             />
@@ -2053,7 +2053,7 @@ function SaleReview({
                   : `Recebido a mais ${formatMoney(paid - total)}`}
               </p>
               <p className="mt-0.5 text-xs">
-                Valor vendido: {formatMoney(total)} · Valor recebido:{' '}
+                Valor da venda: {formatMoney(total)} · Total pago:{' '}
                 {formatMoney(paid)}. A venda será salva com este aviso e poderá
                 receber pagamentos depois.
               </p>
