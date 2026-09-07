@@ -12,6 +12,7 @@ COPY --from=builder --chown=node:node /app/dist/standalone ./
 COPY --from=builder --chown=node:node /app/lib/server/node ./lib/server/node
 COPY --from=builder --chown=node:node /app/scripts/hostinger ./scripts/hostinger
 COPY --from=builder --chown=node:node /app/drizzle/0009_durable_receipt_jobs.sql ./drizzle/0009_durable_receipt_jobs.sql
+COPY --from=builder --chown=node:node /app/drizzle/0010_backup_alert_destinations.sql ./drizzle/0010_backup_alert_destinations.sql
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

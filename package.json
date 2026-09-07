@@ -19,6 +19,7 @@
     "test:receipt-jobs": "node scripts/verify-receipt-jobs.mjs",
     "test:backup": "node --experimental-strip-types scripts/verify-backup-status.ts",
     "test:backup-reader": "node scripts/verify-backup-reader.mjs",
+    "test:backup-alert-settings": "node --experimental-strip-types scripts/verify-backup-alert-settings.ts",
     "test:receipt-migration": "node scripts/verify-receipt-migration.mjs",
     "test:scanner": "node --experimental-strip-types scripts/verify-scanner.ts",
     "test:catalog": "node --experimental-strip-types scripts/verify-system-catalog.ts",

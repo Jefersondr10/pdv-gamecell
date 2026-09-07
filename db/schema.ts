@@ -35,6 +35,15 @@ export const systemCatalogSyncs = sqliteTable('system_catalog_syncs', {
   syncedAt: integer('synced_at', { mode: 'number' }).notNull(),
 });
 
+export const storeBackupAlertSettings = sqliteTable('store_backup_alert_settings', {
+  storeId: text('store_id').primaryKey().references(() => stores.id, { onDelete: 'cascade' }),
+  email: text('email'),
+  revision: integer('revision').notNull().default(0),
+  updatedBy: text('updated_by').notNull(),
+  mutationId: text('mutation_id').notNull(),
+  ...timestamps,
+});
+
 export const users = sqliteTable(
   'users',
   {

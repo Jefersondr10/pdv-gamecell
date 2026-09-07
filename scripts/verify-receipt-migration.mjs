@@ -44,9 +44,32 @@ assert.equal(
   ).length,
   2,
 );
+db.close();
+const migrateAlerts = () =>
+  execFileSync(
+    process.execPath,
+    [resolve('scripts/hostinger/apply-backup-alert-migration.mjs'), path],
+    { stdio: 'pipe' },
+  );
+migrateAlerts();
+migrateAlerts();
+db = new DatabaseSync(path);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM store_backup_alert_settings').get().n,
+  0,
+);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM pdv_release_migrations').get().n,
+  2,
+);
+assert.equal(
+  db.prepare('SELECT value FROM fixture_preservation').get().value,
+  'synthetic-record',
+);
 db.prepare('UPDATE pdv_release_migrations SET checksum=?').run('changed');
 db.close();
 assert.throws(migrate, /Migration checksum mismatch/);
+assert.throws(migrateAlerts, /Migration checksum mismatch/);
 console.log(
   'Additive migration, preservation, backups, repeat and checksum rejection passed.',
 );

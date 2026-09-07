@@ -71,6 +71,13 @@
       "when": 1788758830557,
       "tag": "0009_durable_receipt_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788799815708,
+      "tag": "0010_backup_alert_destinations",
+      "breakpoints": true
     }
   ]
 }

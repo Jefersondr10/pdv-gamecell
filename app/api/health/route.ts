@@ -6,10 +6,10 @@ export async function GET() {
   try {
     const schema = await runtime()
       .DB.prepare(
-        "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name IN ('sales', 'attachments', 'users', 'inventory_units', 'receipt_ocr_jobs')",
+        "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name IN ('sales', 'attachments', 'users', 'inventory_units', 'receipt_ocr_jobs', 'store_backup_alert_settings')",
       )
       .first<{ count: number }>();
-    if (Number(schema?.count) !== 5)
+    if (Number(schema?.count) !== 6)
       return json({ ok: false }, { status: 503 });
     return json({ ok: true });
   } catch {

@@ -1599,6 +1599,88 @@ const secondSession = await call('/api/auth/session', {
   cookie: secondShopCookie,
 });
 const secondActor = String((secondSession.body.user as { id: string }).id);
+const settingsPath = '/api/system/backup-alert-settings';
+await call(settingsPath, { expected: 401 });
+await call(settingsPath, { cookie: staffCookie, expected: 403 });
+const emptyAlerts = await call(settingsPath, { cookie: ownerCookie });
+assert.equal(emptyAlerts.body.email, null);
+assert.equal(emptyAlerts.body.revision, 0);
+const alertsHeaders = {
+  'content-type': 'application/json',
+  'x-csrf-token': String(finalSession.body.csrfToken),
+};
+await call(settingsPath, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  expected: 403,
+  ...jsonBody({ email: 'test@example.com', revision: 0 }),
+});
+for (const payload of [
+  { email: 'not-an-email', revision: 0 },
+  { email: 'a@example.com\r\nBcc:b@example.com', revision: 0 },
+  { email: 'a@example.com', revision: -1 },
+  { email: 'a@example.com', revision: 0, storeId: 'other' },
+])
+  await call(settingsPath, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    expected: 400,
+    headers: alertsHeaders,
+    body: JSON.stringify(payload),
+  });
+await call(settingsPath, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: alertsHeaders,
+  body: JSON.stringify({ email: 'a@example.com', revision: 99 }),
+});
+const savedAlerts = await call(settingsPath, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: alertsHeaders,
+  body: JSON.stringify({ email: ' Owner+Backups@Example.COM ', revision: 0 }),
+});
+assert.equal(savedAlerts.body.email, 'owner+backups@example.com');
+assert.equal(savedAlerts.body.deliveryStatus, 'not_configured');
+assert.equal(
+  (await call(settingsPath, { cookie: ownerCookie })).body.email,
+  'owner+backups@example.com',
+);
+assert.equal(
+  (await call(settingsPath, { cookie: secondShopCookie })).body.email,
+  null,
+);
+const competing = await Promise.all(
+  ['first@example.com', 'second@example.com'].map((email) =>
+    call(settingsPath, {
+      method: 'PATCH',
+      cookie: ownerCookie,
+      expected: [200, 409],
+      headers: alertsHeaders,
+      body: JSON.stringify({ email, revision: 1 }),
+    }),
+  ),
+);
+assert.equal(
+  competing.filter((result) => result.response.status === 200).length,
+  1,
+);
+assert.equal(
+  competing.filter((result) => result.response.status === 409).length,
+  1,
+);
+const removedAlerts = await call(settingsPath, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: alertsHeaders,
+  body: JSON.stringify({ email: '', revision: 2 }),
+});
+assert.equal(removedAlerts.body.email, null);
+assert.equal(removedAlerts.body.revision, 3);
+console.log(
+  'Backup email settings: validation, persistence, owner access, tenant isolation, concurrent changes and removal passed.',
+);
 const isolatedLookup = await call(
   `/api/operations?kind=sale&id=${saleId}&actor=${secondActor}`,
   { cookie: secondShopCookie },
