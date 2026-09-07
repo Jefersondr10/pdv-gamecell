@@ -1507,6 +1507,14 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="Lista de preços para WhatsApp">
+            Em Estoque, toque em WhatsApp para gerar a lista de todos os
+            produtos disponíveis, agrupados por modelo, memória e preço,
+            com emojis nas cores. Quantidades, SNs e fotos não são incluídos.
+            Confira a prévia, edite seus avisos e contatos, depois copie ou
+            compartilhe. Produtos sem preço ficam como “Preço sob consulta”. A
+            lista é uma consulta do momento, não uma reserva de estoque.
+          </GuideStep>
           <GuideStep number="1" title="Cadastre a base">
             Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
             UPCs, EANs, JANs e contas Pix. O catálogo padrão do sistema já traz

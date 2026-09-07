@@ -12,6 +12,7 @@ import {
   FileText,
   ListFilter,
   LoaderCircle,
+  MessageCircle,
   Search,
   Smartphone,
   TrendingUp,
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
+import { StockWhatsAppDialog } from '@/components/pdv/stock-whatsapp-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -68,6 +70,7 @@ export function StockProductionView({
   const [query, setQuery] = useState('');
   const [onlyAvailable, setOnlyAvailable] = useState(true);
   const [reportOpen, setReportOpen] = useState(false);
+  const [whatsappOpen, setWhatsappOpen] = useState(false);
   const [reportGeneratedAt, setReportGeneratedAt] = useState(() => Date.now());
   const [summary, setSummary] = useState<StockSummaryRecord[]>([]);
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -145,17 +148,28 @@ export function StockProductionView({
     <Page>
       <Heading
         action={
-          <Button
-            className="h-10 rounded-xl"
-            disabled={summaryLoading || Boolean(summaryError)}
-            onClick={() => {
-              setReportGeneratedAt(Date.now());
-              setReportOpen(true);
-            }}
-            variant="outline"
-          >
-            <FileText /> Relatório
-          </Button>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <Button
+              className="h-10 rounded-xl px-3"
+              onClick={() => setWhatsappOpen(true)}
+              variant="outline"
+            >
+              <MessageCircle className="text-success" />
+              <span className="hidden sm:inline">Lista para </span>WhatsApp
+            </Button>
+            <Button
+              aria-label="Relatório de estoque em PDF"
+              className="h-10 rounded-xl"
+              disabled={summaryLoading || Boolean(summaryError)}
+              onClick={() => {
+                setReportGeneratedAt(Date.now());
+                setReportOpen(true);
+              }}
+              variant="outline"
+            >
+              <FileText /> <span className="hidden sm:inline">Relatório</span>
+            </Button>
+          </div>
         }
         description="Quantidade por modelo, cor e memória e rastreabilidade individual por SN."
         eyebrow="Inventário"
@@ -328,6 +342,12 @@ export function StockProductionView({
         rows={rowsWithStock}
         storeName={data.store.name}
       />
+      {whatsappOpen && (
+        <StockWhatsAppDialog
+          storeName={data.store.name}
+          onClose={() => setWhatsappOpen(false)}
+        />
+      )}
       {selectedRow && (
         <StockProductDetails
           key={selectedRow.id}

@@ -25,6 +25,7 @@
     "test:catalog": "node --experimental-strip-types scripts/verify-system-catalog.ts",
     "test:sales-filters": "node --experimental-transform-types scripts/verify-sales-filters.ts",
     "test:rankings": "node --experimental-transform-types scripts/verify-rankings.ts",
+    "test:stock-whatsapp": "node --experimental-strip-types scripts/verify-stock-whatsapp.ts",
     "test:receipt-amount": "node --experimental-strip-types scripts/verify-receipt-amount.ts",
     "test:receipt-reconciliation": "node --experimental-strip-types scripts/verify-receipt-reconciliation.ts"
   },

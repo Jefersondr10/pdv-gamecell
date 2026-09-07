@@ -9,6 +9,7 @@ import type {
 } from '@/lib/pdv-types';
 import { runtime } from '@/lib/server/runtime';
 import { consumeStoreReadBudget } from '@/lib/server/rate-limit';
+import type { StockOfferResponse, StockOfferRow } from '@/lib/stock-whatsapp';
 
 type DetailRow = Omit<InventoryDetailRecord, 'photos'>;
 type AttachmentRow = Omit<AttachmentRecord, 'url'> & { entryId: string };
@@ -22,13 +23,37 @@ export async function GET(request: Request) {
     const db = runtime().DB;
     const url = new URL(request.url);
     const summaryView = url.searchParams.get('view') === 'summary';
+    const offerView = url.searchParams.get('view') === 'whatsapp';
     const includePhotos = url.searchParams.get('includePhotos') === '1';
     await consumeStoreReadBudget(
       db,
       Date.now(),
       storeId,
-      summaryView ? 8 : includePhotos ? 10 : 5,
+      summaryView || offerView ? 8 : includePhotos ? 10 : 5,
     );
+
+    if (offerView) {
+      // One consistent, complete statement; no per-unit download or paginated partial list.
+      // Availability gates inclusion but its exact quantity is not exposed in this export.
+      const result = await db
+        .prepare(`
+        SELECT p.model, p.color, p.memory, p.default_price_cents AS defaultPriceCents
+        FROM products p
+        WHERE p.store_id = ?
+          AND EXISTS (SELECT 1 FROM inventory_units iu
+            WHERE iu.store_id = p.store_id AND iu.product_id = p.id AND iu.status = 'available')
+        ORDER BY p.model COLLATE NOCASE, p.memory, p.default_price_cents, p.color COLLATE NOCASE, p.id
+      `)
+        .bind(storeId)
+        .all<StockOfferRow>();
+      return json({
+        rows: result.results.map((row) => ({
+          ...row,
+          defaultPriceCents: Number(row.defaultPriceCents),
+        })),
+        generatedAt: Date.now(),
+      } satisfies StockOfferResponse);
+    }
 
     if (summaryView) {
       const result = await db

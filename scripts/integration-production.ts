@@ -115,6 +115,12 @@ const emptyStock = await call('/api/inventory?view=summary', {
   cookie: ownerCookie,
 });
 assert.deepEqual(emptyStock.body.rows, []);
+await call('/api/inventory?view=whatsapp', { expected: 401 });
+assert.deepEqual(
+  (await call('/api/inventory?view=whatsapp', { cookie: ownerCookie })).body
+    .rows,
+  [],
+);
 await call('/api/clients', {
   method: 'POST',
   cookie: ownerCookie,
@@ -418,6 +424,19 @@ const inventoryPage = await call('/api/inventory?limit=50&includePhotos=1', {
 });
 assert.equal(inventoryPage.body.total, 2);
 assert.equal((inventoryPage.body.items as unknown[]).length, 2);
+const availableOffer = await call(
+  '/api/inventory?view=whatsapp&q=not-a-match&limit=10&includePhotos=1',
+  { cookie: ownerCookie },
+);
+const offerRows = availableOffer.body.rows as Array<Record<string, unknown>>;
+assert.equal(offerRows.length, 1);
+assert.deepEqual(offerRows[0], {
+  model: 'iPhone Integração',
+  color: 'Preto',
+  memory: '256 GB',
+  defaultPriceCents: 500_000,
+});
+assert.ok(Number.isFinite(availableOffer.body.generatedAt));
 
 const saleOperationId = crypto.randomUUID();
 const salePayload = {
@@ -486,6 +505,11 @@ const soldStock = await call('/api/inventory?view=summary', {
   cookie: ownerCookie,
 });
 assert.equal((soldStock.body.rows as Array<{ sold: number }>)[0].sold, 2);
+assert.deepEqual(
+  (await call('/api/inventory?view=whatsapp', { cookie: ownerCookie })).body
+    .rows,
+  [],
+);
 const soldProductDetails = await call(
   `/api/inventory?productId=${encodeURIComponent(productId)}&status=sold&limit=50&includePhotos=1`,
   { cookie: ownerCookie },
@@ -1270,6 +1294,7 @@ const changedStaffSession = await call('/api/auth/session', {
 });
 const changedStaffCsrf = String(changedStaffSession.body.csrfToken);
 await call('/api/bootstrap', { cookie: staffCookie });
+await call('/api/inventory?view=whatsapp', { cookie: staffCookie });
 
 const staffClientName = `Cliente operador ${runId}`;
 const staffClientOperationId = crypto.randomUUID();
@@ -1595,6 +1620,17 @@ const secondShop = await call('/api/auth/register-owner', {
   }),
 });
 const secondShopCookie = sessionCookie(secondShop.response);
+assert.deepEqual(
+  (
+    await call(`/api/inventory?view=whatsapp&productId=${productId}`, {
+      cookie: secondShopCookie,
+    })
+  ).body.rows,
+  [],
+);
+console.log(
+  'WhatsApp offer API: live prices, available-only products, no quantities or attachments, authentication and tenant isolation passed.',
+);
 const secondSession = await call('/api/auth/session', {
   cookie: secondShopCookie,
 });
