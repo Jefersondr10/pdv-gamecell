@@ -102,7 +102,10 @@ export function SettingsProductionView({
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
         defaultValue="products"
       >
-        <TabsList className="mb-3 h-11 w-full shrink-0 justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit">
+        <TabsList
+          className="mb-3 w-full shrink-0 justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit"
+          size="lg"
+        >
           <TabsTrigger value="products">Produtos</TabsTrigger>
           <TabsTrigger value="people">Pessoas</TabsTrigger>
           <TabsTrigger value="finance">Financeiro</TabsTrigger>

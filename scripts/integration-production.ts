@@ -386,8 +386,25 @@ const prefixedLookup = await call('/api/inventory/lookup?serial=SHC9P06R096', {
   cookie: ownerCookie,
 });
 assert.equal(
+  (prefixedLookup.body.matches as Array<{ serial: string; status: string }>)[0]
+    .serial,
+  'SHC9P06R096',
+);
+assert.equal(
   (prefixedLookup.body.matches as Array<{ status: string }>)[0].status,
   'available',
+);
+const unprefixedLookup = await call('/api/inventory/lookup?serial=HC9P06R096', {
+  cookie: ownerCookie,
+});
+assert.equal(
+  (
+    unprefixedLookup.body.matches as Array<{
+      serial: string;
+      status: string;
+    }>
+  )[0].serial,
+  'SHC9P06R096',
 );
 const availableStock = await call('/api/inventory?view=summary', {
   cookie: ownerCookie,
@@ -685,7 +702,27 @@ await call(`/api/sales/${saleId}/order-status`, {
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
   body: JSON.stringify({ orderStatusId: pendingStatusId }),
 });
+const disguisedAttachment = new FormData();
+disguisedAttachment.set('operationId', crypto.randomUUID());
+disguisedAttachment.append(
+  'receipts',
+  new Blob(['arquivo disfarçado'], { type: 'image/png' }),
+  'comprovante-falso.png',
+);
+const rejectedDisguisedAttachment = await call(
+  `/api/sales/${saleId}/attachments`,
+  {
+    method: 'POST',
+    cookie: ownerCookie,
+    expected: 400,
+    headers: { 'x-csrf-token': ownerCsrf },
+    body: disguisedAttachment,
+  },
+);
+assert.equal(rejectedDisguisedAttachment.body.code, 'INVALID_FILE_SIGNATURE');
 const appendedAttachments = new FormData();
+const appendedAttachmentOperationId = crypto.randomUUID();
+appendedAttachments.set('operationId', appendedAttachmentOperationId);
 appendedAttachments.append('receipts', tinyPdf(), 'comprovante-depois.pdf');
 appendedAttachments.append(
   `itemPhotos:${listedSale.items[0].id}`,
@@ -714,6 +751,59 @@ assert.equal(appendedReceipt.mimeType, 'application/pdf');
 assert.ok(appendedReceipt.sizeBytes > 0);
 assert.equal(appendedReceipt.url, `/api/files/${appendedReceipt.id}`);
 
+const replayedAttachments = await call(`/api/sales/${saleId}/attachments`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: appendedAttachments,
+});
+assert.equal(replayedAttachments.body.replayed, true);
+assert.equal(replayedAttachments.body.addedCount, 2);
+assert.equal(
+  (replayedAttachments.body.receipts as Array<{ id: string }>)[0].id,
+  appendedReceipt.id,
+);
+
+const conflictingAttachments = new FormData();
+conflictingAttachments.set('operationId', appendedAttachmentOperationId);
+conflictingAttachments.append('receipts', tinyPhoto(), 'outro-comprovante.png');
+const conflictingAttachmentResult = await call(
+  `/api/sales/${saleId}/attachments`,
+  {
+    method: 'POST',
+    cookie: ownerCookie,
+    expected: 409,
+    headers: { 'x-csrf-token': ownerCsrf },
+    body: conflictingAttachments,
+  },
+);
+assert.equal(conflictingAttachmentResult.body.code, 'OPERATION_ALREADY_USED');
+
+const storedFileHeaders = new Headers({
+  cookie: ownerCookie,
+  'cf-connecting-ip': testSourceIp,
+});
+if (maintenanceBypass) {
+  storedFileHeaders.set('x-production-maintenance-bypass', maintenanceBypass);
+}
+const storedFile = await fetch(`${baseUrl}${appendedReceipt.url}`, {
+  headers: storedFileHeaders,
+});
+assert.equal(storedFile.status, 200);
+assert.equal(
+  storedFile.headers.get('cache-control'),
+  'private, no-cache, must-revalidate',
+);
+const storedFileEtag = storedFile.headers.get('etag');
+assert.ok(storedFileEtag);
+assert.ok((await storedFile.arrayBuffer()).byteLength > 0);
+const revalidationHeaders = new Headers(storedFileHeaders);
+revalidationHeaders.set('if-none-match', storedFileEtag);
+const revalidatedFile = await fetch(`${baseUrl}${appendedReceipt.url}`, {
+  headers: revalidationHeaders,
+});
+assert.equal(revalidatedFile.status, 304);
+
 await call(`/api/sales/${saleId}/receipt-values`, {
   method: 'PATCH',
   cookie: ownerCookie,
@@ -725,6 +815,12 @@ await call(`/api/sales/${saleId}/receipt-values`, {
     ],
   }),
 });
+const protectedAutomaticOperationId = crypto.randomUUID();
+const protectedAutomaticPayload = JSON.stringify({
+  operationId: protectedAutomaticOperationId,
+  onlyIfPending: true,
+  receipts: [{ id: appendedReceipt.id, amountCents: 1, source: 'ocr' }],
+});
 const protectedAutomaticValue = await call(
   `/api/sales/${saleId}/receipt-values`,
   {
@@ -734,14 +830,24 @@ const protectedAutomaticValue = await call(
       'x-csrf-token': ownerCsrf,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      operationId: crypto.randomUUID(),
-      onlyIfPending: true,
-      receipts: [{ id: appendedReceipt.id, amountCents: 1, source: 'ocr' }],
-    }),
+    body: protectedAutomaticPayload,
   },
 );
 assert.equal(protectedAutomaticValue.body.updatedCount, 0);
+const replayedProtectedAutomaticValue = await call(
+  `/api/sales/${saleId}/receipt-values`,
+  {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    headers: {
+      'x-csrf-token': ownerCsrf,
+      'content-type': 'application/json',
+    },
+    body: protectedAutomaticPayload,
+  },
+);
+assert.equal(replayedProtectedAutomaticValue.body.replayed, true);
+assert.equal(replayedProtectedAutomaticValue.body.updatedCount, 0);
 
 await call(`/api/order-statuses/${pendingStatusId}`, {
   method: 'PATCH',
@@ -899,7 +1005,7 @@ for (const dimension of ['model', 'customer', 'seller'] as const) {
   }>;
   assert.deepEqual(detailRows.map((item) => item.serial).sort(), [
     'HC9P06R095',
-    'HC9P06R096',
+    'SHC9P06R096',
   ]);
   assert.equal(detailRows[0].sellerName, 'Proprietário Integração');
 }
@@ -917,12 +1023,26 @@ await call('/api/sales?group=sale&period=all&alert=yes', {
   expected: 400,
 });
 
+const cancellationOperationId = crypto.randomUUID();
 await call(`/api/sales/${saleId}/cancel`, {
   method: 'POST',
   cookie: ownerCookie,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ reason: 'Cancelamento do ensaio local' }),
+  body: JSON.stringify({
+    operationId: cancellationOperationId,
+    reason: 'Cancelamento do ensaio local',
+  }),
 });
+const replayedCancellation = await call(`/api/sales/${saleId}/cancel`, {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationId: cancellationOperationId,
+    reason: 'Cancelamento do ensaio local',
+  }),
+});
+assert.equal(replayedCancellation.body.replayed, true);
 const cancelledPayment = await call(`/api/sales/${saleId}/payments`, {
   method: 'POST',
   cookie: ownerCookie,
@@ -937,6 +1057,7 @@ const cancelledPayment = await call(`/api/sales/${saleId}/payments`, {
 });
 assert.equal(cancelledPayment.body.code, 'SALE_CANCELLED');
 const cancelledAttachment = new FormData();
+cancelledAttachment.set('operationId', crypto.randomUUID());
 cancelledAttachment.append('receipts', tinyPhoto(), 'cancelada.png');
 await call(`/api/sales/${saleId}/attachments`, {
   method: 'POST',
@@ -950,7 +1071,10 @@ await call(`/api/sales/${saleId}/cancel`, {
   cookie: ownerCookie,
   expected: 409,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ reason: 'Segunda tentativa de cancelamento' }),
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    reason: 'Segunda tentativa de cancelamento',
+  }),
 });
 
 const afterCancel = await call('/api/inventory/lookup?serial=HC9P06R095', {
@@ -960,6 +1084,20 @@ assert.equal(
   (afterCancel.body.matches as Array<{ status: string }>)[0].status,
   'available',
 );
+
+const invalidRoleUser = await call('/api/users', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 400,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    displayName: 'Função inválida',
+    username: `papel-${runId}`,
+    password: 'Temporaria12345',
+    role: 'owner',
+  }),
+});
+assert.equal(invalidRoleUser.body.code, 'INVALID_ROLE');
 
 await call('/api/users', {
   method: 'POST',
@@ -1121,6 +1259,7 @@ assert.ok(
   ),
 );
 const activeReceipt = new FormData();
+activeReceipt.set('operationId', crypto.randomUUID());
 activeReceipt.append('receipts', tinyPhoto(), 'comprovante-operador.png');
 await call(`/api/sales/${activeSaleId}/attachments`, {
   method: 'POST',

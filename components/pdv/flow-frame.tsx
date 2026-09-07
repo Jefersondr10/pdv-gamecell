@@ -38,7 +38,7 @@ export function FlowFrame({
             <div className="min-w-0">
               <p className="eyebrow">{eyebrow}</p>
               <h1
-                className="mt-0.5 truncate text-xl font-bold tracking-[-0.035em] lg:text-2xl"
+                className="mt-0.5 truncate text-xl font-bold tracking-[-0.035em] outline-none lg:text-2xl"
                 ref={titleRef}
                 tabIndex={-1}
               >
@@ -70,6 +70,10 @@ export function FlowFrame({
               const active = index === currentStep;
               return (
                 <li key={step}>
+                  <span className="sr-only">
+                    {step}:{' '}
+                    {complete ? 'concluída' : active ? 'atual' : 'pendente'}
+                  </span>
                   <div
                     aria-current={active ? 'step' : undefined}
                     className={`h-1.5 rounded-full transition-colors ${complete ? 'bg-success' : active ? 'bg-primary' : 'bg-border'}`}

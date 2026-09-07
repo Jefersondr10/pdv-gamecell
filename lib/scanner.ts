@@ -486,24 +486,23 @@ export function normalizeCandidate(
 
   const upperValue = rawValue.toUpperCase().replace(/\s+/g, '');
   if (!/^[A-Z0-9]{8,18}$/.test(upperValue)) return null;
-  const canStripApplePrefix =
-    upperValue.startsWith('S') && /^[A-Z0-9]{8,17}$/.test(upperValue.slice(1));
-  const normalizedValue = canStripApplePrefix
+  const serialBody = upperValue.startsWith('S')
     ? upperValue.slice(1)
     : upperValue;
-  if (!/[A-Z]/.test(normalizedValue)) return null;
+  if (!/^[A-Z0-9]{8,17}$/.test(serialBody) || !/[A-Z]/.test(serialBody)) {
+    return null;
+  }
+  const alternateValue = upperValue.startsWith('S')
+    ? upperValue.slice(1)
+    : `S${upperValue}`;
+  const identityValue = [upperValue, alternateValue].sort()[0];
 
   return {
     rawValue,
-    normalizedValue,
-    alternateValue: canStripApplePrefix
-      ? upperValue
-      : /^[A-Z0-9]{8,17}$/.test(`S${normalizedValue}`)
-        ? `S${normalizedValue}`
-        : undefined,
-    key: `SERIAL:${normalizedValue}`,
+    normalizedValue: upperValue,
+    alternateValue,
+    key: `SERIAL:${identityValue}`,
     format,
-    prefixStripped: canStripApplePrefix || undefined,
   };
 }
 

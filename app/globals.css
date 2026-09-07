@@ -146,7 +146,7 @@
 
 .eyebrow {
   color: var(--muted-foreground);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -273,6 +273,9 @@
     font-size: 0.9375rem;
   }
 
+  .flow-stage-card > :last-child {
+    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+  }
 }
 
 @media (max-height: 700px) {
@@ -411,5 +414,6 @@
     scroll-behavior: auto !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

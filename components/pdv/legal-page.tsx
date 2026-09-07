@@ -12,7 +12,7 @@ export function LegalPage({
   children: ReactNode;
 }) {
   return (
-    <main className="min-h-dvh bg-[#07182c] px-4 py-8 text-slate-900 sm:py-12">
+    <main className="h-dvh overflow-y-auto overscroll-contain bg-[#07182c] px-4 py-8 text-slate-900 sm:py-12">
       <article className="mx-auto max-w-3xl overflow-hidden rounded-3xl bg-white shadow-2xl shadow-black/20">
         <header className="border-b border-slate-200 px-6 py-7 sm:px-10">
           <Link
@@ -34,7 +34,7 @@ export function LegalPage({
               </h1>
               <p className="mt-3 leading-7 text-slate-600">{introduction}</p>
               <p className="mt-2 text-xs text-slate-500">
-                Última atualização: 5 de setembro de 2026
+                Última atualização: 6 de setembro de 2026
               </p>
             </div>
           </div>

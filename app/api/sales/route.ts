@@ -5,6 +5,7 @@ import {
   cleanupFiles,
   prepareFile,
   uploadFiles,
+  validateFileSignatures,
   validateFiles,
 } from '@/lib/server/files';
 import {
@@ -25,7 +26,13 @@ import {
 import { runtime } from '@/lib/server/runtime';
 import { parseReceiptValues } from '@/lib/server/receipt-values';
 import { parseSalesFilters, SALE_ALERT_SQL } from '@/lib/server/sales-filters';
-import { normalizeAppleSerial, sha256 } from '@/lib/server/security';
+import {
+  isValidAppleSerial,
+  normalizeAppleSerial,
+  serialAliases,
+  serialAliasKey,
+  sha256,
+} from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
 import type {
@@ -349,24 +356,45 @@ export async function POST(request: Request) {
     if (!customer)
       throw new HttpError(404, 'Cliente não encontrado.', 'CUSTOMER_NOT_FOUND');
 
-    const placeholders = items.map(() => '?').join(',');
-    const unitsResult = await db
-      .prepare(
-        `SELECT iu.id, iu.serial, iu.product_id AS productId,
-                p.model AS productName,
-                (p.color || ' · ' || p.memory) AS productDetail,
-                p.default_price_cents AS referencePriceCents
-         FROM inventory_units iu
-         JOIN products p ON p.id = iu.product_id AND p.store_id = iu.store_id
-         WHERE iu.store_id = ? AND iu.status = 'available'
-           AND iu.serial IN (${placeholders})`,
-      )
-      .bind(session.storeId, ...items.map((item) => item.serial))
-      .all<UnitRow>();
-    const units = unitsResult.results;
-    if (units.length !== items.length) {
-      const found = new Set(units.map((unit) => unit.serial));
-      const unavailable = items.find((item) => !found.has(item.serial))?.serial;
+    const serialValues = Array.from(
+      new Set(items.flatMap((item) => serialAliases(item.serial))),
+    );
+    const units: UnitRow[] = [];
+    for (const serialGroup of chunk(serialValues, 90)) {
+      const unitsResult = await db
+        .prepare(
+          `SELECT iu.id, iu.serial, iu.product_id AS productId,
+                  p.model AS productName,
+                  (p.color || ' · ' || p.memory) AS productDetail,
+                  p.default_price_cents AS referencePriceCents
+           FROM inventory_units iu
+           JOIN products p ON p.id = iu.product_id AND p.store_id = iu.store_id
+           WHERE iu.store_id = ? AND iu.status = 'available'
+             AND iu.serial IN (${serialGroup.map(() => '?').join(',')})`,
+        )
+        .bind(session.storeId, ...serialGroup)
+        .all<UnitRow>();
+      units.push(...unitsResult.results);
+    }
+    const unitsByStoredSerial = new Map(
+      units.map((unit) => [unit.serial, unit]),
+    );
+    const unitBySerial = new Map(
+      items.flatMap((item) => {
+        const unit = serialAliases(item.serial)
+          .map((alias) => unitsByStoredSerial.get(alias))
+          .find(Boolean);
+        return unit ? [[item.serial, unit] as const] : [];
+      }),
+    );
+    if (
+      unitBySerial.size !== items.length ||
+      new Set([...unitBySerial.values()].map((unit) => unit.id)).size !==
+        items.length
+    ) {
+      const unavailable = items.find(
+        (item) => !unitBySerial.has(item.serial),
+      )?.serial;
       throw new HttpError(
         409,
         unavailable
@@ -376,7 +404,6 @@ export async function POST(request: Request) {
         { serial: unavailable },
       );
     }
-    const unitBySerial = new Map(units.map((unit) => [unit.serial, unit]));
 
     const pixIds = Array.from(
       new Set(
@@ -418,6 +445,7 @@ export async function POST(request: Request) {
       receiptFiles.length,
     );
     const allFiles = [...itemFiles.flat(), ...receiptFiles];
+    await validateFileSignatures(allFiles);
     const filesSizeBytes = allFiles.reduce(
       (total, file) => total + file.size,
       0,
@@ -1038,7 +1066,7 @@ function parseItems(value: unknown): SaleInputItem[] {
     const serial = normalizeAppleSerial(
       stringField(record.serial, 'SN', { min: 8, max: 24 }),
     );
-    if (serial.length < 8 || serial.length > 18 || !/[A-Z]/.test(serial)) {
+    if (!isValidAppleSerial(serial)) {
       throw new HttpError(400, 'SN inválido.', 'INVALID_SERIAL');
     }
     return {
@@ -1049,7 +1077,10 @@ function parseItems(value: unknown): SaleInputItem[] {
       }),
     };
   });
-  if (new Set(items.map((item) => item.serial)).size !== items.length) {
+  if (
+    new Set(items.map((item) => serialAliasKey(item.serial))).size !==
+    items.length
+  ) {
     throw new HttpError(
       409,
       'O mesmo SN aparece mais de uma vez.',

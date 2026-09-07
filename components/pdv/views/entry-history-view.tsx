@@ -100,14 +100,8 @@ export function EntryHistoryView() {
         </p>
       </div>
       <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3">
-        <Metric
-          label="Entradas encontradas"
-          value={String(page.aggregates.entryCount)}
-        />
-        <Metric
-          label="Aparelhos recebidos"
-          value={String(page.aggregates.unitCount)}
-        />
+        <Metric label="Entradas" value={String(page.aggregates.entryCount)} />
+        <Metric label="Aparelhos" value={String(page.aggregates.unitCount)} />
         <Metric
           className="hidden sm:block"
           label="Fotos vinculadas"
@@ -120,6 +114,7 @@ export function EntryHistoryView() {
             <div className="relative">
               <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
+                aria-label="Pesquisar no histórico de entradas"
                 className="h-11 rounded-xl pl-9"
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Modelo, SN ou operador"
@@ -137,21 +132,33 @@ export function EntryHistoryView() {
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 overscroll-contain">
           {loadError ? (
-            <div className="grid h-full min-h-52 place-items-center p-6 text-center">
+            <div
+              className="grid h-full min-h-52 place-items-center p-6 text-center"
+              role="alert"
+            >
               <div>
                 <AlertTriangle className="mx-auto size-8 text-destructive" />
                 <p className="mt-3 text-sm font-semibold text-destructive">
                   {loadError}
                 </p>
-                <Button className="mt-3" onClick={() => void loadEntries()}>
+                <Button
+                  className="mt-3 h-11"
+                  onClick={() => void loadEntries()}
+                >
                   Tentar novamente
                 </Button>
               </div>
             </div>
           ) : loading && page.items.length === 0 ? (
-            <div className="grid h-full min-h-52 place-items-center">
-              <LoaderCircle className="size-7 animate-spin text-primary" />
-            </div>
+            <output
+              aria-live="polite"
+              className="grid h-full min-h-52 place-items-center text-sm font-semibold text-muted-foreground"
+            >
+              <span className="flex items-center gap-2">
+                <LoaderCircle className="size-5 animate-spin text-primary" />
+                Carregando entradas…
+              </span>
+            </output>
           ) : page.items.length === 0 ? (
             <div className="grid h-full min-h-52 place-items-center p-6 text-center">
               <div>
@@ -300,6 +307,8 @@ function EntryDetail({
                         <img
                           alt={photo.name}
                           className="aspect-square w-full object-cover"
+                          decoding="async"
+                          loading="lazy"
                           src={photo.url}
                         />
                         <span className="block truncate p-2 text-xs">
@@ -334,7 +343,7 @@ function Metric({
   return (
     <Card className={className} size="sm">
       <CardContent className="p-3">
-        <p className="truncate text-[.65rem] font-bold uppercase text-muted-foreground sm:text-xs">
+        <p className="truncate text-xs font-bold uppercase text-muted-foreground">
           {label}
         </p>
         <p className="mt-0.5 text-lg font-extrabold">{value}</p>

@@ -1,5 +1,6 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
@@ -16,11 +17,6 @@ import {
   Warehouse,
 } from 'lucide-react';
 
-import { CatalogProductionView } from '@/components/pdv/views/catalog-production-view';
-import { EntryHistoryView } from '@/components/pdv/views/entry-history-view';
-import { SalesProductionView } from '@/components/pdv/views/sales-production-view';
-import { SettingsProductionView } from '@/components/pdv/views/settings-production-view';
-import { StockProductionView } from '@/components/pdv/views/stock-production-view';
 import { unlockScannerAudio } from '@/components/pdv/barcode-scanner';
 import { RecoveryCodesPanel } from '@/components/pdv/recovery-codes-panel';
 import {
@@ -69,6 +65,55 @@ import {
 import { displayCommercialCode } from '@/lib/commercial-code';
 import type { BootstrapData } from '@/lib/pdv-types';
 import { preloadScannerDecoder } from '@/lib/scanner';
+
+const CatalogProductionView = dynamic(
+  () =>
+    import('@/components/pdv/views/catalog-production-view').then(
+      (module) => module.CatalogProductionView,
+    ),
+  { loading: ViewLoading },
+);
+const EntryHistoryView = dynamic(
+  () =>
+    import('@/components/pdv/views/entry-history-view').then(
+      (module) => module.EntryHistoryView,
+    ),
+  { loading: ViewLoading },
+);
+const SalesProductionView = dynamic(
+  () =>
+    import('@/components/pdv/views/sales-production-view').then(
+      (module) => module.SalesProductionView,
+    ),
+  { loading: ViewLoading },
+);
+const SettingsProductionView = dynamic(
+  () =>
+    import('@/components/pdv/views/settings-production-view').then(
+      (module) => module.SettingsProductionView,
+    ),
+  { loading: ViewLoading },
+);
+const StockProductionView = dynamic(
+  () =>
+    import('@/components/pdv/views/stock-production-view').then(
+      (module) => module.StockProductionView,
+    ),
+  { loading: ViewLoading },
+);
+
+function ViewLoading() {
+  return (
+    <output
+      aria-live="polite"
+      className="grid h-full min-h-52 place-items-center text-sm font-semibold text-muted-foreground"
+    >
+      <span className="flex items-center gap-2">
+        <LoaderCircle className="size-5 animate-spin text-primary" /> Abrindo…
+      </span>
+    </output>
+  );
+}
 
 type View =
   | 'sell'
@@ -293,6 +338,7 @@ function CloudPdv({
       typeof window !== 'undefined' &&
       window.matchMedia('(display-mode: standalone)').matches,
   );
+  const [online, setOnline] = useState(true);
   const [saleToOpen, setSaleToOpen] = useState<string | null>(null);
   const reloadRequestRef = useRef(0);
   const dataRef = useRef<BootstrapData | null>(null);
@@ -387,18 +433,49 @@ function CloudPdv({
   }, []);
 
   useEffect(() => {
+    const updateOnlineStatus = () => setOnline(navigator.onLine);
+    updateOnlineStatus();
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
+  }, []);
+
+  useEffect(() => {
     const unlock = () => {
       unlockScannerAudio();
       preloadScannerDecoder();
     };
-    const warmupTimer = window.setTimeout(preloadScannerDecoder, 600);
+    const idleWindow = window as Window & {
+      cancelIdleCallback?: (id: number) => void;
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout: number },
+      ) => number;
+    };
+    const supportsIdleWarmup =
+      typeof idleWindow.requestIdleCallback === 'function';
+    const warmupTimer = supportsIdleWarmup
+      ? idleWindow.requestIdleCallback(preloadScannerDecoder, {
+          timeout: 4_000,
+        })
+      : window.setTimeout(preloadScannerDecoder, 2_000);
     window.addEventListener('pointerdown', unlock, {
       capture: true,
       once: true,
     });
     window.addEventListener('keydown', unlock, { capture: true, once: true });
     return () => {
-      window.clearTimeout(warmupTimer);
+      if (
+        supportsIdleWarmup &&
+        typeof idleWindow.cancelIdleCallback === 'function'
+      ) {
+        idleWindow.cancelIdleCallback(warmupTimer);
+      } else {
+        window.clearTimeout(warmupTimer);
+      }
       window.removeEventListener('pointerdown', unlock, { capture: true });
       window.removeEventListener('keydown', unlock, { capture: true });
     };
@@ -408,7 +485,7 @@ function CloudPdv({
     if (view !== 'sales') setSaleToOpen(null);
     setActiveView(view);
     setRun((value) => value + 1);
-    if (Date.now() - lastReloadAtRef.current >= 5_000) void reload(true);
+    if (Date.now() - lastReloadAtRef.current >= 60_000) void reload(true);
   };
 
   const productsByCode = useMemo<Record<string, EntryProduct>>(() => {
@@ -515,6 +592,7 @@ function CloudPdv({
     const result = await requestJson<{
       id: string;
       receipts: ReceiptOcrAttachment[];
+      replayed?: boolean;
     }>('/api/sales', {
       method: 'POST',
       headers: { 'x-csrf-token': data!.csrfToken },
@@ -524,8 +602,8 @@ function CloudPdv({
       storeId: data!.store.id,
       saleId: result.id,
       attachments: result.receipts ?? [],
-      files: sale.receipts,
-      receiptValues: sale.receiptValues,
+      files: result.replayed ? undefined : sale.receipts,
+      receiptValues: result.replayed ? undefined : sale.receiptValues,
     }).catch(() => {});
     void reload(true);
   };
@@ -602,7 +680,8 @@ function CloudPdv({
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <Button
-              className="h-10 rounded-full px-3 text-sm lg:hidden"
+              aria-label={`Abrir perfil, ajuda e conta de ${data.user.displayName}`}
+              className="h-11 min-w-11 rounded-full px-3 text-sm lg:hidden"
               onClick={() => setProfileOpen(true)}
               size="sm"
               variant="ghost"
@@ -612,10 +691,20 @@ function CloudPdv({
                 {firstName(data.user.displayName)}
               </span>
             </Button>
-            <Badge className="bg-success/10 text-success hover:bg-success/10">
-              <span className="mr-1 size-1.5 rounded-full bg-success" />
-              Online
-            </Badge>
+            <output aria-live="polite">
+              <Badge
+                className={
+                  online
+                    ? 'bg-success/10 text-success hover:bg-success/10'
+                    : 'bg-amber-500/15 text-amber-900 hover:bg-amber-500/15'
+                }
+              >
+                <span
+                  className={`mr-1 size-1.5 rounded-full ${online ? 'bg-success' : 'bg-amber-600'}`}
+                />
+                {online ? 'Online' : 'Sem conexão'}
+              </Badge>
+            </output>
           </div>
         </header>
 
@@ -805,7 +894,7 @@ function AuthScreen() {
           </CardHeader>
           <CardContent className="p-4 sm:p-6">
             <Tabs defaultValue="login">
-              <TabsList className="grid h-11 w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-2" size="lg">
                 <TabsTrigger value="login">Entrar</TabsTrigger>
                 <TabsTrigger value="register">Criar uma loja</TabsTrigger>
               </TabsList>
@@ -1487,6 +1576,7 @@ function DesktopNavigation({
     <nav className="mt-8 space-y-1" aria-label="Navegação principal">
       {navigation.map(({ view, label, icon: Icon }) => (
         <button
+          aria-current={active === view ? 'page' : undefined}
           className={`flex min-h-11 w-full items-center gap-3 rounded-2xl px-4 text-left text-sm font-semibold transition ${active === view ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/15' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
           key={view}
           onClick={() => onChange(view)}
@@ -1523,7 +1613,7 @@ function MobileNavigation({
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
       <SheetContent
-        className="w-[min(88vw,23rem)] gap-0 overflow-hidden rounded-r-[2rem] p-0 lg:hidden"
+        className="gap-0 overflow-hidden rounded-r-[2rem] p-0 data-[side=left]:w-[min(88vw,23rem)] lg:hidden"
         id="mobile-primary-navigation"
         side="left"
       >
@@ -1538,7 +1628,7 @@ function MobileNavigation({
         </SheetHeader>
         <nav
           aria-label="Navegação principal"
-          className="min-h-0 flex-1 overflow-y-auto p-3 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          className="min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-3 pb-[max(1rem,env(safe-area-inset-bottom))]"
         >
           <div className="grid gap-2">
             {navigation.map(({ view, label, icon: Icon }) => {

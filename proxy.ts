@@ -46,6 +46,7 @@ export function proxy(request: NextRequest) {
   response.headers.set('content-security-policy', CONTENT_SECURITY_POLICY);
   response.headers.set('x-frame-options', 'DENY');
   response.headers.set('x-content-type-options', 'nosniff');
+  response.headers.set('strict-transport-security', 'max-age=31536000');
   response.headers.set('referrer-policy', 'strict-origin-when-cross-origin');
   response.headers.set(
     'permissions-policy',

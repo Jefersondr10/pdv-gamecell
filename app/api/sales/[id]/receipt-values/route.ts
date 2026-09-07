@@ -93,8 +93,14 @@ export async function PATCH(
 
     const replay = await findOperation(db, operationId);
     if (replay) {
-      assertSameOperation(replay, storeId, saleId, fingerprint);
-      return json({ ok: true, updatedCount: receipts.length, replayed: true });
+      const updatedCount = assertSameOperation(
+        replay,
+        storeId,
+        saleId,
+        fingerprint,
+        receipts.length,
+      );
+      return json({ ok: true, updatedCount, replayed: true });
     }
 
     const sale = await db
@@ -221,7 +227,10 @@ export async function PATCH(
               receipt.amountCents === null ? null : now,
             ]),
             saleId,
-            fingerprint,
+            JSON.stringify({
+              fingerprint,
+              updatedCount: receiptsToUpdate.length,
+            }),
             now,
           ),
       ]);
@@ -232,10 +241,16 @@ export async function PATCH(
     } catch (error) {
       const saved = await findOperation(db, operationId);
       if (saved) {
-        assertSameOperation(saved, storeId, saleId, fingerprint);
+        const updatedCount = assertSameOperation(
+          saved,
+          storeId,
+          saleId,
+          fingerprint,
+          receipts.length,
+        );
         return json({
           ok: true,
-          updatedCount: receipts.length,
+          updatedCount,
           replayed: true,
         });
       }
@@ -266,10 +281,16 @@ export async function PATCH(
       try {
         const saved = await findOperation(runtime().DB, operationId);
         if (saved) {
-          assertSameOperation(saved, storeId, saleId, fingerprint);
+          const updatedCount = assertSameOperation(
+            saved,
+            storeId,
+            saleId,
+            fingerprint,
+            requestedCount,
+          );
           return json({
             ok: true,
-            updatedCount: requestedCount,
+            updatedCount,
             replayed: true,
           });
         }
@@ -356,12 +377,31 @@ function assertSameOperation(
   storeId: string,
   saleId: string,
   fingerprint: string,
+  legacyUpdatedCount: number,
 ) {
+  let savedFingerprint = operation.detailsJson;
+  let updatedCount = legacyUpdatedCount;
+  try {
+    const details = JSON.parse(operation.detailsJson ?? '') as {
+      fingerprint?: unknown;
+      updatedCount?: unknown;
+    };
+    if (
+      typeof details.fingerprint === 'string' &&
+      Number.isSafeInteger(details.updatedCount) &&
+      Number(details.updatedCount) >= 0
+    ) {
+      savedFingerprint = details.fingerprint;
+      updatedCount = Number(details.updatedCount);
+    }
+  } catch {
+    // Operações anteriores guardavam somente a impressão digital.
+  }
   if (
     operation.storeId !== storeId ||
     operation.action !== 'sale.receipt_values_updated' ||
     operation.entityId !== saleId ||
-    operation.detailsJson !== fingerprint
+    savedFingerprint !== fingerprint
   ) {
     throw new HttpError(
       409,
@@ -369,6 +409,7 @@ function assertSameOperation(
       'OPERATION_ALREADY_USED',
     );
   }
+  return updatedCount;
 }
 
 function invalidReceiptValue() {

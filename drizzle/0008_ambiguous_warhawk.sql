@@ -1,0 +1,1 @@
+CREATE INDEX `idx_audit_store_action_entity` ON `audit_events` (`store_id`,`action`,`entity_id`);

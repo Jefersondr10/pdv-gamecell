@@ -172,11 +172,7 @@ export function StockProductionView({
           label="Variações"
           value={String(rowsWithStock.length)}
         />
-        <Metric
-          icon={TrendingUp}
-          label="Vendidos hoje"
-          value={String(soldToday)}
-        />
+        <Metric icon={TrendingUp} label="Vendidos" value={String(soldToday)} />
       </div>
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0 border-b p-3 sm:p-4">
@@ -191,6 +187,7 @@ export function StockProductionView({
               <div className="relative min-w-0 flex-1 sm:w-80">
                 <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
+                  aria-label="Pesquisar no estoque"
                   className="h-11 rounded-xl pl-9"
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Modelo, cor, memória ou código"
@@ -212,14 +209,20 @@ export function StockProductionView({
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 overscroll-contain">
           {summaryLoading ? (
-            <div className="grid h-full min-h-52 place-items-center text-sm text-muted-foreground">
+            <output
+              aria-live="polite"
+              className="grid h-full min-h-52 place-items-center text-sm text-muted-foreground"
+            >
               <span className="flex items-center gap-2">
                 <LoaderCircle className="size-4 animate-spin" /> Atualizando
                 estoque…
               </span>
-            </div>
+            </output>
           ) : summaryError ? (
-            <div className="grid h-full min-h-52 place-items-center p-6 text-center">
+            <div
+              className="grid h-full min-h-52 place-items-center p-6 text-center"
+              role="alert"
+            >
               <div>
                 <AlertCircle className="mx-auto size-9 text-destructive" />
                 <p className="mt-3 font-bold">
@@ -228,7 +231,10 @@ export function StockProductionView({
                 <p className="mt-1 text-sm text-muted-foreground">
                   {summaryError}
                 </p>
-                <Button className="mt-3" onClick={() => void loadSummary()}>
+                <Button
+                  className="mt-3 h-11"
+                  onClick={() => void loadSummary()}
+                >
                   Tentar novamente
                 </Button>
               </div>
@@ -258,7 +264,7 @@ export function StockProductionView({
               {filtered.map((row) => (
                 <button
                   aria-label={`Abrir estoque de ${row.model}, ${row.color}, ${row.memory}`}
-                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none sm:px-5"
+                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-5"
                   key={row.id}
                   onClick={() => setSelectedRow(row)}
                   type="button"
@@ -280,7 +286,7 @@ export function StockProductionView({
                         {row.memory}
                       </Badge>
                     </div>
-                    <p className="mt-1 hidden truncate font-mono text-[.7rem] text-muted-foreground sm:block">
+                    <p className="mt-1 hidden truncate font-mono text-xs text-muted-foreground sm:block">
                       {row.codes
                         .map((code) =>
                           displayCommercialCode(code.code, code.kind),
@@ -289,7 +295,7 @@ export function StockProductionView({
                     </p>
                   </div>
                   <div className="text-right sm:text-center">
-                    <p className="text-[.65rem] font-bold uppercase text-muted-foreground">
+                    <p className="text-xs font-bold uppercase text-muted-foreground">
                       Disponíveis
                     </p>
                     <Badge
@@ -462,7 +468,7 @@ function StockProductDetails({
 
   return (
     <Dialog onOpenChange={onOpenChange} open>
-      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 sm:h-[90dvh] sm:max-w-3xl sm:rounded-2xl">
+      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-3xl sm:rounded-2xl sm:pb-0 sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2">
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
           <div className="flex items-center gap-3">
             {(selectedUnit || selectedPhoto) && (
@@ -518,6 +524,7 @@ function StockProductDetails({
               <img
                 alt={`Foto da entrada do SN ${selectedUnit.serial}`}
                 className="mt-3 max-h-[65dvh] w-full rounded-2xl border bg-muted object-contain"
+                decoding="async"
                 src={selectedPhoto.url}
               />
             </div>
@@ -584,6 +591,8 @@ function StockProductDetails({
                       <img
                         alt={`Foto da entrada do SN ${selectedUnit.serial}`}
                         className="aspect-square w-full object-cover"
+                        decoding="async"
+                        loading="lazy"
                         src={photo.url}
                       />
                     </button>
@@ -779,7 +788,7 @@ function StockReport({
   }, [rows]);
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[90dvh] sm:max-w-4xl sm:rounded-2xl">
+      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-4xl sm:rounded-2xl sm:pb-0 sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2">
         <DialogHeader
           className="shrink-0 border-b px-4 py-3 pr-12"
           data-report-controls
@@ -934,6 +943,8 @@ function StockReport({
                             <img
                               alt={`Entrada de ${row.model}`}
                               className="aspect-square w-full object-cover"
+                              decoding="async"
+                              loading="lazy"
                               src={photo.url}
                             />
                           </a>
@@ -1066,7 +1077,7 @@ function Metric({
           <Icon className="size-4" />
         </span>
         <div className="min-w-0">
-          <p className="truncate text-[.65rem] font-bold uppercase text-muted-foreground sm:text-xs">
+          <p className="truncate text-xs font-bold uppercase text-muted-foreground">
             {label}
           </p>
           <p className="font-extrabold">{value}</p>

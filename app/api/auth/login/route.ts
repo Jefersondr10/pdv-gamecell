@@ -17,13 +17,13 @@ import {
   consumeFixedWindowLimits,
   consumeWriteCredits,
 } from '@/lib/server/rate-limit';
-import { runtime } from '@/lib/server/runtime';
+import { requiredSecret, runtime } from '@/lib/server/runtime';
 import {
+  hmac,
   normalizeEmail,
   normalizeStoreCode,
   normalizeUsername,
   PASSWORD_ITERATIONS,
-  sha256,
   toBase64Url,
   verifyPassword,
 } from '@/lib/server/security';
@@ -99,9 +99,10 @@ export async function POST(request: Request) {
       2,
       'public-login',
     );
+    const rateLimitSecret = requiredSecret('RATE_LIMIT_SECRET_V1');
     const [credentialAttemptKey, originAttemptKey] = await Promise.all([
-      sha256(`credential\u0000${storeCode}\u0000${login}`),
-      sha256(`origin\u0000${forwarded}`),
+      hmac(`credential\u0000${storeCode}\u0000${login}`, rateLimitSecret),
+      hmac(`origin\u0000${forwarded}`, rateLimitSecret),
     ]);
     const attempt = await db
       .prepare(

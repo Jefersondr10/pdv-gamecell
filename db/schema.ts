@@ -497,5 +497,10 @@ export const auditEvents = sqliteTable(
   },
   (table) => [
     index('idx_audit_store_created').on(table.storeId, table.createdAt),
+    index('idx_audit_store_action_entity').on(
+      table.storeId,
+      table.action,
+      table.entityId,
+    ),
   ],
 );

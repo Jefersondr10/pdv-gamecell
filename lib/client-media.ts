@@ -66,8 +66,8 @@ export async function prepareMediaSelection({
   maxCombinedFiles,
   maxFileBytes = MEDIA_LIMITS.maxFileBytes,
   maxTotalBytes = MEDIA_LIMITS.maxOperationBytes,
-  maxDimension = 1_920,
-  quality = 0.8,
+  maxDimension = 1_600,
+  quality = 0.76,
   onProgress,
 }: PrepareMediaSelectionOptions): Promise<PreparedMediaSelection> {
   const existingIdentities = new Set(current.map(fileIdentity));

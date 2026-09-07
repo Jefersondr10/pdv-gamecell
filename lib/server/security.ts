@@ -143,33 +143,31 @@ export function normalizeSerial(value: string) {
 }
 
 export function normalizeAppleSerial(value: string) {
-  const normalized = normalizeSerial(value);
-  const withoutTechnicalPrefix = normalized.startsWith('S')
+  // O `S` impresso por alguns leitores pode ser um prefixo técnico, mas também
+  // pode fazer parte de um SN real. Preserve sempre o valor lido; a equivalência
+  // com/sem o prefixo é tratada somente nas buscas por `serialAliases`.
+  return normalizeSerial(value);
+}
+
+export function isValidAppleSerial(value: string) {
+  const normalized = normalizeAppleSerial(value);
+  const serialBody = normalized.startsWith('S')
     ? normalized.slice(1)
     : normalized;
-  return /^[A-Z0-9]{8,17}$/.test(withoutTechnicalPrefix)
-    ? withoutTechnicalPrefix
-    : normalized;
+  return /^[A-Z0-9]{8,17}$/.test(serialBody) && /[A-Z]/.test(serialBody);
 }
 
 export function serialAliases(value: string) {
   const normalized = normalizeAppleSerial(value);
-  if (
-    normalized.length < 8 ||
-    normalized.length > 17 ||
-    !/[A-Z]/.test(normalized)
-  ) {
-    return [];
-  }
-  const alternate = `S${normalized}`;
-  return Array.from(
-    new Set(
-      [normalized, alternate].filter(
-        (serial) =>
-          serial.length >= 8 && serial.length <= 18 && /[A-Z]/.test(serial),
-      ),
-    ),
-  );
+  if (!isValidAppleSerial(normalized)) return [];
+  const alternate = normalized.startsWith('S')
+    ? normalized.slice(1)
+    : `S${normalized}`;
+  return Array.from(new Set([normalized, alternate]));
+}
+
+export function serialAliasKey(value: string) {
+  return serialAliases(value).sort().join('\u0000');
 }
 
 export function normalizeRecoveryCode(value: string) {

@@ -21,14 +21,16 @@ type WriteBudgetClass =
   | 'read';
 
 const DAILY_WRITE_CREDITS: Record<WriteBudgetClass, number> = {
-  'public-login': 12_000,
-  'public-registration': 5_000,
-  'public-oauth': 10_000,
-  'public-recovery': 4_000,
-  'account-security': 4_000,
-  business: 25_000,
-  control: 6_000,
-  read: 3_000_000,
+  // These are deployment-wide circuit breakers. The narrower limits below
+  // remain responsible for containing abuse by IP, user and store.
+  'public-login': 120_000,
+  'public-registration': 60_000,
+  'public-oauth': 120_000,
+  'public-recovery': 60_000,
+  'account-security': 80_000,
+  business: 1_000_000,
+  control: 300_000,
+  read: 10_000_000,
 };
 
 export async function consumeFixedWindowLimits(
@@ -87,7 +89,7 @@ export async function consumeFixedWindowLimits(
     2,
     Math.min(
       5_000,
-      Math.trunc(additionalWriteCost) + (keyedLimits.length + 2) * 3,
+      Math.max(0, Math.trunc(additionalWriteCost)) + keyedLimits.length + 2,
     ),
   );
   if ((attemptsByKey.get(masterKey) ?? 0) + masterCost > masterLimit) {

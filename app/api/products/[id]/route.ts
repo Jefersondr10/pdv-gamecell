@@ -11,6 +11,7 @@ import {
 } from '@/lib/server/http';
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { canonicalProductVariationKey } from '@/lib/server/system-catalog-sync';
 
 export async function PATCH(
   request: Request,
@@ -29,9 +30,12 @@ export async function PATCH(
     const now = Date.now();
     await consumeStoreWriteBudget(db, now, session.storeId!, 3);
     const exists = await db
-      .prepare('SELECT 1 FROM products WHERE id = ? AND store_id = ? LIMIT 1')
+      .prepare(
+        `SELECT model, color, memory FROM products
+         WHERE id = ? AND store_id = ? LIMIT 1`,
+      )
       .bind(id, session.storeId)
-      .first();
+      .first<{ model: string; color: string; memory: string }>();
     if (!exists) {
       throw new HttpError(404, 'Produto não encontrado.', 'NOT_FOUND');
     }
@@ -77,6 +81,38 @@ export async function PATCH(
         'Nenhuma alteração foi informada.',
         'NO_CHANGES',
       );
+    }
+    if (
+      changed.model !== undefined ||
+      changed.color !== undefined ||
+      changed.memory !== undefined
+    ) {
+      const nextVariationKey = canonicalProductVariationKey({
+        model: (changed.model as string | undefined) ?? exists.model,
+        color: (changed.color as string | undefined) ?? exists.color,
+        memory: (changed.memory as string | undefined) ?? exists.memory,
+      });
+      const otherProducts = (
+        await db
+          .prepare(
+            `SELECT model, color, memory FROM products
+             WHERE store_id = ? AND id <> ? LIMIT 1000`,
+          )
+          .bind(session.storeId, id)
+          .all<{ model: string; color: string; memory: string }>()
+      ).results;
+      if (
+        otherProducts.some(
+          (product) =>
+            canonicalProductVariationKey(product) === nextVariationKey,
+        )
+      ) {
+        throw new HttpError(
+          409,
+          'Já existe um produto com este modelo, cor e memória.',
+          'PRODUCT_EXISTS',
+        );
+      }
     }
     updates.push('updated_at = ?');
     bindings.push(now, id, session.storeId);

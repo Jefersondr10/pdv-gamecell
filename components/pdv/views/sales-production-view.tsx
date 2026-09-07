@@ -469,7 +469,7 @@ export function SalesProductionView({
           </p>
         </div>
         <Button
-          className="h-9 rounded-xl bg-gradient-to-r from-blue-700 to-cyan-600 px-3 font-extrabold text-white shadow-sm hover:from-blue-800 hover:to-cyan-700"
+          className="h-9 rounded-xl px-3 font-extrabold shadow-sm"
           onClick={() => setPeriodReportOpen(true)}
           type="button"
         >
@@ -501,7 +501,6 @@ export function SalesProductionView({
             setOrderStatusFilter('all');
             setGrouping('sale');
           }}
-          tone="blue"
           value={String(activeAggregates.saleCount)}
         />
         <Metric
@@ -527,7 +526,6 @@ export function SalesProductionView({
             setOrderStatusFilter('all');
             setGrouping('sale');
           }}
-          tone="emerald"
           value={formatMoney(activeAggregates.amountCents)}
         />
         <Metric
@@ -545,13 +543,12 @@ export function SalesProductionView({
               : null
           }
           label="Aparelhos"
-          mobileLabel="Aparelhos"
+          mobileLabel="Itens"
           onClick={() => {
             setAlertOnly(false);
             setIssueFilter('all');
             setGrouping('model');
           }}
-          tone="violet"
           value={String(activeAggregates.itemCount)}
         />
         <Metric
@@ -577,21 +574,21 @@ export function SalesProductionView({
             setOrderStatusFilter('all');
             setGrouping('sale');
           }}
-          tone="amber"
           value={String(activeAggregates.alertCount)}
         />
       </div>
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 space-y-2 border-b bg-gradient-to-r from-slate-50/80 via-background to-blue-50/60 p-2 dark:from-slate-950/40 dark:to-blue-950/20 sm:p-4">
+        <CardHeader className="shrink-0 space-y-2 border-b bg-muted/20 p-2 sm:p-4">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_13rem_14rem_14rem]">
             <label className="col-span-2 min-w-0 md:col-span-1">
-              <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
-                <Search className="size-3 text-blue-600" /> Pesquisar vendas
+              <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                <Search className="size-3 text-muted-foreground" /> Pesquisar
+                vendas
               </span>
               <span className="relative block">
-                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-blue-600" />
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  className="h-11 rounded-xl border-blue-200/80 bg-background pl-9 font-bold tracking-[-.01em] shadow-sm placeholder:font-medium dark:border-blue-900/70"
+                  className="h-11 rounded-xl bg-background pl-9 font-bold tracking-[-.01em] shadow-sm placeholder:font-medium"
                   onChange={(event) => setQueryDraft(event.target.value)}
                   placeholder="Cliente, vendedor, modelo, venda ou SN"
                   value={queryDraft}
@@ -599,20 +596,24 @@ export function SalesProductionView({
               </span>
             </label>
             <div className="min-w-0">
-              <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
-                <CalendarDays className="size-3 text-emerald-600" /> Período
+              <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                <CalendarDays className="size-3 text-muted-foreground" />
+                Período
               </span>
               <SalesFilterSelect
                 aria-label="Período das vendas"
                 onValueChange={setPeriod}
                 options={PERIOD_OPTIONS}
-                tone="emerald"
                 value={period}
               />
             </div>
             <Button
               aria-expanded={mobileFiltersOpen}
-              className="mt-[1.05rem] h-11 rounded-xl border-violet-200 bg-violet-50 px-3 font-extrabold text-violet-900 shadow-sm hover:bg-violet-100 md:hidden dark:border-violet-900/70 dark:bg-violet-950/30 dark:text-violet-100"
+              className={cn(
+                'mt-[1.05rem] h-11 rounded-xl bg-background px-3 font-extrabold shadow-sm md:hidden',
+                mobileFiltersOpen &&
+                  'border-primary/40 bg-primary/10 text-primary hover:bg-primary/15',
+              )}
               onClick={() => setMobileFiltersOpen((current) => !current)}
               type="button"
               variant="outline"
@@ -629,8 +630,9 @@ export function SalesProductionView({
               )}
             >
               <div className="min-w-0">
-                <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
-                  <CircleAlert className="size-3 text-amber-600" /> Pendência
+                <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                  <CircleAlert className="size-3 text-muted-foreground" />
+                  Pendência
                 </span>
                 <SalesFilterSelect
                   aria-label="Pendência da venda"
@@ -642,13 +644,12 @@ export function SalesProductionView({
                     }
                   }}
                   options={ISSUE_OPTIONS}
-                  tone="amber"
                   value={issueFilter}
                 />
               </div>
               <div className="min-w-0">
-                <span className="mb-1 flex items-center gap-1.5 px-1 text-[.64rem] font-black uppercase tracking-[.12em] text-slate-600 dark:text-slate-300">
-                  <ListFilter className="size-3 text-fuchsia-600" /> Status
+                <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                  <ListFilter className="size-3 text-muted-foreground" /> Status
                 </span>
                 <SalesFilterSelect
                   aria-label="Status do pedido"
@@ -672,7 +673,6 @@ export function SalesProductionView({
                       value: status.id,
                     })),
                   ]}
-                  tone="fuchsia"
                   value={orderStatusFilter}
                 />
               </div>
@@ -684,7 +684,7 @@ export function SalesProductionView({
                 aria-label={
                   period === 'day' ? 'Dia das vendas' : 'Mês das vendas'
                 }
-                className="h-9 rounded-xl border-emerald-200 bg-emerald-50/70 font-bold md:w-44 dark:border-emerald-900/70 dark:bg-emerald-950/20"
+                className="h-9 rounded-xl bg-background font-bold md:w-44"
                 onChange={(event) => {
                   if (!event.target.value) return;
                   if (period === 'day') setSelectedDay(event.target.value);
@@ -697,77 +697,43 @@ export function SalesProductionView({
             <div className="grid grid-cols-4 gap-1 rounded-2xl bg-slate-200/65 p-1 dark:bg-slate-900/70 md:ml-auto md:w-[36rem]">
               {(
                 [
-                  [
-                    'sale',
-                    'Por venda',
-                    'Venda',
-                    ReceiptText,
-                    'bg-gradient-to-br from-blue-600 to-blue-800 text-white shadow-md shadow-blue-600/20',
-                    'text-blue-800 hover:bg-blue-100/80 dark:text-blue-200 dark:hover:bg-blue-950/60',
-                  ],
-                  [
-                    'model',
-                    'Por modelo',
-                    'Modelo',
-                    Smartphone,
-                    'bg-gradient-to-br from-violet-600 to-violet-800 text-white shadow-md shadow-violet-600/20',
-                    'text-violet-800 hover:bg-violet-100/80 dark:text-violet-200 dark:hover:bg-violet-950/60',
-                  ],
-                  [
-                    'customer',
-                    'Por cliente',
-                    'Cliente',
-                    UsersRound,
-                    'bg-gradient-to-br from-emerald-600 to-emerald-800 text-white shadow-md shadow-emerald-600/20',
-                    'text-emerald-800 hover:bg-emerald-100/80 dark:text-emerald-200 dark:hover:bg-emerald-950/60',
-                  ],
-                  [
-                    'seller',
-                    'Ranking',
-                    'Ranking',
-                    Trophy,
-                    'bg-gradient-to-br from-amber-400 to-orange-500 text-slate-950 shadow-md shadow-amber-500/20',
-                    'text-amber-800 hover:bg-amber-100/80 dark:text-amber-200 dark:hover:bg-amber-950/60',
-                  ],
+                  ['sale', 'Por venda', 'Venda', ReceiptText],
+                  ['model', 'Por modelo', 'Modelo', Smartphone],
+                  ['customer', 'Por cliente', 'Cliente', UsersRound],
+                  ['seller', 'Ranking', 'Ranking', Trophy],
                 ] as const
-              ).map(
-                ([
-                  value,
-                  label,
-                  mobileLabel,
-                  Icon,
-                  activeClass,
-                  inactiveClass,
-                ]) => {
-                  const selected = grouping === value;
-                  return (
-                    <Button
-                      aria-pressed={selected}
-                      className={cn(
-                        'h-9 gap-1 rounded-xl px-1 text-[.68rem] font-black uppercase tracking-[.035em] shadow-none transition-all sm:px-3 sm:text-xs',
-                        selected ? activeClass : inactiveClass,
-                      )}
-                      key={value}
-                      onClick={() => {
-                        setGrouping(value);
-                        if (value !== 'sale') setAlertOnly(false);
-                      }}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      <Icon className="size-3.5 shrink-0" />
-                      <span className="sm:hidden">{mobileLabel}</span>
-                      <span className="hidden sm:inline">{label}</span>
-                    </Button>
-                  );
-                },
-              )}
+              ).map(([value, label, mobileLabel, Icon]) => {
+                const selected = grouping === value;
+                return (
+                  <Button
+                    aria-pressed={selected}
+                    className={cn(
+                      'h-10 gap-1 rounded-xl px-1 text-xs font-black uppercase tracking-[.025em] shadow-none transition-all sm:px-3',
+                      selected
+                        ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90'
+                        : 'text-muted-foreground hover:bg-background hover:text-foreground',
+                    )}
+                    key={value}
+                    onClick={() => {
+                      setGrouping(value);
+                      if (value !== 'sale') setAlertOnly(false);
+                    }}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <Icon className="size-3.5 shrink-0" />
+                    <span className="sm:hidden">{mobileLabel}</span>
+                    <span className="hidden sm:inline">{label}</span>
+                  </Button>
+                );
+              })}
             </div>
           </div>
           {grouping === 'seller' && (
             <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
               <span className="mr-auto flex items-center gap-1 font-extrabold sm:mr-0">
-                <Trophy className="size-3.5 text-amber-500" /> Ordenar ranking
+                <Trophy className="size-3.5 text-muted-foreground" /> Ordenar
+                ranking
               </span>
               <Button
                 className="h-7 px-2 text-xs"
@@ -799,21 +765,33 @@ export function SalesProductionView({
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 overscroll-contain">
           {activeError ? (
-            <div className="grid min-h-52 place-items-center p-6 text-center">
+            <div
+              className="grid min-h-52 place-items-center p-6 text-center"
+              role="alert"
+            >
               <div>
                 <AlertTriangle className="mx-auto size-8 text-destructive" />
                 <p className="mt-3 text-sm font-semibold text-destructive">
                   {activeError}
                 </p>
-                <Button className="mt-3" onClick={() => void reloadActive()}>
+                <Button
+                  className="mt-3 h-11"
+                  onClick={() => void reloadActive()}
+                >
                   Tentar novamente
                 </Button>
               </div>
             </div>
           ) : activeLoading && activeCount === 0 ? (
-            <div className="grid min-h-52 place-items-center">
-              <LoaderCircle className="size-7 animate-spin text-primary" />
-            </div>
+            <output
+              aria-live="polite"
+              className="grid min-h-52 place-items-center text-sm font-semibold text-muted-foreground"
+            >
+              <span className="flex items-center gap-2">
+                <LoaderCircle className="size-5 animate-spin text-primary" />
+                Carregando vendas…
+              </span>
+            </output>
           ) : activeCount === 0 ? (
             <Empty
               hasAny={
@@ -836,7 +814,10 @@ export function SalesProductionView({
                 sales={page.items}
               />
               {listError && (
-                <div className="border-t bg-destructive/5 p-3 text-center">
+                <div
+                  className="border-t bg-destructive/5 p-3 text-center"
+                  role="alert"
+                >
                   <p className="text-sm font-semibold text-destructive">
                     {listError}
                   </p>
@@ -849,7 +830,6 @@ export function SalesProductionView({
                         true,
                       )
                     }
-                    size="sm"
                     variant="outline"
                   >
                     Tentar novamente
@@ -952,17 +932,16 @@ function SaleList({
   onCancel: (sale: SaleRecord) => void;
 }) {
   return (
-    <div className="divide-y">
+    <div className="grid gap-2 bg-muted/30 p-2 sm:block sm:divide-y sm:bg-transparent sm:p-0">
       {sales.map((sale) => (
         <article
-          className={
-            sale.status === 'cancelled'
-              ? 'bg-muted/35 px-3 py-2 opacity-75 sm:px-5 sm:py-3'
-              : 'px-3 py-2 sm:px-5 sm:py-3'
-          }
+          className={cn(
+            'rounded-xl border bg-card px-3 py-2.5 shadow-sm sm:rounded-none sm:border-0 sm:bg-transparent sm:px-5 sm:py-3 sm:shadow-none',
+            sale.status === 'cancelled' && 'bg-muted/50 opacity-75',
+          )}
           key={sale.id}
         >
-          <div className="grid gap-1.5 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3">
+          <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3">
             <div className="flex items-center gap-2 sm:block">
               <Badge
                 variant={
@@ -974,6 +953,17 @@ function SaleList({
               <span className="text-xs text-muted-foreground">
                 {formatDateTime(sale.createdAt)}
               </span>
+              {canCancel && sale.status === 'completed' && (
+                <Button
+                  aria-label={`Cancelar venda ${sale.number}`}
+                  className="ml-auto size-10 sm:hidden"
+                  onClick={() => onCancel(sale)}
+                  size="icon"
+                  variant="ghost"
+                >
+                  <XCircle />
+                </Button>
+              )}
             </div>
             <div className="min-w-0">
               <p className="truncate font-bold">{sale.customerName}</p>
@@ -982,8 +972,8 @@ function SaleList({
                 {sale.items.length === 1 ? 'aparelho' : 'aparelhos'} ·{' '}
                 {sale.sellerName} · {paymentLabel(sale)}
               </p>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {sale.orderStatus && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {sale.status === 'completed' && sale.orderStatus && (
                   <OrderStatusBadge status={sale.orderStatus} />
                 )}
                 {sale.status === 'completed' &&
@@ -1035,36 +1025,43 @@ function SaleList({
                 )}
               </div>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
+            <div className="flex min-w-0 items-center gap-1 border-t border-border/60 pt-2 sm:border-0 sm:pt-0">
               <SalePaymentComparison sale={sale} />
-              <Button
-                className="h-8 border-blue-200 bg-blue-50 px-2 font-extrabold text-blue-900 hover:bg-blue-100 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100"
-                onClick={() => onReport(sale)}
-                size="sm"
-                variant="outline"
-              >
-                <FileText /> PDF
-              </Button>
-              {sale.status === 'completed' && (
+              <div className="ml-auto flex shrink-0 items-center gap-1">
                 <Button
-                  className="h-8 px-2"
-                  onClick={() => onEdit(sale)}
+                  aria-label={`Abrir PDF da venda ${sale.number}`}
+                  className="size-10 px-0 font-bold sm:h-8 sm:w-auto sm:px-2"
+                  onClick={() => onReport(sale)}
                   size="sm"
                   variant="outline"
                 >
-                  <Pencil /> Editar
+                  <FileText className="text-primary" />
+                  <span className="hidden sm:inline">PDF</span>
                 </Button>
-              )}
-              {canCancel && sale.status === 'completed' && (
-                <Button
-                  aria-label="Cancelar venda"
-                  onClick={() => onCancel(sale)}
-                  size="icon"
-                  variant="ghost"
-                >
-                  <XCircle />
-                </Button>
-              )}
+                {sale.status === 'completed' && (
+                  <Button
+                    aria-label={`Editar venda ${sale.number}`}
+                    className="size-10 px-0 sm:h-8 sm:w-auto sm:px-2"
+                    onClick={() => onEdit(sale)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <Pencil />
+                    <span className="hidden sm:inline">Editar</span>
+                  </Button>
+                )}
+                {canCancel && sale.status === 'completed' && (
+                  <Button
+                    aria-label={`Cancelar venda ${sale.number}`}
+                    className="hidden size-8 sm:inline-flex"
+                    onClick={() => onCancel(sale)}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    <XCircle />
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         </article>
@@ -1113,12 +1110,12 @@ function GroupedList({
               {row.saleCount} {row.saleCount === 1 ? 'venda' : 'vendas'} ·{' '}
               {row.itemCount} {row.itemCount === 1 ? 'aparelho' : 'aparelhos'}
             </p>
-            <p className="mt-0.5 text-[.68rem] font-semibold text-primary">
+            <p className="mt-0.5 text-xs font-semibold text-primary">
               Ver vendas e SNs
             </p>
           </div>
           <div className="text-right">
-            <p className="text-[0.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Vendido
             </p>
             <strong>{formatMoney(row.totalCents)}</strong>
@@ -1208,21 +1205,30 @@ function GroupDetailsDialog({
             </DialogHeader>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {error && page.items.length === 0 ? (
-                <div className="grid min-h-52 place-items-center p-6 text-center">
+                <div
+                  className="grid min-h-52 place-items-center p-6 text-center"
+                  role="alert"
+                >
                   <div>
                     <AlertTriangle className="mx-auto size-8 text-destructive" />
                     <p className="mt-3 text-sm font-semibold text-destructive">
                       {error}
                     </p>
-                    <Button className="mt-3" onClick={() => void load()}>
+                    <Button className="mt-3 h-11" onClick={() => void load()}>
                       Tentar novamente
                     </Button>
                   </div>
                 </div>
               ) : loading && page.items.length === 0 ? (
-                <div className="grid min-h-52 place-items-center">
-                  <LoaderCircle className="size-7 animate-spin text-primary" />
-                </div>
+                <output
+                  aria-live="polite"
+                  className="grid min-h-52 place-items-center text-sm font-semibold text-muted-foreground"
+                >
+                  <span className="flex items-center gap-2">
+                    <LoaderCircle className="size-5 animate-spin text-primary" />
+                    Carregando detalhes…
+                  </span>
+                </output>
               ) : page.items.length === 0 ? (
                 <div className="grid min-h-52 place-items-center p-6 text-center text-sm text-muted-foreground">
                   Nenhum SN encontrado neste grupo.
@@ -1253,7 +1259,7 @@ function GroupDetailsDialog({
                           </p>
                         </div>
                         <div className="text-left sm:text-right">
-                          <p className="text-[.65rem] font-bold uppercase tracking-wider text-muted-foreground">
+                          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                             Vendido
                           </p>
                           <strong>{formatMoney(item.soldPriceCents)}</strong>
@@ -1336,6 +1342,7 @@ function EditSaleDialog({
     ),
   );
   const receiptValueOperationIdRef = useRef(createOperationId());
+  const attachmentOperationIdRef = useRef(createOperationId());
   const [itemFiles, setItemFiles] = useState<Record<string, File[]>>({});
   const [preparing, setPreparing] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -1467,6 +1474,8 @@ function EditSaleDialog({
         incoming,
         maxFiles: Math.max(0, MEDIA_LIMITS.saleReceipts - sale.receipts.length),
         allowPdf: true,
+        maxDimension: 1_920,
+        quality: 0.8,
         otherFiles: selectedItemFiles,
         maxCombinedFiles: remainingAttachmentCount,
         maxTotalBytes: remainingAttachmentBytes,
@@ -2123,6 +2132,10 @@ function EditSaleDialog({
                       }
                       if (selectedFiles.length > 0) {
                         const form = new FormData();
+                        form.set(
+                          'operationId',
+                          attachmentOperationIdRef.current,
+                        );
                         receiptFiles.forEach((file) =>
                           form.append('receipts', file),
                         );
@@ -2139,6 +2152,7 @@ function EditSaleDialog({
                         });
                         const attachmentResult = await requestJson<{
                           receipts: ReceiptOcrAttachment[];
+                          replayed?: boolean;
                         }>(`/api/sales/${sale.id}/attachments`, {
                           method: 'POST',
                           headers: { 'x-csrf-token': data.csrfToken },
@@ -2146,8 +2160,12 @@ function EditSaleDialog({
                         });
                         void enqueueReceiptOcrJobs({
                           attachments: attachmentResult.receipts ?? [],
-                          files: receiptFiles,
-                          receiptValues,
+                          files: attachmentResult.replayed
+                            ? undefined
+                            : receiptFiles,
+                          receiptValues: attachmentResult.replayed
+                            ? undefined
+                            : receiptValues,
                           saleId: sale.id,
                           storeId: data.store.id,
                         }).catch(() => {});
@@ -2529,6 +2547,8 @@ function SaleReport({
                                 <img
                                   alt={photo.name}
                                   className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                  decoding="async"
+                                  loading="lazy"
                                   src={photo.url}
                                 />
                               </a>
@@ -2612,6 +2632,8 @@ function SaleReport({
                             <img
                               alt={receipt.name}
                               className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                              decoding="async"
+                              loading="lazy"
                               src={receipt.url}
                             />
                           </a>
@@ -2908,7 +2930,7 @@ function SalesPeriodReport({
 
               <dl className="report-section mt-4 grid grid-cols-3 gap-2 sm:grid-cols-5">
                 <div className="col-span-3 overflow-hidden rounded-xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-cyan-600 p-4 text-white shadow-sm sm:col-span-2">
-                  <dt className="text-[.68rem] font-black uppercase tracking-[.12em] text-emerald-50/90">
+                  <dt className="text-xs font-black uppercase tracking-[.1em] text-emerald-50/90">
                     {reportAmountLabel(period)}
                   </dt>
                   <dd className="mt-1 text-2xl font-black tracking-[-.04em] sm:text-3xl">
@@ -3020,7 +3042,7 @@ function SalesPeriodReport({
                             </p>
                           </div>
                           <div className="shrink-0 text-right">
-                            <p className="text-[.62rem] font-black uppercase tracking-[.12em] text-blue-200">
+                            <p className="text-xs font-black uppercase tracking-[.1em] text-blue-200">
                               Total do dia
                             </p>
                             <strong className="mt-0.5 block text-lg leading-none">
@@ -3085,7 +3107,7 @@ function SalesPeriodReport({
                                     />
                                     <dl className="grid grid-cols-2 gap-2">
                                       <div className="rounded-lg bg-white/80 px-2 py-2">
-                                        <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
+                                        <dt className="text-xs font-black uppercase tracking-wide text-slate-500">
                                           Valor da venda
                                         </dt>
                                         <dd className="mt-0.5 break-words text-sm font-extrabold">
@@ -3093,7 +3115,7 @@ function SalesPeriodReport({
                                         </dd>
                                       </div>
                                       <div className="rounded-lg bg-white/80 px-2 py-2">
-                                        <dt className="text-[.62rem] font-black uppercase tracking-wide text-slate-500">
+                                        <dt className="text-xs font-black uppercase tracking-wide text-slate-500">
                                           Total pago
                                         </dt>
                                         <dd className="mt-0.5 break-words text-sm font-extrabold">
@@ -3230,6 +3252,8 @@ function SalesPeriodReport({
                                                   <img
                                                     alt={`${item.productName} · SN ${item.serial}`}
                                                     className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                                    decoding="async"
+                                                    loading="lazy"
                                                     src={photo.url}
                                                   />
                                                 </a>
@@ -3273,6 +3297,8 @@ function SalesPeriodReport({
                                                   <img
                                                     alt={receipt.name}
                                                     className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                                    decoding="async"
+                                                    loading="lazy"
                                                     src={receipt.url}
                                                   />
                                                 </a>
@@ -3399,6 +3425,10 @@ function CancelDialog({
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const operationIdRef = useRef(createOperationId());
+  useEffect(() => {
+    operationIdRef.current = createOperationId();
+  }, [sale?.id]);
   return (
     <Dialog
       onOpenChange={(open) => {
@@ -3453,7 +3483,10 @@ function CancelDialog({
                         'content-type': 'application/json',
                         'x-csrf-token': data.csrfToken,
                       },
-                      body: JSON.stringify({ reason }),
+                      body: JSON.stringify({
+                        operationId: operationIdRef.current,
+                        reason,
+                      }),
                     });
                     await onChanged();
                     onOpenChange(false);
@@ -3506,69 +3539,80 @@ function getPaymentComparison(sale: SaleRecord): PaymentComparison {
 
 function SalePaymentComparison({ sale }: { sale: SaleRecord }) {
   const comparison = getPaymentComparison(sale);
+  const stateLabel =
+    comparison === 'equal'
+      ? 'Quitado'
+      : comparison === 'under'
+        ? 'Pendente'
+        : comparison === 'over'
+          ? 'Excedente'
+          : comparison === 'cancelled'
+            ? 'Cancelada'
+            : 'Sem valor';
 
   return (
     <div
       className={cn(
-        'w-full rounded-xl border px-2.5 py-2 sm:mr-2 sm:w-auto sm:min-w-[12rem]',
+        'min-w-0 flex-1 rounded-lg border px-2 py-1.5 sm:flex-none sm:px-2.5 sm:py-2 sm:min-w-[12rem]',
         comparison === 'equal' &&
           'border-emerald-300 bg-emerald-50/90 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-50',
         comparison === 'under' &&
-          'border-rose-200 bg-rose-50/90 dark:border-rose-900 dark:bg-rose-950/35',
+          'border-rose-200 bg-rose-50/65 dark:border-rose-900 dark:bg-rose-950/25',
         comparison === 'over' &&
-          'border-violet-200 bg-violet-50/90 dark:border-violet-900 dark:bg-violet-950/35',
+          'border-amber-200 bg-amber-50/65 dark:border-amber-900 dark:bg-amber-950/25',
         (comparison === 'unset' || comparison === 'cancelled') &&
-          'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60',
+          'border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-900/50',
       )}
     >
-      <PaymentComparisonLabel comparison={comparison} />
-      <dl
-        className={cn(
-          'grid grid-cols-2 gap-x-3 text-right',
-          comparison !== 'equal' && 'mt-1',
-        )}
-      >
-        <div>
-          <dt
-            className={cn(
-              'text-[.6rem] font-bold uppercase',
-              comparison === 'equal'
-                ? 'text-emerald-700 dark:text-emerald-300'
-                : 'text-muted-foreground',
-            )}
-          >
-            Valor da venda
-          </dt>
-          <dd
-            className={cn(
-              'text-sm font-extrabold tabular-nums',
-              comparison === 'equal' && 'text-emerald-950 dark:text-emerald-50',
-            )}
-          >
+      {comparison === 'equal' ? (
+        <>
+          <p className="text-xs font-bold uppercase leading-none text-emerald-700 dark:text-emerald-300">
+            Quitado
+          </p>
+          <p className="mt-1 whitespace-nowrap text-sm font-extrabold tracking-tight text-emerald-950 tabular-nums dark:text-emerald-50">
             {formatMoney(sale.productsTotalCents)}
-          </dd>
-        </div>
-        <div>
-          <dt
+          </p>
+        </>
+      ) : comparison === 'under' || comparison === 'over' ? (
+        <>
+          <div className="flex items-center justify-between gap-2 whitespace-nowrap text-xs font-bold uppercase leading-none">
+            <span className="text-muted-foreground">Venda / Pago</span>
+            <span
+              className={cn(
+                comparison === 'under'
+                  ? 'text-rose-700 dark:text-rose-300'
+                  : 'text-amber-700 dark:text-amber-300',
+              )}
+            >
+              {stateLabel}
+            </span>
+          </div>
+          <p
             className={cn(
-              'text-[.6rem] font-bold uppercase',
-              comparison === 'equal'
-                ? 'text-emerald-700 dark:text-emerald-300'
-                : 'text-muted-foreground',
+              'mt-1 whitespace-nowrap text-xs font-extrabold tracking-tight tabular-nums sm:text-sm',
+              comparison === 'under'
+                ? 'text-rose-800 dark:text-rose-100'
+                : 'text-amber-900 dark:text-amber-100',
             )}
           >
-            Total pago
-          </dt>
-          <dd
-            className={cn(
-              'text-sm font-extrabold tabular-nums',
-              comparison === 'equal' && 'text-emerald-950 dark:text-emerald-50',
-            )}
-          >
+            {formatMoney(sale.productsTotalCents)} /{' '}
             {formatMoney(sale.receivedTotalCents)}
-          </dd>
-        </div>
-      </dl>
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-xs font-bold uppercase leading-none text-slate-600 dark:text-slate-300">
+            {comparison === 'cancelled'
+              ? 'Venda cancelada'
+              : 'Sem valor de venda'}
+          </p>
+          <p className="mt-1 whitespace-nowrap text-sm font-extrabold tracking-tight tabular-nums">
+            {comparison === 'cancelled'
+              ? formatMoney(sale.productsTotalCents)
+              : `Pago: ${formatMoney(sale.receivedTotalCents)}`}
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -3609,8 +3653,8 @@ function PaymentComparisonLabel({
             : 'text-rose-700 dark:text-rose-300'),
         comparison === 'over' &&
           (surface === 'report'
-            ? 'text-violet-800'
-            : 'text-violet-700 dark:text-violet-300'),
+            ? 'text-amber-800'
+            : 'text-amber-700 dark:text-amber-300'),
         (comparison === 'unset' || comparison === 'cancelled') &&
           (surface === 'report'
             ? 'text-slate-700'
@@ -3645,19 +3689,19 @@ function WarningBadge({ text, tone }: { text: string; tone: WarningTone }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[.68rem] font-extrabold',
+        'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold leading-4',
         tone === 'payment' &&
-          'border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-900 dark:bg-rose-950/45 dark:text-rose-200',
+          'border-rose-200/80 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200',
         tone === 'overpayment' &&
-          'border-violet-200 bg-violet-100 text-violet-800 dark:border-violet-900 dark:bg-violet-950/45 dark:text-violet-200',
+          'border-amber-200/80 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200',
         tone === 'receipt' &&
-          'border-orange-200 bg-orange-100 text-orange-800 dark:border-orange-900 dark:bg-orange-950/45 dark:text-orange-200',
+          'border-amber-200/80 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200',
         tone === 'processing' &&
-          'border-sky-200 bg-sky-100 text-sky-800 dark:border-sky-900 dark:bg-sky-950/45 dark:text-sky-200',
+          'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200',
         tone === 'reconciliation' &&
-          'border-fuchsia-200 bg-fuchsia-100 text-fuchsia-800 dark:border-fuchsia-900 dark:bg-fuchsia-950/45 dark:text-fuchsia-200',
+          'border-rose-200/80 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200',
         tone === 'information' &&
-          'border-slate-200 bg-slate-100 text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200',
+          'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200',
       )}
     >
       <Icon className="size-3" />
@@ -3667,7 +3711,7 @@ function WarningBadge({ text, tone }: { text: string; tone: WarningTone }) {
 }
 function SuccessBadge({ text }: { text: string }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/12 px-1.5 py-1 text-[.68rem] font-bold text-emerald-800 dark:text-emerald-200">
+    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200/80 bg-emerald-50 px-2 py-0.5 text-xs font-semibold leading-4 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
       <FileCheck2 className="size-3" />
       {text}
     </span>
@@ -3681,7 +3725,6 @@ function Metric({
   active = false,
   comparison,
   onClick,
-  tone = 'blue',
 }: {
   label: string;
   mobileLabel?: string;
@@ -3696,17 +3739,7 @@ function Metric({
     previousDisplay: string;
   } | null;
   onClick?: () => void;
-  tone?: 'amber' | 'blue' | 'emerald' | 'violet';
 }) {
-  const toneClasses = {
-    amber:
-      'border-amber-200/80 bg-gradient-to-br from-amber-50 via-background to-orange-50/70 dark:border-amber-900/60 dark:from-amber-950/35 dark:to-orange-950/15',
-    blue: 'border-blue-200/80 bg-gradient-to-br from-blue-50 via-background to-cyan-50/70 dark:border-blue-900/60 dark:from-blue-950/35 dark:to-cyan-950/15',
-    emerald:
-      'border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-background to-teal-50/70 dark:border-emerald-900/60 dark:from-emerald-950/35 dark:to-teal-950/15',
-    violet:
-      'border-violet-200/80 bg-gradient-to-br from-violet-50 via-background to-fuchsia-50/60 dark:border-violet-900/60 dark:from-violet-950/35 dark:to-fuchsia-950/15',
-  } as const;
   const comparisonText = comparison
     ? metricComparisonText(
         comparison.current,
@@ -3731,8 +3764,7 @@ function Metric({
   const content = (
     <Card
       className={cn(
-        'gap-0 overflow-hidden rounded-lg py-0 transition-all sm:h-full sm:rounded-xl sm:py-3',
-        toneClasses[tone],
+        'gap-0 overflow-hidden rounded-lg border-border/80 bg-card py-0 transition-all sm:h-full sm:rounded-xl sm:py-3',
         onClick && 'hover:border-primary/45 hover:bg-secondary/35',
         active && 'border-primary ring-2 ring-primary/25',
       )}
@@ -3754,7 +3786,7 @@ function Metric({
           <>
             <p
               className={cn(
-                'mt-0.5 truncate text-[.65rem] font-extrabold leading-none sm:hidden',
+                'mt-0.5 truncate text-xs font-extrabold leading-none sm:hidden',
                 favorable && 'text-emerald-700 dark:text-emerald-300',
                 unfavorable && 'text-rose-700 dark:text-rose-300',
                 !favorable && !unfavorable && 'text-muted-foreground',
@@ -3824,29 +3856,14 @@ function SalesFilterSelect<T extends string>({
   'aria-label': ariaLabel,
   onValueChange,
   options,
-  tone,
   value,
 }: {
   'aria-label': string;
   onValueChange: (value: T) => void;
   options: Array<FilterOption<T>>;
-  tone: 'amber' | 'emerald' | 'fuchsia';
   value: T;
 }) {
   const selected = options.find((option) => option.value === value);
-  const tones = {
-    amber:
-      'border-amber-200/90 bg-amber-50/80 text-amber-950 hover:bg-amber-100/80 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-50',
-    emerald:
-      'border-emerald-200/90 bg-emerald-50/80 text-emerald-950 hover:bg-emerald-100/80 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-50',
-    fuchsia:
-      'border-fuchsia-200/90 bg-fuchsia-50/80 text-fuchsia-950 hover:bg-fuchsia-100/80 dark:border-fuchsia-900/70 dark:bg-fuchsia-950/30 dark:text-fuchsia-50',
-  } as const;
-  const selectedTones = {
-    amber: 'data-selected:bg-amber-100 data-selected:text-amber-950',
-    emerald: 'data-selected:bg-emerald-100 data-selected:text-emerald-950',
-    fuchsia: 'data-selected:bg-fuchsia-100 data-selected:text-fuchsia-950',
-  } as const;
 
   return (
     <Select
@@ -3857,10 +3874,8 @@ function SalesFilterSelect<T extends string>({
     >
       <SelectTrigger
         aria-label={ariaLabel}
-        className={cn(
-          'h-11 w-full rounded-xl px-3 text-left font-extrabold tracking-[-.01em] shadow-sm focus-visible:ring-2',
-          tones[tone],
-        )}
+        className="h-11 w-full rounded-xl bg-background px-3 text-left font-extrabold tracking-[-.01em] shadow-sm focus-visible:ring-2"
+        size="lg"
       >
         <SelectValue>{selected?.label ?? 'Selecionar'}</SelectValue>
       </SelectTrigger>
@@ -3872,10 +3887,7 @@ function SalesFilterSelect<T extends string>({
       >
         {options.map((option) => (
           <SelectItem
-            className={cn(
-              'min-h-14 rounded-xl px-3 py-2.5 pr-9 focus:bg-accent',
-              selectedTones[tone],
-            )}
+            className="min-h-14 rounded-xl px-3 py-2.5 pr-9 focus:bg-accent data-selected:bg-primary/10 data-selected:text-primary"
             key={option.value}
             value={option.value}
           >
@@ -3899,7 +3911,7 @@ function SalesFilterSelect<T extends string>({
 function ReportMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-lg bg-slate-100 p-3">
-      <dt className="truncate text-[.65rem] font-bold uppercase text-slate-500">
+      <dt className="truncate text-xs font-bold uppercase text-slate-500">
         {label}
       </dt>
       <dd className="mt-1 truncate text-sm font-extrabold sm:text-lg">

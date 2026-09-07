@@ -25,16 +25,30 @@ export async function GET(
     if (!object?.body)
       throw new HttpError(404, 'Arquivo não encontrado.', 'NOT_FOUND');
     const headers = new Headers();
-    headers.set('content-type', metadata.mimeType);
-    headers.set('content-length', String(object.size));
-    headers.set('cache-control', 'private, no-store');
+    const etag = object.httpEtag || `"${object.etag}"`;
+    headers.set('cache-control', 'private, no-cache, must-revalidate');
+    headers.set('etag', etag);
     headers.set('x-content-type-options', 'nosniff');
     headers.set(
       'content-disposition',
       `inline; filename*=UTF-8''${encodeURIComponent(metadata.fileName)}`,
     );
+    if (matchesEtag(request.headers.get('if-none-match'), etag)) {
+      return new Response(null, { status: 304, headers });
+    }
+    headers.set('content-type', metadata.mimeType);
+    headers.set('content-length', String(object.size));
     return new Response(object.body, { headers });
   } catch (error) {
     return apiError(error);
   }
+}
+
+function matchesEtag(headerValue: string | null, etag: string) {
+  if (!headerValue) return false;
+  const expected = etag.replace(/^W\//, '');
+  return headerValue.split(',').some((candidate) => {
+    const value = candidate.trim();
+    return value === '*' || value.replace(/^W\//, '') === expected;
+  });
 }

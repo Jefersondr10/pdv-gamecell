@@ -49,17 +49,18 @@ assert.equal(normalizeCandidate('4006381333932', 'ean_13', 'product'), null);
 
 const serial = normalizeCandidate('SHC9P06R095', 'code_128', 'apple_serial');
 assert.equal(serial?.rawValue, 'SHC9P06R095');
-assert.equal(serial?.normalizedValue, 'HC9P06R095');
-assert.equal(serial?.prefixStripped, true);
+assert.equal(serial?.normalizedValue, 'SHC9P06R095');
+assert.equal(serial?.alternateValue, 'HC9P06R095');
+assert.equal(serial?.prefixStripped, undefined);
 assert.equal(serial?.key, 'SERIAL:HC9P06R095');
 const manualSerial = normalizeCandidate(
   'SHC9P06R095',
   'manual_code_128',
   'apple_serial',
 );
-assert.equal(manualSerial?.normalizedValue, 'HC9P06R095');
-assert.equal(manualSerial?.prefixStripped, true);
-assert.equal(manualSerial?.alternateValue, 'SHC9P06R095');
+assert.equal(manualSerial?.normalizedValue, 'SHC9P06R095');
+assert.equal(manualSerial?.prefixStripped, undefined);
+assert.equal(manualSerial?.alternateValue, 'HC9P06R095');
 assert.equal(
   normalizeCandidate('HC9P06R095', 'code_128', 'apple_serial')?.normalizedValue,
   'HC9P06R095',
@@ -67,6 +68,11 @@ assert.equal(
 assert.equal(
   normalizeCandidate('HC9P06R095', 'manual_code_128', 'apple_serial')?.key,
   manualSerial?.key,
+);
+assert.equal(
+  normalizeCandidate('HC9P06R095', 'manual_code_128', 'apple_serial')
+    ?.alternateValue,
+  'SHC9P06R095',
 );
 assert.equal(
   normalizeCandidate('SN inválido!', 'code_128', 'apple_serial'),

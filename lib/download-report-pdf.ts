@@ -168,7 +168,6 @@ async function appendPdfAttachments(
   for (const attachment of attachments) {
     try {
       const response = await fetch(attachment.url, {
-        cache: 'no-store',
         credentials: 'same-origin',
       });
       if (!response.ok) throw new Error('download failed');

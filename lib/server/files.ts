@@ -113,6 +113,26 @@ export function validateFiles(
   return files;
 }
 
+export async function validateFileSignatures(files: readonly File[]) {
+  for (const file of files) {
+    const declaredType = file.type.toLowerCase();
+    const bytes = new Uint8Array(
+      await file.slice(0, Math.min(file.size, 1024)).arrayBuffer(),
+    );
+    const detectedType = detectFileType(bytes);
+    const matches =
+      detectedType === declaredType ||
+      (detectedType === 'image/heic' && declaredType === 'image/heif');
+    if (!matches) {
+      throw new HttpError(
+        400,
+        `O arquivo ${file.name.slice(0, 80) || 'selecionado'} não corresponde ao formato informado.`,
+        'INVALID_FILE_SIGNATURE',
+      );
+    }
+  }
+}
+
 export function prepareFile(
   storeId: string,
   scope: string,
@@ -128,24 +148,73 @@ export function prepareFile(
 }
 
 export async function uploadFiles(files: PendingFile[]) {
-  const results = await Promise.allSettled(
-    files.map((pending) =>
-      runtime().FILES.put(pending.key, pending.file.stream(), {
-        httpMetadata: { contentType: pending.file.type },
-        customMetadata: { originalName: pending.file.name.slice(0, 200) },
-      }),
-    ),
-  );
-  const failure = results.find(
-    (result): result is PromiseRejectedResult => result.status === 'rejected',
-  );
-  if (failure) throw failure.reason;
+  for (let start = 0; start < files.length; start += 4) {
+    const results = await Promise.allSettled(
+      files.slice(start, start + 4).map((pending) =>
+        runtime().FILES.put(pending.key, pending.file.stream(), {
+          httpMetadata: { contentType: pending.file.type },
+          customMetadata: { originalName: pending.file.name.slice(0, 200) },
+        }),
+      ),
+    );
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failure) throw failure.reason;
+  }
 }
 
 export async function cleanupFiles(files: PendingFile[]) {
-  await Promise.allSettled(
-    files.map((pending) => runtime().FILES.delete(pending.key)),
-  );
+  for (let start = 0; start < files.length; start += 8) {
+    await Promise.allSettled(
+      files
+        .slice(start, start + 8)
+        .map((pending) => runtime().FILES.delete(pending.key)),
+    );
+  }
+}
+
+function detectFileType(bytes: Uint8Array) {
+  if (startsWith(bytes, [0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return 'image/png';
+  }
+  if (ascii(bytes, 0, 4) === 'RIFF' && ascii(bytes, 8, 4) === 'WEBP') {
+    return 'image/webp';
+  }
+  if (ascii(bytes, 0, Math.min(bytes.length, 1024)).includes('%PDF-')) {
+    return 'application/pdf';
+  }
+  if (ascii(bytes, 4, 4) === 'ftyp') {
+    const heifBrands = new Set([
+      'heic',
+      'heix',
+      'hevc',
+      'hevx',
+      'heim',
+      'heis',
+      'hevm',
+      'hevs',
+      'mif1',
+      'msf1',
+    ]);
+    for (
+      let offset = 8;
+      offset + 4 <= Math.min(bytes.length, 64);
+      offset += 4
+    ) {
+      if (heifBrands.has(ascii(bytes, offset, 4))) return 'image/heic';
+    }
+  }
+  return '';
+}
+
+function startsWith(bytes: Uint8Array, signature: number[]) {
+  return signature.every((byte, index) => bytes[index] === byte);
+}
+
+function ascii(bytes: Uint8Array, start: number, length: number) {
+  return String.fromCharCode(...bytes.slice(start, start + length));
 }
 
 function safeExtension(file: File) {

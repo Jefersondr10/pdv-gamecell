@@ -5,9 +5,16 @@ import {
   cleanupFiles,
   prepareFile,
   uploadFiles,
+  validateFileSignatures,
   validateFiles,
 } from '@/lib/server/files';
-import { apiError, assertSameOrigin, HttpError, json } from '@/lib/server/http';
+import {
+  apiError,
+  assertSameOrigin,
+  HttpError,
+  json,
+  operationIdField,
+} from '@/lib/server/http';
 import {
   consumeFixedWindowLimits,
   consumeStoreWriteBudget,
@@ -41,6 +48,20 @@ type ExistingTotals = {
 
 type SaleItemCount = { id: string; photoCount: number };
 
+type AttachmentResponse = {
+  addedCount: number;
+  itemPhotosAdded: number;
+  receipts: ReturnType<typeof receiptUploadResponse>[];
+  receiptsAdded: number;
+};
+
+type ExistingAttachmentOperation = {
+  action: string;
+  detailsJson: string | null;
+  entityId: string;
+  storeId: string;
+};
+
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
@@ -49,12 +70,15 @@ export async function POST(
   let committed = false;
   let reservationId: string | null = null;
   let storeId: string | null = null;
+  let saleId = '';
+  let operationId = '';
+  let operationFingerprint = '';
   try {
     assertSameOrigin(request);
     const session = await requireSession(request);
     storeId = session.storeId!;
     assertCsrf(request, session);
-    const { id: saleId } = await context.params;
+    ({ id: saleId } = await context.params);
     const db = runtime().DB;
     const uploadAt = Date.now();
     const sourceIp = request.headers.get('cf-connecting-ip') ?? 'unknown';
@@ -110,10 +134,20 @@ export async function POST(
     assertFormDataKeys(
       form,
       (key) =>
+        key === 'operationId' ||
         key === 'receipts' ||
         key === 'receiptValues' ||
         /^itemPhotos:[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(key),
     );
+    const operationFields = form.getAll('operationId');
+    if (operationFields.length !== 1) {
+      throw new HttpError(
+        400,
+        'Identificação do envio inválida.',
+        'INVALID_OPERATION_ID',
+      );
+    }
+    operationId = operationIdField(operationFields[0]);
     const receiptFiles = validateFiles(form.getAll('receipts'), {
       receipts: true,
       max: MAX_RECEIPTS,
@@ -148,6 +182,7 @@ export async function POST(
       ...receiptFiles,
       ...itemFiles.flatMap((selection) => selection.files),
     ];
+    await validateFileSignatures(allFiles);
     if (allFiles.length === 0) {
       throw new HttpError(
         400,
@@ -164,6 +199,23 @@ export async function POST(
       incomingBytes > MAX_SALE_BYTES
     ) {
       throw saleAttachmentLimitError();
+    }
+
+    operationFingerprint = await attachmentFingerprint(
+      saleId,
+      receiptFiles,
+      receiptValues,
+      itemFiles,
+    );
+    const replay = await findAttachmentOperation(db, operationId);
+    if (replay) {
+      const response = assertSameAttachmentOperation(
+        replay,
+        session.storeId!,
+        saleId,
+        operationFingerprint,
+      );
+      return attachmentResponse(response, true);
     }
 
     const sale = await db
@@ -272,6 +324,15 @@ export async function POST(
     uploaded.push(...rows.map((row) => row.pending));
     await uploadFiles(uploaded);
 
+    const response: AttachmentResponse = {
+      addedCount: rows.length,
+      receiptsAdded: receiptUploads.length,
+      itemPhotosAdded: itemUploads.length,
+      receipts: receiptUploads.map(({ pending }) =>
+        receiptUploadResponse(pending),
+      ),
+    };
+
     const now = Date.now();
     const attachmentStatements = buildAttachmentStatements(
       db,
@@ -316,7 +377,7 @@ export async function POST(
                   ?, ?`,
         )
         .bind(
-          crypto.randomUUID(),
+          operationId,
           session.storeId,
           session.id,
           saleId,
@@ -334,6 +395,8 @@ export async function POST(
           session.storeId,
           saleId,
           JSON.stringify({
+            operationFingerprint,
+            response,
             receiptsAdded: receiptUploads.length,
             receiptValuesConfirmed: receiptValues.filter(
               (value) => value.amountCents !== null,
@@ -360,15 +423,7 @@ export async function POST(
       );
     }
     committed = true;
-    return json({
-      ok: true,
-      addedCount: rows.length,
-      receiptsAdded: receiptUploads.length,
-      itemPhotosAdded: itemUploads.length,
-      receipts: receiptUploads.map(({ pending }) =>
-        receiptUploadResponse(pending),
-      ),
-    });
+    return attachmentResponse(response, false);
   } catch (error) {
     if (uploaded.length && !committed) {
       try {
@@ -402,6 +457,28 @@ export async function POST(
         ),
       );
     }
+    if (
+      !(error instanceof HttpError) &&
+      operationId &&
+      operationFingerprint &&
+      saleId &&
+      storeId
+    ) {
+      try {
+        const replay = await findAttachmentOperation(runtime().DB, operationId);
+        if (replay) {
+          const response = assertSameAttachmentOperation(
+            replay,
+            storeId,
+            saleId,
+            operationFingerprint,
+          );
+          return attachmentResponse(response, true);
+        }
+      } catch (replayError) {
+        return apiError(replayError);
+      }
+    }
     return apiError(error);
   } finally {
     if (reservationId && !committed) await releaseUpload(reservationId);
@@ -416,6 +493,124 @@ function receiptUploadResponse(pending: ReturnType<typeof prepareFile>) {
     sizeBytes: pending.file.size,
     url: `/api/files/${pending.id}`,
   };
+}
+
+function attachmentResponse(
+  response: AttachmentResponse,
+  replayed: boolean,
+  status = 200,
+) {
+  return json({ ok: true, ...response, replayed }, { status });
+}
+
+async function findAttachmentOperation(db: D1Database, operationId: string) {
+  return db
+    .prepare(
+      `SELECT store_id AS storeId, action, entity_id AS entityId,
+              details_json AS detailsJson
+       FROM audit_events WHERE id = ? LIMIT 1`,
+    )
+    .bind(operationId)
+    .first<ExistingAttachmentOperation>();
+}
+
+function assertSameAttachmentOperation(
+  operation: ExistingAttachmentOperation,
+  storeId: string,
+  saleId: string,
+  fingerprint: string,
+) {
+  let details: {
+    operationFingerprint?: unknown;
+    response?: unknown;
+  } = {};
+  try {
+    details = JSON.parse(operation.detailsJson ?? '{}') as typeof details;
+  } catch {
+    // A validação abaixo rejeita registros incompletos ou incompatíveis.
+  }
+  if (
+    operation.storeId !== storeId ||
+    operation.action !== 'sale.attachments_added' ||
+    operation.entityId !== saleId ||
+    details.operationFingerprint !== fingerprint ||
+    !isAttachmentResponse(details.response)
+  ) {
+    throw new HttpError(
+      409,
+      'Esta operação já foi usada em outro envio de anexos.',
+      'OPERATION_ALREADY_USED',
+    );
+  }
+  return details.response;
+}
+
+function isAttachmentResponse(value: unknown): value is AttachmentResponse {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const response = value as Partial<AttachmentResponse>;
+  return (
+    Number.isSafeInteger(response.addedCount) &&
+    Number.isSafeInteger(response.receiptsAdded) &&
+    Number.isSafeInteger(response.itemPhotosAdded) &&
+    Array.isArray(response.receipts) &&
+    response.receipts.every(
+      (receipt) =>
+        receipt &&
+        typeof receipt === 'object' &&
+        typeof receipt.id === 'string' &&
+        typeof receipt.name === 'string' &&
+        typeof receipt.mimeType === 'string' &&
+        Number.isSafeInteger(receipt.sizeBytes) &&
+        typeof receipt.url === 'string',
+    )
+  );
+}
+
+async function attachmentFingerprint(
+  saleId: string,
+  receiptFiles: File[],
+  receiptValues: ReceiptValueInput[],
+  itemFiles: Array<{ itemId: string; files: File[] }>,
+) {
+  const receipts = [];
+  for (let index = 0; index < receiptFiles.length; index += 1) {
+    receipts.push({
+      ...(await fileIdentity(receiptFiles[index])),
+      value: receiptValues[index],
+    });
+  }
+  const items = [];
+  for (const item of [...itemFiles].sort((left, right) =>
+    left.itemId.localeCompare(right.itemId),
+  )) {
+    const files = [];
+    for (const file of item.files) files.push(await fileIdentity(file));
+    items.push({ itemId: item.itemId, files });
+  }
+  const encoded = new TextEncoder().encode(
+    JSON.stringify({ saleId, receipts, items }),
+  );
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function fileIdentity(file: File) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    await file.arrayBuffer(),
+  );
+  return {
+    name: file.name.slice(0, 200),
+    mimeType: file.type.toLowerCase(),
+    sizeBytes: file.size,
+    digest: bytesToHex(new Uint8Array(digest)),
+  };
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
+    '',
+  );
 }
 
 function buildAttachmentStatements(

@@ -6,6 +6,7 @@ import {
   boundedJson,
   HttpError,
   json,
+  operationIdField,
   stringField,
 } from '@/lib/server/http';
 import { consumeControlWriteBudget } from '@/lib/server/rate-limit';
@@ -15,6 +16,10 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  let operationId = '';
+  let operationFingerprint = '';
+  let saleId = '';
+  let storeId = '';
   try {
     assertSameOrigin(request);
     assertJsonRequest(request);
@@ -22,10 +27,27 @@ export async function POST(
       roles: ['owner', 'admin'],
     });
     assertCsrf(request, session);
-    const { id } = await context.params;
+    ({ id: saleId } = await context.params);
+    storeId = session.storeId!;
     const body = (await boundedJson(request)) as Record<string, unknown>;
+    if (
+      Object.keys(body).some((key) => key !== 'operationId' && key !== 'reason')
+    ) {
+      throw new HttpError(
+        400,
+        'O cancelamento contém um campo não reconhecido.',
+        'UNKNOWN_FIELD',
+      );
+    }
+    operationId = operationIdField(body.operationId);
     const reason = stringField(body.reason, 'Motivo', { min: 5, max: 500 });
+    operationFingerprint = JSON.stringify({ saleId, reason });
     const db = runtime().DB;
+    const replay = await findCancellationOperation(db, operationId);
+    if (replay) {
+      assertSameCancellation(replay, storeId, saleId, operationFingerprint);
+      return json({ ok: true, replayed: true });
+    }
     const sale = await db
       .prepare(
         `SELECT id, number, status, (
@@ -35,7 +57,7 @@ export async function POST(
          ) AS itemCount
          FROM sales WHERE id = ? AND store_id = ? LIMIT 1`,
       )
-      .bind(id, session.storeId)
+      .bind(saleId, storeId)
       .first<{
         id: string;
         number: number;
@@ -66,7 +88,7 @@ export async function POST(
              cancelled_by = ?, cancellation_reason = ?
              WHERE id = ? AND store_id = ? AND status = 'completed'`,
           )
-          .bind(now, session.id, reason, id, session.storeId),
+          .bind(now, session.id, reason, saleId, storeId),
         db
           .prepare(
             `UPDATE inventory_units SET status = 'available', sale_id = NULL, sold_at = NULL
@@ -77,7 +99,7 @@ export async function POST(
                    AND cancelled_at = ? AND cancelled_by = ?
                )`,
           )
-          .bind(session.storeId, id, id, session.storeId, now, session.id),
+          .bind(storeId, saleId, saleId, storeId, now, session.id),
         db
           .prepare(
             `INSERT INTO audit_events
@@ -96,21 +118,30 @@ export async function POST(
                ?, ?)`,
           )
           .bind(
-            crypto.randomUUID(),
-            session.storeId,
+            operationId,
+            storeId,
             session.id,
-            id,
-            session.storeId,
+            saleId,
+            storeId,
             now,
             session.id,
-            session.storeId,
-            id,
-            id,
-            JSON.stringify({ number: sale.number, reason }),
+            storeId,
+            saleId,
+            saleId,
+            JSON.stringify({
+              number: sale.number,
+              reason,
+              operationFingerprint,
+            }),
             now,
           ),
       ]);
     } catch (error) {
+      const saved = await findCancellationOperation(db, operationId);
+      if (saved) {
+        assertSameCancellation(saved, storeId, saleId, operationFingerprint);
+        return json({ ok: true, replayed: true });
+      }
       if (
         error instanceof Error &&
         /NOT NULL constraint failed:\s*audit_events\.entity_id/i.test(
@@ -125,8 +156,57 @@ export async function POST(
       }
       throw error;
     }
-    return json({ ok: true });
+    return json({ ok: true, replayed: false });
   } catch (error) {
     return apiError(error);
+  }
+}
+
+type CancellationOperation = {
+  action: string;
+  detailsJson: string | null;
+  entityId: string;
+  storeId: string;
+};
+
+async function findCancellationOperation(db: D1Database, operationId: string) {
+  return db
+    .prepare(
+      `SELECT store_id AS storeId, action, entity_id AS entityId,
+              details_json AS detailsJson
+       FROM audit_events WHERE id = ? LIMIT 1`,
+    )
+    .bind(operationId)
+    .first<CancellationOperation>();
+}
+
+function assertSameCancellation(
+  operation: CancellationOperation,
+  storeId: string,
+  saleId: string,
+  fingerprint: string,
+) {
+  let savedFingerprint = '';
+  try {
+    const details = JSON.parse(operation.detailsJson ?? '{}') as {
+      operationFingerprint?: unknown;
+    };
+    if (typeof details.operationFingerprint === 'string') {
+      savedFingerprint = details.operationFingerprint;
+    }
+  } catch {
+    // A validação abaixo rejeita registros incompatíveis.
+  }
+  if (
+    operation.storeId !== storeId ||
+    operation.action !== 'sale.cancelled' ||
+    operation.entityId !== saleId ||
+    savedFingerprint !== fingerprint
+  ) {
+    throw new HttpError(
+      409,
+      'Esta operação já foi usada em outro cancelamento.',
+      'OPERATION_ALREADY_USED',
+    );
   }
 }

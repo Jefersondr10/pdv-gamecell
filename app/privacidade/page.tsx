@@ -51,8 +51,8 @@ export default function PrivacyPage() {
           Quando a conferência automática de um comprovante é usada, a leitura
           da foto ou do PDF acontece localmente no aparelho do usuário. O texto
           reconhecido não é enviado a um serviço externo nem armazenado pelo
-          sistema; somente o valor da transação que o usuário confirma é salvo
-          junto à venda.
+          sistema; somente o valor da transação encontrado é salvo junto à
+          venda. Esse valor pode ser conferido e corrigido manualmente.
         </p>
       </LegalSection>
 

@@ -1,7 +1,11 @@
 import { requireSession } from '@/lib/server/auth';
 import { apiError, HttpError, json } from '@/lib/server/http';
 import { runtime } from '@/lib/server/runtime';
-import { normalizeAppleSerial, serialAliases } from '@/lib/server/security';
+import {
+  isValidAppleSerial,
+  normalizeAppleSerial,
+  serialAliases,
+} from '@/lib/server/security';
 
 type SerialLookupRow = {
   serial: string;
@@ -24,10 +28,7 @@ export async function GET(request: Request) {
     );
     if (
       requested.length === 0 ||
-      requested.some(
-        (serial) =>
-          serial.length < 8 || serial.length > 17 || !/[A-Z]/.test(serial),
-      )
+      requested.some((serial) => !isValidAppleSerial(serial))
     ) {
       throw new HttpError(400, 'SN inválido.', 'INVALID_SERIAL');
     }

@@ -17,14 +17,14 @@ import {
   consumeFixedWindowLimits,
   consumeWriteCredits,
 } from '@/lib/server/rate-limit';
-import { runtime } from '@/lib/server/runtime';
+import { requiredSecret, runtime } from '@/lib/server/runtime';
 import {
   createRecoveryCodeSet,
+  hmac,
   hashPassword,
   hashRecoveryCode,
   normalizeEmail,
   normalizeRecoveryCode,
-  sha256,
   validatePassword,
 } from '@/lib/server/security';
 
@@ -100,30 +100,34 @@ export async function POST(request: Request) {
     );
 
     const codeHash = code ? await hashRecoveryCode(code) : '';
-    const [owner, passwordData, recovery] = await Promise.all([
-      db
-        .prepare(
-          `SELECT u.id, u.store_id AS storeId,
-                  u.recovery_code_set_id AS setId,
-                  u.session_version AS sessionVersion
-           FROM users u
-           JOIN account_recovery_codes recovery
-             ON recovery.user_id = u.id
-            AND recovery.set_id = u.recovery_code_set_id
-           WHERE u.email = ? AND u.role = 'owner'
-             AND u.auth_kind = 'password' AND u.active = 1
-             AND recovery.code_hash = ?
-           LIMIT 1`,
-        )
-        .bind(email, codeHash)
-        .first<RecoveryOwner>(),
+    const owner = await db
+      .prepare(
+        `SELECT u.id, u.store_id AS storeId,
+                u.recovery_code_set_id AS setId,
+                u.session_version AS sessionVersion
+         FROM users u
+         JOIN account_recovery_codes recovery
+           ON recovery.user_id = u.id
+          AND recovery.set_id = u.recovery_code_set_id
+         WHERE u.email = ? AND u.role = 'owner'
+           AND u.auth_kind = 'password' AND u.active = 1
+           AND recovery.code_hash = ?
+         LIMIT 1`,
+      )
+      .bind(email, codeHash)
+      .first<RecoveryOwner>();
+    if (!owner || !codeHash) throw INVALID_RECOVERY;
+
+    const [passwordData, recovery] = await Promise.all([
       hashPassword(newPassword),
       createRecoveryCodeSet(),
     ]);
-    if (!owner || !codeHash) throw INVALID_RECOVERY;
 
     await consumeWriteCredits(db, now, 'account-security', 60);
-    const credentialAttemptKey = await sha256(`credential\u0000\u0000${email}`);
+    const credentialAttemptKey = await hmac(
+      `credential\u0000\u0000${email}`,
+      requiredSecret('RATE_LIMIT_SECRET_V1'),
+    );
     const auditId = crypto.randomUUID();
     const nextVersion = owner.sessionVersion + 1;
     const replacementSession = await prepareSession(owner.id, nextVersion, now);

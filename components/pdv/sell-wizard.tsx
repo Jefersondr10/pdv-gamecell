@@ -363,6 +363,8 @@ export function SellWizard({
         incoming: files,
         maxFiles: MEDIA_LIMITS.saleReceipts,
         allowPdf: true,
+        maxDimension: 1_920,
+        quality: 0.8,
         otherFiles: itemsRef.current.flatMap((item) => item.photos),
         maxCombinedFiles: MEDIA_LIMITS.saleFiles,
         onProgress: ({ completed, total }) => {
@@ -1461,7 +1463,7 @@ function SaleItemsStage({
                   </p>
                 </div>
                 <div className="shrink-0 text-right">
-                  <p className="text-[11px] font-semibold text-muted-foreground">
+                  <p className="text-xs font-semibold text-muted-foreground">
                     Praticado
                   </p>
                   <strong className="block text-sm">
@@ -1786,7 +1788,11 @@ function PaymentStage({
               </span>
               <strong
                 className={
-                  remaining === 0 ? 'text-success' : 'text-destructive'
+                  remaining === 0
+                    ? 'text-success'
+                    : remaining < 0
+                      ? 'text-violet-700 dark:text-violet-300'
+                      : 'text-destructive'
                 }
               >
                 {formatMoney(Math.abs(remaining))}

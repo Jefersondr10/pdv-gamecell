@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b394fc33-e07f-4594-ba82-ab0c79acebea",
-  "prevId": "4aeec933-5b09-47c3-8cf2-b97c0b4228f8",
+  "id": "85a12d60-ca84-45aa-a5de-87e3bc19b95f",
+  "prevId": "c0644bac-49a8-458a-9173-af9351ea5c05",
   "tables": {
     "account_recovery_codes": {
       "name": "account_recovery_codes",
@@ -131,6 +131,34 @@
           "notNull": true,
           "autoincrement": false
         },
+        "receipt_amount_cents": {
+          "name": "receipt_amount_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "receipt_amount_source": {
+          "name": "receipt_amount_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "receipt_amount_confirmed_by": {
+          "name": "receipt_amount_confirmed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "receipt_amount_confirmed_at": {
+          "name": "receipt_amount_confirmed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_by": {
           "name": "created_by",
           "type": "text",
@@ -215,6 +243,15 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
+        "attachments_receipt_amount_confirmed_by_users_id_fk": {
+          "name": "attachments_receipt_amount_confirmed_by_users_id_fk",
+          "tableFrom": "attachments",
+          "tableTo": "users",
+          "columnsFrom": ["receipt_amount_confirmed_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "attachments_created_by_users_id_fk": {
           "name": "attachments_created_by_users_id_fk",
           "tableFrom": "attachments",
@@ -293,6 +330,11 @@
         "idx_audit_store_created": {
           "name": "idx_audit_store_created",
           "columns": ["store_id", "created_at"],
+          "isUnique": false
+        },
+        "idx_audit_store_action_entity": {
+          "name": "idx_audit_store_action_entity",
+          "columns": ["store_id", "action", "entity_id"],
           "isUnique": false
         }
       },

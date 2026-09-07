@@ -46,6 +46,9 @@ import type {
   ProductRecord,
 } from '@/lib/pdv-types';
 
+const PRODUCT_PAGE_SIZE = 30;
+const CLIENT_PAGE_SIZE = 40;
+
 export function CatalogProductionView({
   data,
   onChanged,
@@ -69,7 +72,10 @@ export function CatalogProductionView({
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
         defaultValue="clients"
       >
-        <TabsList className="mb-3 grid h-12 w-full shrink-0 grid-cols-3 rounded-xl bg-muted p-1 lg:w-fit lg:min-w-[34rem]">
+        <TabsList
+          className="mb-3 grid w-full shrink-0 grid-cols-3 rounded-xl bg-muted p-1 [&_[data-slot=tabs-trigger]]:min-h-10 lg:w-fit lg:min-w-[34rem]"
+          size="lg"
+        >
           <TabsTrigger value="clients">
             <UserRound /> Clientes
           </TabsTrigger>
@@ -129,6 +135,7 @@ function ClientsManager({
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(CLIENT_PAGE_SIZE);
   const filtered = useMemo(() => {
     const term = normalizeSearch(query);
     return items.filter((item) => {
@@ -160,14 +167,20 @@ function ClientsManager({
         <>
           <SearchInput
             label="Pesquisar clientes"
-            onChange={setQuery}
+            onChange={(value) => {
+              setQuery(value);
+              setVisibleCount(CLIENT_PAGE_SIZE);
+            }}
             placeholder="Nome, telefone ou e-mail"
             value={query}
           />
           <NativeSelect
             aria-label="Filtrar clientes por situação"
             className="h-11 w-32 shrink-0 [&_select]:h-11"
-            onChange={(event) => setStatus(event.target.value)}
+            onChange={(event) => {
+              setStatus(event.target.value);
+              setVisibleCount(CLIENT_PAGE_SIZE);
+            }}
             value={status}
           >
             <NativeSelectOption value="all">Todos</NativeSelectOption>
@@ -178,7 +191,7 @@ function ClientsManager({
       }
       summary={`${filtered.length} de ${items.length} clientes`}
     >
-      {filtered.map((client) => (
+      {filtered.slice(0, visibleCount).map((client) => (
         <article
           className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border bg-card p-3 ${client.active ? '' : 'opacity-65'}`}
           key={client.id}
@@ -199,7 +212,7 @@ function ClientsManager({
           {canManage && (
             <Button
               aria-label={`Editar ${client.name}`}
-              className="size-10 rounded-xl"
+              className="size-11 rounded-xl"
               onClick={() => setEditingId(client.id)}
               size="icon"
               variant="outline"
@@ -209,6 +222,15 @@ function ClientsManager({
           )}
         </article>
       ))}
+      {filtered.length > visibleCount && (
+        <Button
+          className="mx-auto h-11 w-full max-w-xs rounded-xl"
+          onClick={() => setVisibleCount((value) => value + CLIENT_PAGE_SIZE)}
+          variant="outline"
+        >
+          Mostrar mais clientes
+        </Button>
+      )}
       {filtered.length === 0 && (
         <EmptyState
           icon={UserRound}
@@ -246,6 +268,7 @@ function ProductsManager({
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
   const filtered = useMemo(() => {
     const term = normalizeSearch(query);
     return items.filter((item) => {
@@ -277,14 +300,20 @@ function ProductsManager({
         <>
           <SearchInput
             label="Pesquisar produtos"
-            onChange={setQuery}
+            onChange={(value) => {
+              setQuery(value);
+              setVisibleCount(PRODUCT_PAGE_SIZE);
+            }}
             placeholder="Modelo, cor, memória ou UPC"
             value={query}
           />
           <NativeSelect
             aria-label="Filtrar produtos por situação"
             className="h-11 w-32 shrink-0 [&_select]:h-11"
-            onChange={(event) => setStatus(event.target.value)}
+            onChange={(event) => {
+              setStatus(event.target.value);
+              setVisibleCount(PRODUCT_PAGE_SIZE);
+            }}
             value={status}
           >
             <NativeSelectOption value="all">Todos</NativeSelectOption>
@@ -295,7 +324,7 @@ function ProductsManager({
       }
       summary={`${filtered.length} de ${items.length} produtos`}
     >
-      {filtered.map((product) => (
+      {filtered.slice(0, visibleCount).map((product) => (
         <article
           className={`rounded-2xl border bg-card p-3 ${product.active ? '' : 'opacity-65'}`}
           key={product.id}
@@ -317,7 +346,7 @@ function ProductsManager({
             {canManage && (
               <Button
                 aria-label={`Editar ${product.model} ${product.detail}`}
-                className="size-10 rounded-xl"
+                className="size-11 rounded-xl"
                 onClick={() => setEditingId(product.id)}
                 size="icon"
                 variant="outline"
@@ -335,6 +364,22 @@ function ProductsManager({
           </div>
         </article>
       ))}
+      {filtered.length > visibleCount && (
+        <Button
+          className="h-11 w-full rounded-xl"
+          onClick={() =>
+            setVisibleCount((current) => current + PRODUCT_PAGE_SIZE)
+          }
+          type="button"
+          variant="outline"
+        >
+          Mostrar mais{' '}
+          {Math.min(PRODUCT_PAGE_SIZE, filtered.length - visibleCount)}
+          <span className="text-xs font-semibold text-muted-foreground">
+            {filtered.length - visibleCount} restantes
+          </span>
+        </Button>
+      )}
       {filtered.length === 0 && (
         <EmptyState
           icon={Smartphone}
@@ -437,7 +482,7 @@ function AccountsManager({
           {canManage && (
             <Button
               aria-label={`Editar ${account.name}`}
-              className="size-10 rounded-xl"
+              className="size-11 rounded-xl"
               onClick={() => setEditingId(account.id)}
               size="icon"
               variant="outline"
@@ -994,7 +1039,7 @@ function EditorDialog({
   return (
     <Dialog onOpenChange={(open) => !open && onClose()} open>
       <DialogContent
-        className={`flex h-dvh max-h-dvh max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 sm:h-[90dvh] sm:rounded-2xl ${wide ? 'sm:max-w-3xl' : 'sm:max-w-xl'}`}
+        className={`flex h-dvh max-h-dvh max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:rounded-2xl sm:pb-0 sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2 ${wide ? 'sm:max-w-3xl' : 'sm:max-w-xl'}`}
       >
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
           <DialogTitle>{title}</DialogTitle>

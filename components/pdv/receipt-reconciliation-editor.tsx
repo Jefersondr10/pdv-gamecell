@@ -159,8 +159,8 @@ export function ReceiptReconciliationEditor({
         <div className="min-w-0">
           <h3 className="text-sm font-extrabold">Conferir comprovantes</h3>
           <p className="text-xs text-muted-foreground">
-            A leitura acontece neste aparelho. Somente o valor confirmado é
-            salvo.
+            A leitura acontece neste aparelho. O valor encontrado é salvo
+            automaticamente e pode ser corrigido.
           </p>
         </div>
       </div>
@@ -207,7 +207,7 @@ export function ReceiptReconciliationEditor({
                   />
                 </div>
               )}
-              <p className="mt-1 text-[.68rem] font-semibold text-muted-foreground">
+              <p className="mt-1 text-xs font-semibold text-muted-foreground">
                 {state?.message ?? 'Aguardando leitura…'}
               </p>
               <ReceiptMoneyInput
@@ -353,7 +353,6 @@ export function SavedReceiptValueEditor({
     });
     try {
       const response = await fetch(receipt.url, {
-        cache: 'no-store',
         credentials: 'same-origin',
       });
       if (!response.ok) throw new Error('receipt download failed');
@@ -498,7 +497,7 @@ export function SavedReceiptValueEditor({
         </div>
       )}
       {state && (
-        <p className="mt-1 text-[.68rem] font-semibold text-muted-foreground">
+        <p className="mt-1 text-xs font-semibold text-muted-foreground">
           {state.message}
         </p>
       )}
@@ -547,7 +546,7 @@ function ReceiptMoneyInput({
   }, [valueCents]);
   return (
     <label className="mt-2 block" htmlFor={inputId}>
-      <span className="text-[.7rem] font-extrabold uppercase tracking-wide text-muted-foreground">
+      <span className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
         Valor da transação
       </span>
       <Input

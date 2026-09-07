@@ -5,6 +5,7 @@ import {
   cleanupFiles,
   prepareFile,
   uploadFiles,
+  validateFileSignatures,
   validateFiles,
 } from '@/lib/server/files';
 import {
@@ -24,8 +25,10 @@ import {
 } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import {
+  isValidAppleSerial,
   normalizeAppleSerial,
   normalizeCommercialCode,
+  serialAliasKey,
   serialAliases,
   sha256,
 } from '@/lib/server/security';
@@ -85,9 +88,14 @@ export async function GET(request: Request) {
     if (query) {
       const pattern = `%${query}%`;
       where.push(`(
-        p.model LIKE ? COLLATE NOCASE OR p.color LIKE ? COLLATE NOCASE
-        OR p.memory LIKE ? COLLATE NOCASE
-        OR operator.display_name LIKE ? COLLATE NOCASE OR EXISTS (
+        COALESCE(json_extract(entry_audit.details_json, '$.productName'), p.model)
+          LIKE ? COLLATE NOCASE
+        OR COALESCE(json_extract(entry_audit.details_json, '$.productColor'), p.color)
+          LIKE ? COLLATE NOCASE
+        OR COALESCE(json_extract(entry_audit.details_json, '$.productMemory'), p.memory)
+          LIKE ? COLLATE NOCASE
+        OR COALESCE(json_extract(entry_audit.details_json, '$.operatorName'),
+                    operator.display_name) LIKE ? COLLATE NOCASE OR EXISTS (
           SELECT 1 FROM inventory_units search_unit
           WHERE search_unit.entry_id = e.id
             AND search_unit.store_id = e.store_id
@@ -122,18 +130,33 @@ export async function GET(request: Request) {
            FROM entries e
            JOIN products p ON p.id = e.product_id AND p.store_id = e.store_id
            JOIN users operator ON operator.id = e.operator_user_id
+           LEFT JOIN audit_events entry_audit
+             ON entry_audit.store_id = e.store_id
+            AND entry_audit.entity_id = e.id
+            AND entry_audit.action = 'entry.created'
            WHERE ${aggregateWhere.join(' AND ')}`,
         )
         .bind(...aggregateBindings),
       db
         .prepare(
-          `SELECT e.id, e.product_id AS productId, p.model AS productName,
-                  (p.color || ' · ' || p.memory) AS productDetail,
-                  e.quantity, operator.display_name AS operatorName,
+          `SELECT e.id, e.product_id AS productId,
+                  COALESCE(json_extract(entry_audit.details_json, '$.productName'),
+                           p.model) AS productName,
+                  (COALESCE(json_extract(entry_audit.details_json, '$.productColor'),
+                            p.color) || ' · ' ||
+                   COALESCE(json_extract(entry_audit.details_json, '$.productMemory'),
+                            p.memory)) AS productDetail,
+                  e.quantity,
+                  COALESCE(json_extract(entry_audit.details_json, '$.operatorName'),
+                           operator.display_name) AS operatorName,
                   e.created_at AS createdAt
            FROM entries e
            JOIN products p ON p.id = e.product_id AND p.store_id = e.store_id
            JOIN users operator ON operator.id = e.operator_user_id
+           LEFT JOIN audit_events entry_audit
+             ON entry_audit.store_id = e.store_id
+            AND entry_audit.entity_id = e.id
+            AND entry_audit.action = 'entry.created'
            WHERE ${filterSql}
            ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
         )
@@ -272,22 +295,20 @@ export async function POST(request: Request) {
         ),
       ),
     );
-    if (serials.length !== payload.serials.length) {
+    if (serials.some((serial) => !isValidAppleSerial(serial))) {
       throw new HttpError(
-        409,
-        'Há SN repetido nesta entrada.',
+        400,
+        'Há SN inválido nesta entrada.',
         'INVALID_SERIALS',
       );
     }
     if (
-      serials.some(
-        (serial) =>
-          serial.length < 8 || serial.length > 17 || !/[A-Z]/.test(serial),
-      )
+      serials.length !== payload.serials.length ||
+      new Set(serials.map(serialAliasKey)).size !== serials.length
     ) {
       throw new HttpError(
-        400,
-        'Há SN inválido nesta entrada.',
+        409,
+        'Há SN repetido nesta entrada.',
         'INVALID_SERIALS',
       );
     }
@@ -311,6 +332,7 @@ export async function POST(request: Request) {
       required: true,
       max: 8,
     });
+    await validateFileSignatures(photos);
     const filesSizeBytes = photos.reduce((total, file) => total + file.size, 0);
     if (filesSizeBytes > 45 * 1024 * 1024) {
       throw new HttpError(
@@ -327,14 +349,14 @@ export async function POST(request: Request) {
     );
     const product = await db
       .prepare(
-        `SELECT p.id FROM products p
+        `SELECT p.id, p.model, p.color, p.memory FROM products p
          JOIN product_codes pc
            ON pc.product_id = p.id AND pc.store_id = p.store_id
          WHERE p.id = ? AND p.store_id = ? AND p.active = 1
            AND pc.code = ? LIMIT 1`,
       )
       .bind(productId, session.storeId, gtin14)
-      .first();
+      .first<{ id: string; model: string; color: string; memory: string }>();
     if (!product) {
       throw new HttpError(
         409,
@@ -459,6 +481,10 @@ export async function POST(request: Request) {
           JSON.stringify({
             quantity: serials.length,
             operationFingerprint,
+            productName: product.model,
+            productColor: product.color,
+            productMemory: product.memory,
+            operatorName: session.displayName,
           }),
           now,
         ),

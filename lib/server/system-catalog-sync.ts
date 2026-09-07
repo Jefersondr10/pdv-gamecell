@@ -49,7 +49,10 @@ export async function syncSystemCatalog(
   const products = (productResult.results ?? []) as ProductRow[];
   const codes = (codeResult.results ?? []) as CodeRow[];
   const productByVariation = new Map(
-    products.map((product) => [variationKey(product), product.id]),
+    products.map((product) => [
+      canonicalProductVariationKey(product),
+      product.id,
+    ]),
   );
   const productByCode = new Map(
     codes.map((code) => [code.code, code.productId]),
@@ -77,7 +80,9 @@ export async function syncSystemCatalog(
         .map(({ normalized }) => productByCode.get(normalized))
         .filter((value): value is string => Boolean(value)),
     );
-    const variationMatch = productByVariation.get(variationKey(catalogProduct));
+    const variationMatch = productByVariation.get(
+      canonicalProductVariationKey(catalogProduct),
+    );
     const productId =
       variationMatch ??
       codeMatches.values().next().value ??
@@ -117,7 +122,10 @@ export async function syncSystemCatalog(
         color: catalogProduct.color,
         memory: catalogProduct.memory,
       });
-      productByVariation.set(variationKey(catalogProduct), productId);
+      productByVariation.set(
+        canonicalProductVariationKey(catalogProduct),
+        productId,
+      );
       productsAdded += 1;
     }
 
@@ -237,7 +245,11 @@ export async function syncSystemCatalog(
   };
 }
 
-function variationKey(value: { model: string; color: string; memory: string }) {
+export function canonicalProductVariationKey(value: {
+  model: string;
+  color: string;
+  memory: string;
+}) {
   return [
     normalizeLabel(value.model),
     normalizeLabel(canonicalColor(value.color)),

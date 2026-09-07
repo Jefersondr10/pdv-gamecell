@@ -11,6 +11,7 @@ import {
 } from '@/lib/server/http';
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { canonicalProductVariationKey } from '@/lib/server/system-catalog-sync';
 import { classifyCommercialCode, normalizeCommercialCode } from '@/lib/gtin';
 
 export async function POST(request: Request) {
@@ -59,12 +60,15 @@ export async function POST(request: Request) {
     const db = runtime().DB;
     const now = Date.now();
     await consumeStoreWriteBudget(db, now, session.storeId!, codes.length + 2);
-    if (
+    const existingProducts = (
       await db
-        .prepare('SELECT 1 FROM products WHERE store_id = ? LIMIT 1 OFFSET 999')
+        .prepare(
+          'SELECT model, color, memory FROM products WHERE store_id = ? LIMIT 1000',
+        )
         .bind(session.storeId)
-        .first()
-    ) {
+        .all<{ model: string; color: string; memory: string }>()
+    ).results;
+    if (existingProducts.length >= 1_000) {
       throw new HttpError(
         409,
         'Esta loja atingiu o limite de 1.000 variações de produto.',
@@ -85,13 +89,14 @@ export async function POST(request: Request) {
         'CODE_EXISTS',
       );
     }
-    const variationConflict = await db
-      .prepare(
-        `SELECT 1 FROM products
-         WHERE store_id = ? AND model = ? AND color = ? AND memory = ? LIMIT 1`,
-      )
-      .bind(session.storeId, model, color, memory)
-      .first();
+    const newVariationKey = canonicalProductVariationKey({
+      model,
+      color,
+      memory,
+    });
+    const variationConflict = existingProducts.some(
+      (product) => canonicalProductVariationKey(product) === newVariationKey,
+    );
     if (variationConflict) {
       throw new HttpError(
         409,

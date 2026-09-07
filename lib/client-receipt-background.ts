@@ -1,7 +1,5 @@
 'use client';
 
-import { readReceiptAmount } from '@/lib/client-receipt-ocr';
-
 export type ReceiptOcrAttachment = {
   id: string;
   name: string;
@@ -70,6 +68,7 @@ export async function enqueueReceiptOcrJobs(input: {
     const id = jobId(input.storeId, input.saleId, attachment.id);
     const file = input.files?.[index];
     if (file) sourceFiles.set(id, file);
+    else sourceFiles.delete(id);
     return [
       {
         ...attachment,
@@ -165,6 +164,7 @@ async function runQueue() {
 
 async function processJob(job: ReceiptOcrJob, context: ReceiptOcrContext) {
   const file = sourceFiles.get(jobIdOf(job)) ?? (await downloadReceipt(job));
+  const { readReceiptAmount } = await import('@/lib/client-receipt-ocr');
   const suggestion = await readReceiptAmount(file);
   if (!suggestion) return false;
 
@@ -207,7 +207,6 @@ async function processJob(job: ReceiptOcrJob, context: ReceiptOcrContext) {
 async function downloadReceipt(job: ReceiptOcrJob) {
   const response = await fetch(job.url, {
     credentials: 'same-origin',
-    cache: 'no-store',
   });
   if (response.status === 404 || response.status === 410) {
     throw new PermanentJobError('O comprovante não está mais disponível.');

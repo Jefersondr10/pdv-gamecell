@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.05-pagamento-correto-v11';
+export const GUIDE_VERSION = '2026.09.06-revisao-geral-v12';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
