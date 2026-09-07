@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile, access, readdir, unlink, open } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, access, readdir, unlink, open, stat, statfs } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -90,12 +90,20 @@ if (action === 'create') {
   const archive = join(directory, 'backups');
   const capturedAt = Date.now();
   await mkdir(archive, { recursive: true, mode: 0o700 });
+  const oldSnapshots = (await readdir(archive)).filter((name) => /^snapshot-\d+\.sqlite$/.test(name)).sort().reverse();
+  for (const name of oldSnapshots.slice(2)) {
+    const timestamp = Number(/^snapshot-(\d+)\.sqlite$/.exec(name)[1]);
+    if (timestamp < capturedAt - 48 * 60 * 60 * 1000) await unlink(join(archive, name));
+  }
+  const disk = await statfs(directory);
+  const databaseSize = (await stat(join(directory, 'pdv.sqlite'))).size;
+  if (disk.bavail * disk.bsize < Math.max(512 * 1024 * 1024, databaseSize * 2)) throw new Error('Insufficient free disk for a safe backup');
   const source = new DatabaseSync(join(directory, 'pdv.sqlite'), { readOnly: true });
   const snapshotPath = join(archive, `snapshot-${capturedAt}.sqlite`);
   await backup(source, snapshotPath);
   source.close();
   const db = new DatabaseSync(snapshotPath, { readOnly: true });
-  if (db.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new Error('Backup database integrity failed');
+  if (db.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Backup database integrity failed');
   const manifest = { version: 2, capturedAt, files: [], database: await transferLarge(snapshotPath),
     environment: await transfer('objects', encrypt(await readFile(join(directory, '.env.runtime')))) };
   for (const row of db.prepare('SELECT r2_key AS key FROM attachments').all()) {
@@ -105,7 +113,11 @@ if (action === 'create') {
     if (blob.length !== metadata.size || hash(blob) !== metadata.etag) throw new Error('Backup file integrity failed');
     const cachePath = join(archive, `object-${metadata.etag}.enc`);
     let encrypted;
-    try { encrypted = await readFile(cachePath); }
+    try {
+      encrypted = await readFile(cachePath);
+      try { if (hash(decrypt(encrypted)) !== metadata.etag) throw new Error('Invalid cache'); }
+      catch { encrypted = encrypt(blob); await writeFile(cachePath, encrypted, { mode: 0o600 }); }
+    }
     catch (error) { if (error.code !== 'ENOENT') throw error; encrypted = encrypt(blob); await writeFile(cachePath, encrypted, { mode: 0o600 }); }
     // Reuse identical encrypted bytes so append-only off-site objects deduplicate.
     manifest.files.push({ basename, metadata, object: await transfer('objects', encrypted) });
@@ -125,6 +137,8 @@ if (action === 'create') {
 } else if (action === 'restore') {
   try { await access(join(directory, 'pdv.sqlite')); throw new Error('Refusing to overwrite an existing database'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { if ((await readdir(directory)).length) throw new Error('Restore requires a new empty directory'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   const manifest = JSON.parse(await retrieve('snapshots', snapshotHash));
   await mkdir(join(directory, 'objects'), { recursive: true, mode: 0o700 });
   await restoreLarge(manifest.database, join(directory, 'pdv.sqlite'));
@@ -138,6 +152,8 @@ if (action === 'create') {
   }
   const db = new DatabaseSync(join(directory, 'pdv.sqlite'), { readOnly: true });
   if (db.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Restored database validation failed');
+  const expectedFiles = db.prepare('SELECT r2_key AS key FROM attachments').all().map((row) => hash(row.key)).sort();
+  if (JSON.stringify(expectedFiles) !== JSON.stringify(manifest.files.map((file) => file.basename).sort())) throw new Error('Restored attachment set does not match the database');
   db.close();
   console.log(JSON.stringify({ restored: true, files: manifest.files.length, capturedAt: manifest.capturedAt }));
 } else { throw new Error('Unknown action'); }
