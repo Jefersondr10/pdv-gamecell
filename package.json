@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:sites": "node scripts/build-sites.mjs",
     "build:vps": "node scripts/build-vps.mjs",
     "start:vps": "node dist/standalone/server.js",
     "start": "wrangler dev --config dist/server/wrangler.json",
