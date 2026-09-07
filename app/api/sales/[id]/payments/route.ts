@@ -14,6 +14,8 @@ import { runtime } from '@/lib/server/runtime';
 
 export const dynamic = 'force-dynamic';
 
+export { editSalePayments as PATCH } from '@/lib/server/edit-sale-payments';
+
 type PaymentMethod = 'pix' | 'cash';
 
 type SaleBalance = {
@@ -24,6 +26,7 @@ type SaleBalance = {
 };
 
 type AddedPayment = {
+  originalPaymentJson?: string | null;
   id: string;
   method: PaymentMethod;
   pixAccountId: string | null;
@@ -241,6 +244,8 @@ export async function POST(
             JSON.stringify({
               paymentId,
               method,
+              pixAccountId,
+              accountName: pixAccountName,
               amountCents,
               previousReceivedCents,
               receivedTotalCents: expectedReceivedCents,
@@ -358,6 +363,17 @@ function addedPaymentQuery(
               payment.pix_account_id AS pixAccountId,
               payment.account_name AS accountName,
               payment.amount_cents AS amountCents,
+              COALESCE(
+                (SELECT event.details_json FROM audit_events event
+                 WHERE event.id = payment.id AND event.store_id = payment.store_id
+                   AND event.entity_id = payment.sale_id AND event.action = 'sale.payment_added'
+                   AND json_type(event.details_json, '$.pixAccountId') IS NOT NULL),
+                (SELECT original.value FROM audit_events event, json_each(event.details_json, '$.before') original
+                 WHERE event.store_id = payment.store_id AND event.entity_id = payment.sale_id
+                   AND event.action = 'sale.payments_corrected'
+                   AND json_extract(original.value, '$.id') = payment.id
+                 ORDER BY event.created_at, event.id LIMIT 1)
+              ) AS originalPaymentJson,
               sale.number,
               sale.products_total_cents AS productsTotalCents,
               sale.received_total_cents AS receivedTotalCents,
@@ -388,10 +404,16 @@ function assertSamePayment(
   pixAccountId: string | null,
   amountCents: number,
 ) {
+  const original = payment.originalPaymentJson
+    ? (JSON.parse(payment.originalPaymentJson) as Pick<
+        AddedPayment,
+        'method' | 'pixAccountId' | 'amountCents'
+      >)
+    : payment;
   if (
-    payment.method !== method ||
-    payment.pixAccountId !== pixAccountId ||
-    payment.amountCents !== amountCents
+    original.method !== method ||
+    original.pixAccountId !== pixAccountId ||
+    original.amountCents !== amountCents
   ) {
     throw new HttpError(
       409,
@@ -412,6 +434,7 @@ function paymentResponse(
       payment: {
         id: payment.id,
         method: payment.method,
+        pixAccountId: payment.pixAccountId,
         accountName: payment.accountName,
         amountCents: payment.amountCents,
       },

@@ -1083,45 +1083,81 @@ function GroupedList({
 }) {
   return (
     <div className="divide-y">
-      {rows.map((row) => (
-        <button
-          className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-5"
-          key={row.key}
-          onClick={() => onOpen(row)}
-          type="button"
-        >
-          <span className="grid size-11 place-items-center rounded-xl bg-secondary text-primary">
-            {grouping === 'model' ? (
-              <Smartphone className="size-5" />
-            ) : (
-              <UserRound className="size-5" />
+      {rows.map((row) => {
+        const position =
+          grouping === 'seller'
+            ? ranking === 'items'
+              ? row.rankByItems
+              : row.rankByValue
+            : null;
+        const award =
+          position === 1
+            ? 'Ouro'
+            : position === 2
+              ? 'Prata'
+              : position === 3
+                ? 'Bronze'
+                : null;
+        return (
+          <button
+            className={cn(
+              'grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-l-2 border-l-transparent px-4 py-4 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-5',
+              award === 'Ouro' && 'border-l-amber-500 bg-amber-500/[0.045]',
+              award === 'Prata' && 'border-l-slate-400 bg-slate-400/[0.045]',
+              award === 'Bronze' && 'border-l-orange-700 bg-orange-700/[0.035]',
             )}
-          </span>
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              {grouping === 'seller' && (
-                <Badge variant="secondary">
-                  #{ranking === 'items' ? row.rankByItems : row.rankByValue}
-                </Badge>
+            key={row.key}
+            onClick={() => onOpen(row)}
+            type="button"
+          >
+            <span
+              className={cn(
+                'grid size-11 place-items-center rounded-xl bg-secondary text-primary',
+                award === 'Ouro' &&
+                  'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
+                award === 'Prata' &&
+                  'bg-slate-100 text-slate-500 dark:bg-slate-400/15 dark:text-slate-300',
+                award === 'Bronze' &&
+                  'bg-orange-100/70 text-orange-800 dark:bg-orange-500/15 dark:text-orange-300',
               )}
-              <p className="truncate font-bold">{row.label}</p>
+            >
+              {award ? (
+                <Trophy
+                  className="size-6 fill-current/15"
+                  aria-label={`Troféu de ${award.toLowerCase()}`}
+                />
+              ) : grouping === 'model' ? (
+                <Smartphone className="size-5" />
+              ) : (
+                <UserRound className="size-5" />
+              )}
+            </span>
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
+                {grouping === 'seller' && (
+                  <Badge variant="secondary">
+                    {position}º{award ? ` · ${award}` : ''}
+                  </Badge>
+                )}
+                <p className="truncate font-bold">{row.label}</p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {row.saleCount} {row.saleCount === 1 ? 'venda' : 'vendas'} ·{' '}
+                {row.itemCount} {row.itemCount === 1 ? 'aparelho' : 'aparelhos'}
+              </p>
+              <p className="mt-0.5 text-xs font-semibold text-primary">
+                Ver vendas e SNs
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {row.saleCount} {row.saleCount === 1 ? 'venda' : 'vendas'} ·{' '}
-              {row.itemCount} {row.itemCount === 1 ? 'aparelho' : 'aparelhos'}
-            </p>
-            <p className="mt-0.5 text-xs font-semibold text-primary">
-              Ver vendas e SNs
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Vendido
-            </p>
-            <strong>{formatMoney(row.totalCents)}</strong>
-          </div>
-        </button>
-      ))}
+            <div className="text-right">
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Vendido
+              </p>
+              <strong>{formatMoney(row.totalCents)}</strong>
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1358,9 +1394,17 @@ function EditSaleDialog({
   const [visiblePayments, setVisiblePayments] = useState<SalePaymentRecord[]>(
     () => sale?.payments ?? [],
   );
-  const [pendingPaymentCents, setPendingPaymentCents] = useState(() =>
-    Math.max(0, -(sale?.receivedDifferenceCents ?? 0)),
-  );
+  const [paymentEdits, setPaymentEdits] = useState<
+    Record<
+      string,
+      {
+        method: 'pix' | 'cash';
+        pixAccountId: string | null;
+        amount: string;
+      }
+    >
+  >({});
+  const paymentCorrectionIdRef = useRef(createOperationId());
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -1393,6 +1437,41 @@ function EditSaleDialog({
     (account) => account.active,
   );
   const additionalPaymentCents = parseMoneyInput(paymentAmount);
+  const correctedPayments = visiblePayments.map((payment) => {
+    const edit = paymentEdits[payment.id];
+    return {
+      id: payment.id,
+      method: edit?.method ?? payment.method,
+      pixAccountId: edit
+        ? edit.method === 'pix'
+          ? edit.pixAccountId
+          : null
+        : payment.pixAccountId,
+      amountCents: edit ? parseMoneyInput(edit.amount) : payment.amountCents,
+    };
+  });
+  const hasPaymentCorrections = correctedPayments.some((payment, index) => {
+    const saved = visiblePayments[index];
+    return (
+      payment.method !== saved.method ||
+      payment.pixAccountId !== saved.pixAccountId ||
+      payment.amountCents !== saved.amountCents
+    );
+  });
+  const invalidPaymentCorrection = correctedPayments.some(
+    (payment) =>
+      payment.amountCents <= 0 ||
+      payment.amountCents > 1_000_000_000 ||
+      (payment.method === 'pix' && !payment.pixAccountId),
+  );
+  const correctedReceivedCents = correctedPayments.reduce(
+    (total, payment) => total + payment.amountCents,
+    0,
+  );
+  const pendingPaymentCents = Math.max(
+    0,
+    (sale?.productsTotalCents ?? 0) - correctedReceivedCents,
+  );
   const queuedPaymentCents = queuedPayments.reduce(
     (total, payment) => total + payment.amountCents,
     0,
@@ -1603,17 +1682,17 @@ function EditSaleDialog({
                 )}
               </section>
 
-              {pendingPaymentCents > 0 && (
-                <section className="rounded-2xl border border-amber-500/35 bg-amber-50/60 p-4 dark:bg-amber-500/5">
+              {sale.status === 'completed' && (
+                <section className="rounded-2xl border p-4">
                   <div className="flex items-start gap-3">
-                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-900 dark:text-amber-200">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
                       <WalletCards className="size-5" />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <h3 className="font-extrabold">Completar pagamento</h3>
+                      <h3 className="font-extrabold">Pagamentos da venda</h3>
                       <p className="text-xs text-muted-foreground">
-                        Os pagamentos anteriores permanecem registrados. O saldo
-                        pendente é {formatMoney(pendingPaymentCents)}.
+                        Corrija um pagamento ou acrescente o valor que falta. As
+                        correções ficam no histórico.
                       </p>
                     </div>
                   </div>
@@ -1621,19 +1700,156 @@ function EditSaleDialog({
                   {(visiblePayments.length > 0 ||
                     queuedPayments.length > 0) && (
                     <div className="mt-3 space-y-1 rounded-xl bg-background/80 p-3 text-xs">
-                      {visiblePayments.map((payment) => (
-                        <div
-                          className="flex items-center justify-between gap-3"
-                          key={payment.id}
-                        >
-                          <span className="truncate text-muted-foreground">
-                            {payment.method === 'pix'
-                              ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                              : 'Dinheiro'}
-                          </span>
-                          <strong>{formatMoney(payment.amountCents)}</strong>
-                        </div>
-                      ))}
+                      {visiblePayments.map((payment, index) => {
+                        const edit = paymentEdits[payment.id];
+                        const update = (
+                          changes: Partial<NonNullable<typeof edit>>,
+                        ) => {
+                          paymentCorrectionIdRef.current = createOperationId();
+                          setPaymentEdits((current) => ({
+                            ...current,
+                            [payment.id]: {
+                              ...(current[payment.id] ?? {
+                                method: payment.method,
+                                pixAccountId: payment.pixAccountId,
+                                amount: formatMoneyInput(payment.amountCents),
+                              }),
+                              ...changes,
+                            },
+                          }));
+                        };
+                        return (
+                          <div
+                            className="rounded-xl border p-3"
+                            key={payment.id}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="min-w-0 text-sm text-muted-foreground">
+                                {payment.method === 'pix'
+                                  ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                  : 'Dinheiro'}
+                              </span>
+                              <strong className="ml-auto whitespace-nowrap text-sm">
+                                {formatMoney(payment.amountCents)}
+                              </strong>
+                              <Button
+                                disabled={uploadBusy}
+                                size="sm"
+                                variant="ghost"
+                                type="button"
+                                onClick={() => {
+                                  if (edit) {
+                                    paymentCorrectionIdRef.current =
+                                      createOperationId();
+                                    setPaymentEdits((current) => {
+                                      const next = { ...current };
+                                      delete next[payment.id];
+                                      return next;
+                                    });
+                                  } else update({});
+                                }}
+                              >
+                                {edit ? (
+                                  'Desfazer'
+                                ) : (
+                                  <>
+                                    <Pencil className="size-4" /> Alterar
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                            {edit && (
+                              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                <label className="text-sm font-semibold">
+                                  Forma de pagamento
+                                  <NativeSelect
+                                    aria-label={`Forma do pagamento ${index + 1}`}
+                                    className="mt-1 h-11 w-full"
+                                    disabled={uploadBusy}
+                                    value={edit.method}
+                                    onChange={(event) =>
+                                      update({
+                                        method: event.target.value as
+                                          | 'pix'
+                                          | 'cash',
+                                        pixAccountId:
+                                          edit.pixAccountId ??
+                                          activePixAccounts[0]?.id ??
+                                          null,
+                                      })
+                                    }
+                                  >
+                                    <NativeSelectOption value="pix">
+                                      Pix
+                                    </NativeSelectOption>
+                                    <NativeSelectOption value="cash">
+                                      Dinheiro
+                                    </NativeSelectOption>
+                                  </NativeSelect>
+                                </label>
+                                <label className="text-sm font-semibold">
+                                  Valor do pagamento
+                                  <Input
+                                    aria-label={`Valor do pagamento ${index + 1}`}
+                                    className="mt-1 h-11 text-right font-bold"
+                                    disabled={uploadBusy}
+                                    inputMode="decimal"
+                                    value={edit.amount}
+                                    onChange={(event) =>
+                                      update({ amount: event.target.value })
+                                    }
+                                  />
+                                </label>
+                                {edit.method === 'pix' && (
+                                  <label className="text-sm font-semibold sm:col-span-2">
+                                    Conta Pix
+                                    <NativeSelect
+                                      aria-label={`Conta do pagamento ${index + 1}`}
+                                      className="mt-1 h-11 w-full"
+                                      disabled={uploadBusy}
+                                      value={edit.pixAccountId ?? ''}
+                                      onChange={(event) =>
+                                        update({
+                                          pixAccountId:
+                                            event.target.value || null,
+                                        })
+                                      }
+                                    >
+                                      <NativeSelectOption value="">
+                                        Selecione uma conta
+                                      </NativeSelectOption>
+                                      {payment.pixAccountId &&
+                                        !activePixAccounts.some(
+                                          (account) =>
+                                            account.id === payment.pixAccountId,
+                                        ) && (
+                                          <NativeSelectOption
+                                            value={payment.pixAccountId}
+                                          >
+                                            {payment.accountName} (inativa ·
+                                            manter)
+                                          </NativeSelectOption>
+                                        )}
+                                      {activePixAccounts.map((account) => (
+                                        <NativeSelectOption
+                                          key={account.id}
+                                          value={account.id}
+                                        >
+                                          {account.name}
+                                        </NativeSelectOption>
+                                      ))}
+                                    </NativeSelect>
+                                  </label>
+                                )}
+                                <p className="text-xs text-muted-foreground sm:col-span-2">
+                                  A correção será aplicada ao salvar as
+                                  alterações.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                       {queuedPayments.map((payment) => (
                         <div
                           className="flex items-center justify-between gap-3 rounded-lg bg-primary/5 px-2 py-1.5"
@@ -1667,6 +1883,44 @@ function EditSaleDialog({
                         </div>
                       ))}
                     </div>
+                  )}
+
+                  <div
+                    className="mt-3 flex flex-wrap justify-between gap-2 text-sm font-semibold"
+                    aria-live="polite"
+                  >
+                    <span>
+                      Valor da venda: {formatMoney(sale.productsTotalCents)}
+                    </span>
+                    <span>
+                      Total pago:{' '}
+                      {formatMoney(
+                        correctedReceivedCents +
+                          queuedPaymentCents +
+                          (paymentReady ? additionalPaymentCents : 0),
+                      )}
+                    </span>
+                  </div>
+                  {invalidPaymentCorrection && (
+                    <p role="alert" className="mt-2 text-sm text-destructive">
+                      Informe um valor maior que zero e selecione a conta dos
+                      pagamentos Pix.
+                    </p>
+                  )}
+                  {queuedPaymentCents > pendingPaymentCents && (
+                    <p role="alert" className="mt-2 text-sm text-destructive">
+                      Os novos pagamentos excedem o saldo após a correção.
+                      Remova os novos pagamentos e distribua o saldo novamente.
+                    </p>
+                  )}
+                  {correctedReceivedCents > sale.productsTotalCents && (
+                    <p className="mt-2 text-sm text-amber-800">
+                      Pagamento acima da venda em{' '}
+                      {formatMoney(
+                        correctedReceivedCents - sale.productsTotalCents,
+                      )}
+                      .
+                    </p>
                   )}
 
                   {remainingPaymentCents > 0 && (
@@ -2029,10 +2283,15 @@ function EditSaleDialog({
                   disabled={
                     preparing ||
                     uploadBusy ||
-                    (paymentMethod !== '' && !paymentReady) ||
+                    invalidPaymentCorrection ||
+                    queuedPaymentCents > pendingPaymentCents ||
+                    (remainingPaymentCents > 0 &&
+                      paymentMethod !== '' &&
+                      !paymentReady) ||
                     (selectedFiles.length === 0 &&
                       selectedStatusId === currentStatusId &&
                       changedSavedReceiptValues.length === 0 &&
+                      !hasPaymentCorrections &&
                       queuedPayments.length === 0 &&
                       paymentMethod === '')
                   }
@@ -2045,6 +2304,33 @@ function EditSaleDialog({
                     let receiptValuesSaved = false;
                     let attachmentsSaved = false;
                     try {
+                      if (hasPaymentCorrections) {
+                        const corrected = await requestJson<{
+                          payments: SalePaymentRecord[];
+                        }>(`/api/sales/${sale.id}/payments`, {
+                          method: 'PATCH',
+                          headers: {
+                            'content-type': 'application/json',
+                            'x-csrf-token': data.csrfToken,
+                          },
+                          body: JSON.stringify({
+                            operationId: paymentCorrectionIdRef.current,
+                            expectedPayments: visiblePayments.map(
+                              ({ id, method, pixAccountId, amountCents }) => ({
+                                id,
+                                method,
+                                pixAccountId,
+                                amountCents,
+                              }),
+                            ),
+                            payments: correctedPayments,
+                          }),
+                        });
+                        paymentSaved = true;
+                        setVisiblePayments(corrected.payments);
+                        setPaymentEdits({});
+                        paymentCorrectionIdRef.current = createOperationId();
+                      }
                       const inlinePayment = currentPaymentDraft();
                       const paymentsToSave = [
                         ...queuedPayments,
@@ -2087,11 +2373,9 @@ function EditSaleDialog({
                               paymentDraft.operationId,
                           ),
                         );
-                        setPendingPaymentCents(latestPending);
                         setPaymentAmount(formatMoneyInput(latestPending));
                       }
                       if (paymentsToSave.length > 0) {
-                        setPendingPaymentCents(latestPending);
                         setPaymentAmount(formatMoneyInput(latestPending));
                         setPaymentMethod('');
                         paymentOperationIdRef.current = createOperationId();
@@ -2182,7 +2466,9 @@ function EditSaleDialog({
                           : '',
                         attachmentsSaved ? 'os anexos' : '',
                       ].filter(Boolean);
-                      if (savedParts.length > 0) await onChanged();
+                      // Reabra com valores atuais também depois de um conflito,
+                      // mesmo que nenhuma parte desta tentativa tenha sido salva.
+                      await onChanged();
                       setError(
                         savedParts.length > 0
                           ? `${savedParts.join(' e ')} ${savedParts.length === 1 ? 'foi salvo' : 'foram salvos'}, mas faltou concluir o restante: ${messageOf(caught)}`

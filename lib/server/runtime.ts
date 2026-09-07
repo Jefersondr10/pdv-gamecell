@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers';
+import { provideRuntime } from '@pdv-runtime';
 
 export type AppRuntime = {
   DB: D1Database;
@@ -16,10 +16,13 @@ export type AppRuntime = {
   PRIMARY_STORE_SETUP_TOKEN_V1?: string;
   PASSWORD_SIGNUP_TOKEN_V1?: string;
   RECOVERY_CODE_PEPPER_V1?: string;
+  MIGRATION_EXPORT_TOKEN?: string;
+  MIGRATION_EXPORT_EXPIRES_AT?: string;
+  MIGRATION_READ_ONLY?: string;
 };
 
 export function runtime(): AppRuntime {
-  return env as unknown as AppRuntime;
+  return provideRuntime() as unknown as AppRuntime;
 }
 
 export function requiredSecret(

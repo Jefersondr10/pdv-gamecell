@@ -683,6 +683,126 @@ const alreadyPaid = await call(`/api/sales/${saleId}/payments`, {
   }),
 });
 assert.equal(alreadyPaid.body.code, 'SALE_ALREADY_PAID');
+
+type EditablePayment = {
+  id: string;
+  method: 'pix' | 'cash';
+  pixAccountId: string | null;
+  amountCents: number;
+};
+const originalPayments = (paidSale.payments as EditablePayment[]).map(
+  ({ id, method, pixAccountId, amountCents }) => ({
+    id,
+    method,
+    pixAccountId,
+    amountCents,
+  }),
+);
+const correctionPayload = {
+  operationId: crypto.randomUUID(),
+  expectedPayments: originalPayments,
+  payments: originalPayments.map((payment, index) =>
+    index === 0
+      ? {
+          ...payment,
+          method: 'cash',
+          pixAccountId: null,
+          amountCents: payment.amountCents - 10_000,
+        }
+      : payment,
+  ),
+};
+const correctPayment = (
+  payload: unknown,
+  expected: number | number[] = 200,
+  csrf = ownerCsrf,
+) =>
+  call(`/api/sales/${saleId}/payments`, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    expected,
+    headers: { 'x-csrf-token': csrf, 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+await correctPayment(correctionPayload, 403, 'wrong-csrf');
+const correctedPayment = await correctPayment(correctionPayload);
+assert.equal(
+  (correctedPayment.body.sale as { receivedTotalCents: number })
+    .receivedTotalCents,
+  890_000,
+);
+assert.equal(
+  (correctedPayment.body.sale as { receivedDifferenceCents: number })
+    .receivedDifferenceCents,
+  -10_000,
+);
+const replayedCorrection = await correctPayment(correctionPayload);
+assert.equal(replayedCorrection.body.replayed, true);
+await correctPayment({ ...correctionPayload, payments: originalPayments }, 409);
+await correctPayment(
+  { ...correctionPayload, operationId: crypto.randomUUID() },
+  409,
+);
+await correctPayment(
+  {
+    operationId: crypto.randomUUID(),
+    expectedPayments: correctionPayload.payments,
+    payments: correctionPayload.payments.map((p, i) =>
+      i ? p : { ...p, amountCents: 0 },
+    ),
+  },
+  400,
+);
+await correctPayment(
+  {
+    operationId: crypto.randomUUID(),
+    expectedPayments: correctionPayload.payments,
+    payments: correctionPayload.payments.map((p, i) =>
+      i ? p : { ...p, method: 'pix', pixAccountId: crypto.randomUUID() },
+    ),
+  },
+  409,
+);
+const overpaidPayments = correctionPayload.payments.map((p, i) =>
+  i
+    ? p
+    : {
+        ...p,
+        method: 'pix',
+        pixAccountId: pixId,
+        amountCents: p.amountCents + 20_000,
+      },
+);
+const overpaidCorrection = await correctPayment({
+  operationId: crypto.randomUUID(),
+  expectedPayments: correctionPayload.payments,
+  payments: overpaidPayments,
+});
+assert.equal(
+  (overpaidCorrection.body.sale as { receivedDifferenceCents: number })
+    .receivedDifferenceCents,
+  10_000,
+);
+const restoredCorrection = await correctPayment({
+  operationId: crypto.randomUUID(),
+  expectedPayments: overpaidPayments,
+  payments: originalPayments,
+});
+assert.equal(
+  (restoredCorrection.body.sale as { receivedDifferenceCents: number })
+    .receivedDifferenceCents,
+  0,
+);
+assert.equal((restoredCorrection.body.payments as unknown[]).length, 3);
+const replayOlderCorrection = await correctPayment(correctionPayload);
+assert.equal(replayOlderCorrection.body.replayed, true);
+assert.equal(
+  (replayOlderCorrection.body.sale as { receivedTotalCents: number })
+    .receivedTotalCents,
+  900_000,
+);
+// A repetição de uma correção antiga não reaplica seus valores sobre os atuais.
+
 const replayAfterPaymentForm = new FormData();
 replayAfterPaymentForm.set('payload', JSON.stringify(salePayload));
 const replayAfterPayment = await call('/api/sales', {
@@ -1056,6 +1176,11 @@ const cancelledPayment = await call(`/api/sales/${saleId}/payments`, {
   }),
 });
 assert.equal(cancelledPayment.body.code, 'SALE_CANCELLED');
+const cancelledCorrection = await correctPayment(
+  { ...correctionPayload, operationId: crypto.randomUUID() },
+  409,
+);
+assert.equal(cancelledCorrection.body.code, 'SALE_CANCELLED');
 const cancelledAttachment = new FormData();
 cancelledAttachment.set('operationId', crypto.randomUUID());
 cancelledAttachment.append('receipts', tinyPhoto(), 'cancelada.png');

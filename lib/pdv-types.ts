@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.06-revisao-geral-v12';
+export const GUIDE_VERSION = '2026.09.07-correcao-pagamentos-v13';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
@@ -136,6 +136,7 @@ export type SaleItemRecord = {
 export type SalePaymentRecord = {
   id: string;
   method: 'pix' | 'cash';
+  pixAccountId: string | null;
   accountName: string | null;
   amountCents: number;
 };

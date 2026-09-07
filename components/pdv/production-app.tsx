@@ -1473,8 +1473,8 @@ function GuideDialog({
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
             compara visualmente Valor da venda e Total pago: verde quando são
-            iguais, vermelho quando falta receber e violeta quando foi pago a
-            mais. A conferência dos comprovantes aparece separadamente, em roxo,
+            iguais e um aviso discreto quando falta receber ou foi pago a
+            mais. A conferência dos comprovantes aparece separadamente,
             para não ser confundida com pagamento pendente. Alterar o preço de
             venda não gera aviso em comparação ao preço padrão.
           </GuideStep>
@@ -1491,9 +1491,11 @@ function GuideDialog({
             number="6"
             title="Pagamento, status e anexos depois da venda"
           >
-            Em Vendas, toque em Editar para completar um pagamento pendente sem
-            apagar os pagamentos anteriores, dividir o saldo em mais de uma
-            forma, mudar o status do pedido, conferir comprovantes ou
+            Em Vendas, toque em Editar e depois em Alterar no pagamento para
+            corrigir o valor, a forma ou a conta Pix, inclusive em vendas
+            quitadas. As correções ficam no histórico e o saldo é recalculado.
+            Você também pode completar o pagamento, dividir o saldo em mais de
+            uma forma, mudar o status do pedido, conferir comprovantes ou
             acrescentar fotos ao SN correto. Produtos e preços originais
             permanecem protegidos.
           </GuideStep>
@@ -1504,7 +1506,8 @@ function GuideDialog({
           <GuideStep number="8" title="Menu e comparações">
             No celular, toque no nome da loja para abrir o menu. Em Vendas, os
             indicadores compactos funcionam como filtros e comparam o resultado
-            com o período anterior equivalente. Toque em Filtros para localizar
+            com o período anterior equivalente. No ranking, os três primeiros lugares recebem
+            troféus de ouro, prata e bronze conforme a ordenação selecionada. Toque em Filtros para localizar
             vendas sem comprovante, com pagamento pendente ou por status.
           </GuideStep>
         </div>

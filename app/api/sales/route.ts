@@ -1225,7 +1225,7 @@ async function hydrateSales(
       .bind(storeId, ...ids),
     db
       .prepare(
-        `SELECT id, sale_id AS saleId, method,
+        `SELECT id, sale_id AS saleId, method, pix_account_id AS pixAccountId,
                 account_name AS accountName, amount_cents AS amountCents
          FROM payments
          WHERE store_id = ? AND sale_id IN (${placeholders})
@@ -1282,6 +1282,7 @@ async function hydrateSales(
     payments.push({
       id: payment.id,
       method: payment.method,
+      pixAccountId: payment.pixAccountId,
       accountName: payment.accountName,
       amountCents: Number(payment.amountCents),
     });

@@ -22,6 +22,23 @@ const CONTENT_SECURITY_POLICY = [
 
 export function proxy(request: NextRequest) {
   const environment = runtime();
+  if (
+    environment.MIGRATION_READ_ONLY === '1' &&
+    request.nextUrl.pathname.startsWith('/api/') &&
+    request.nextUrl.pathname !== '/api/system/migration-export'
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          'Estamos transferindo o sistema com segurança. Aguarde alguns minutos antes de continuar.',
+        code: 'MIGRATION_READ_ONLY',
+      },
+      {
+        status: 503,
+        headers: { 'retry-after': '60', 'cache-control': 'no-store' },
+      },
+    );
+  }
   const maintenance = environment.PRODUCTION_MAINTENANCE === '1';
   const bypassSecret = environment.PRODUCTION_MAINTENANCE_BYPASS_V1?.trim();
   const bypassHeader = request.headers.get('x-production-maintenance-bypass');
