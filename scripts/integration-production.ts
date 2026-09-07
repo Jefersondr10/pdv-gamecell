@@ -1402,6 +1402,86 @@ assert.ok(
   ),
 );
 
+// Client history is exact-ID scoped and includes cancellations without counting
+// them as purchases. Operators have the same read access as the sales screen.
+const pastClient = await call(`/api/sales?period=all&customerId=${clientId}`, {
+  cookie: staffCookie,
+});
+assert.equal(pastClient.body.total, 1);
+assert.equal(
+  (pastClient.body.aggregates as { saleCount: number }).saleCount,
+  0,
+);
+assert.equal(
+  (pastClient.body.items as { status: string }[])[0].status,
+  'cancelled',
+);
+const staffHistory = await call(
+  `/api/sales?period=all&customerId=${staffClientId}`,
+  { cookie: staffCookie },
+);
+assert.equal(staffHistory.body.total, 1);
+assert.equal((staffHistory.body.items as { id: string }[])[0].id, activeSaleId);
+for (const dimension of ['customer', 'seller', 'product']) {
+  const ranked = await call(`/api/rankings?period=all&dimension=${dimension}`, {
+    cookie: staffCookie,
+  });
+  const rows = ranked.body.items as {
+    key: string;
+    position: number;
+    itemCount: number;
+    totalCents: number;
+  }[];
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].position, 1);
+  assert.equal(rows[0].itemCount, 1);
+  assert.equal(rows[0].totalCents, 500_000);
+  if (dimension === 'customer') assert.equal(rows[0].key, staffClientId);
+  if (dimension === 'product') {
+    const detail = await call(
+      `/api/sales/groups?period=all&dimension=product&key=${rows[0].key}`,
+      { cookie: staffCookie },
+    );
+    assert.ok(
+      (detail.body.items as { productId: string }[]).every(
+        (row) => row.productId === rows[0].key,
+      ),
+    );
+  }
+}
+await call('/api/rankings?dimension=customer', { expected: 401 });
+await call('/api/rankings?dimension=invalid', {
+  cookie: ownerCookie,
+  expected: 400,
+});
+await call('/api/sales?customerId=invalid', {
+  cookie: ownerCookie,
+  expected: 400,
+});
+const isolatedOwner = await call('/api/auth/register-owner', {
+  method: 'POST',
+  expected: 201,
+  ...jsonBody({
+    ...ownerPayload,
+    email: `isolated-${runId}@example.com`,
+    storeName: 'Loja isolada ranking',
+    storeCode: `isolated-${runId}`,
+    setupToken: passwordSignupToken,
+  }),
+});
+const isolatedCookie = sessionCookie(isolatedOwner.response);
+const isolatedRanking = await call(
+  '/api/rankings?period=all&dimension=customer',
+  { cookie: isolatedCookie },
+);
+assert.deepEqual(isolatedRanking.body.items, []);
+const isolatedHistory = await call(
+  `/api/sales?period=all&customerId=${staffClientId}`,
+  { cookie: isolatedCookie },
+);
+assert.deepEqual(isolatedHistory.body.items, []);
+console.log('Client history and all three rankings integration passed.');
+
 const rotatedCodesResult = await call('/api/me/recovery-codes', {
   method: 'POST',
   cookie: ownerCookie,

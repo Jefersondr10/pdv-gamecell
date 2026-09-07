@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
+import { ClientPurchaseHistory } from './client-purchase-history';
 import {
   APPLE_COLOR_SUGGESTIONS,
   PRODUCT_MARKET_OPTIONS,
@@ -52,11 +53,24 @@ const CLIENT_PAGE_SIZE = 40;
 export function CatalogProductionView({
   data,
   onChanged,
+  onOpenSale,
 }: {
   data: BootstrapData;
   onChanged: () => Promise<void>;
+  onOpenSale: (id: string) => void;
 }) {
   const canManage = data.user.role === 'owner' || data.user.role === 'admin';
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const historyClient = data.clients.find((client) => client.id === historyId);
+  if (historyClient)
+    return (
+      <ClientPurchaseHistory
+        key={historyClient.id}
+        client={historyClient}
+        onBack={() => setHistoryId(null)}
+        onOpenSale={onOpenSale}
+      />
+    );
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden px-3 py-3 lg:px-10 lg:py-5">
       <header className="mb-3 shrink-0">
@@ -91,6 +105,7 @@ export function CatalogProductionView({
             canManage={canManage}
             csrfToken={data.csrfToken}
             items={data.clients}
+            onOpenHistory={setHistoryId}
             onChanged={onChanged}
           />
         </TabsContent>
@@ -126,11 +141,13 @@ function ClientsManager({
   csrfToken,
   canManage,
   onChanged,
+  onOpenHistory,
 }: {
   items: ClientRecord[];
   csrfToken: string;
   canManage: boolean;
   onChanged: () => Promise<void>;
+  onOpenHistory: (id: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
@@ -193,22 +210,32 @@ function ClientsManager({
     >
       {filtered.slice(0, visibleCount).map((client) => (
         <article
-          className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border bg-card p-3 ${client.active ? '' : 'opacity-65'}`}
+          className={`flex items-center gap-2 rounded-2xl border bg-card p-3 ${client.active ? '' : 'opacity-65'}`}
           key={client.id}
         >
-          <span className="grid size-10 place-items-center rounded-full bg-secondary text-primary">
-            <UserRound className="size-5" />
-          </span>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <p className="truncate font-bold">{client.name}</p>
-              <StatusBadge active={client.active} />
+          <button
+            type="button"
+            onClick={() => onOpenHistory(client.id)}
+            aria-label={`Ver compras de ${client.name}`}
+            className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <span className="grid size-10 shrink-0 place-items-center rounded-full bg-secondary text-primary">
+              <UserRound className="size-5" />
+            </span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="truncate font-bold">{client.name}</p>
+                <StatusBadge active={client.active} />
+              </div>
+              <p className="truncate text-xs text-muted-foreground">
+                {[client.phone, client.email].filter(Boolean).join(' · ') ||
+                  'Sem contato informado'}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-primary">
+                Ver histórico de compras
+              </p>
             </div>
-            <p className="truncate text-xs text-muted-foreground">
-              {[client.phone, client.email].filter(Boolean).join(' · ') ||
-                'Sem contato informado'}
-            </p>
-          </div>
+          </button>
           {canManage && (
             <Button
               aria-label={`Editar ${client.name}`}

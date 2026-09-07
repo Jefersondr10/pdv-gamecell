@@ -13,6 +13,7 @@ import {
   Settings,
   ShoppingBag,
   Smartphone,
+  Trophy,
   UsersRound,
   Warehouse,
 } from 'lucide-react';
@@ -87,6 +88,13 @@ const SalesProductionView = dynamic(
     ),
   { loading: ViewLoading },
 );
+const RankingProductionView = dynamic(
+  () =>
+    import('@/components/pdv/views/ranking-production-view').then(
+      (module) => module.RankingProductionView,
+    ),
+  { loading: ViewLoading },
+);
 const SettingsProductionView = dynamic(
   () =>
     import('@/components/pdv/views/settings-production-view').then(
@@ -120,6 +128,7 @@ type View =
   | 'entry'
   | 'stock'
   | 'sales'
+  | 'ranking'
   | 'catalog'
   | 'entries'
   | 'settings';
@@ -157,6 +166,7 @@ const navigation: Array<{
   { view: 'entry', label: 'Nova entrada', short: 'Entrada', icon: Package },
   { view: 'stock', label: 'Estoque', short: 'Estoque', icon: Warehouse },
   { view: 'sales', label: 'Vendas', short: 'Vendas', icon: History },
+  { view: 'ranking', label: 'Ranking', short: 'Ranking', icon: Trophy },
   {
     view: 'catalog',
     label: 'Cadastros',
@@ -755,6 +765,19 @@ function CloudPdv({
               data={data}
               key={`catalog-${run}`}
               onChanged={() => reload(true)}
+              onOpenSale={(saleId) => {
+                setSaleToOpen(saleId);
+                changeView('sales');
+              }}
+            />
+          )}
+          {activeView === 'ranking' && (
+            <RankingProductionView
+              key={`ranking-${run}`}
+              onOpenSale={(saleId) => {
+                setSaleToOpen(saleId);
+                changeView('sales');
+              }}
             />
           )}
           {activeView === 'entries' && (
@@ -1473,10 +1496,10 @@ function GuideDialog({
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
             compara visualmente Valor da venda e Total pago: verde quando são
-            iguais e um aviso discreto quando falta receber ou foi pago a
-            mais. A conferência dos comprovantes aparece separadamente,
-            para não ser confundida com pagamento pendente. Alterar o preço de
-            venda não gera aviso em comparação ao preço padrão.
+            iguais e um aviso discreto quando falta receber ou foi pago a mais.
+            A conferência dos comprovantes aparece separadamente, para não ser
+            confundida com pagamento pendente. Alterar o preço de venda não gera
+            aviso em comparação ao preço padrão.
           </GuideStep>
           <GuideStep number="5" title="Relatórios e histórico">
             O estoque abre somente com variações disponíveis. Nos detalhes,
@@ -1506,9 +1529,14 @@ function GuideDialog({
           <GuideStep number="8" title="Menu e comparações">
             No celular, toque no nome da loja para abrir o menu. Em Vendas, os
             indicadores compactos funcionam como filtros e comparam o resultado
-            com o período anterior equivalente. No ranking, os três primeiros lugares recebem
-            troféus de ouro, prata e bronze conforme a ordenação selecionada. Toque em Filtros para localizar
-            vendas sem comprovante, com pagamento pendente ou por status.
+            com o período anterior equivalente. No menu Ranking, alterne entre
+            Clientes, Vendedores e Produtos, com filtros de período e ordenação
+            por quantidade ou valor. Produtos são separados por cor e memória.
+            Os três primeiros lugares recebem troféus de ouro, prata e bronze
+            conforme a ordenação selecionada; empates têm a mesma posição. Em
+            Cadastros › Clientes, toque no cliente para ver todas as compras,
+            inclusive canceladas. Toque em Filtros para localizar vendas sem
+            comprovante, com pagamento pendente ou por status.
           </GuideStep>
         </div>
         <DialogFooter>

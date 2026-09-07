@@ -65,7 +65,7 @@ export async function GET(request: Request) {
          FROM sales s
          JOIN sale_items si ON si.sale_id = s.id AND si.store_id = s.store_id
          LEFT JOIN clients c ON c.id = s.customer_id AND c.store_id = s.store_id
-         LEFT JOIN users u ON u.id = s.seller_user_id
+         LEFT JOIN users u ON u.id = s.seller_user_id AND u.store_id = s.store_id
          WHERE ${where.join(' AND ')}
          ORDER BY s.created_at DESC, s.id DESC, si.id DESC
          LIMIT ?`,
@@ -88,14 +88,20 @@ export async function GET(request: Request) {
   }
 }
 
-function parseDimension(value: string | null): SalesGrouping {
-  if (value === 'model' || value === 'customer' || value === 'seller') {
+function parseDimension(value: string | null): SalesGrouping | 'product' {
+  if (
+    value === 'model' ||
+    value === 'customer' ||
+    value === 'seller' ||
+    value === 'product'
+  ) {
     return value;
   }
   throw new HttpError(400, 'Agrupamento inválido.', 'INVALID_GROUP');
 }
 
-function dimensionPredicate(dimension: SalesGrouping) {
+function dimensionPredicate(dimension: SalesGrouping | 'product') {
+  if (dimension === 'product') return 'si.product_id = ?';
   if (dimension === 'model') return 'si.product_name = ?';
   if (dimension === 'customer') {
     return "COALESCE(s.customer_id, 'legacy:' || s.customer_name) = ?";

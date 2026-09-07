@@ -52,4 +52,28 @@ const directSale = parseSalesFilters(
 );
 assert.equal(directSale.comparison, null);
 
+const customerId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const customer = parseSalesFilters(
+  new URL(
+    `https://example.test/api/sales?period=today&customerId=${customerId}`,
+  ),
+  storeId,
+  now,
+);
+assert.equal(customer.customerId, customerId);
+assert.ok(customer.where.includes('s.customer_id = ?'));
+assert.deepEqual(customer.bindings.slice(0, 2), [storeId, customerId]);
+assert.ok(customer.comparison?.where.includes('s.customer_id = ?'));
+assert.deepEqual(customer.comparison?.bindings.slice(0, 2), [
+  storeId,
+  customerId,
+]);
+assert.throws(() =>
+  parseSalesFilters(
+    new URL('https://example.test/api/sales?customerId=invalid'),
+    storeId,
+    now,
+  ),
+);
+
 console.log('Sales filter and previous-period checks passed.');

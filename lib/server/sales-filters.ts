@@ -26,6 +26,7 @@ export type ParsedSalesFilters = {
   orderStatusId: string | null;
   period: SalesPeriod | null;
   query: string;
+  customerId: string | null;
   saleId: string | null;
   to: number | null;
   where: string[];
@@ -101,10 +102,15 @@ export function parseSalesFilters(
   const issue = parseIssue(url.searchParams.get('issue'));
   const orderStatusId = parseOrderStatus(url.searchParams.get('orderStatus'));
   const saleId = (url.searchParams.get('saleId') ?? '').trim() || null;
+  const customerId = (url.searchParams.get('customerId') ?? '').trim() || null;
+  if (customerId && !/^[a-f0-9-]{20,80}$/i.test(customerId)) {
+    throw new HttpError(400, 'Cliente inválido.', 'INVALID_CUSTOMER');
+  }
   if (saleId && !/^[a-f0-9-]{20,80}$/i.test(saleId)) {
     throw new HttpError(400, 'Venda inválida.', 'INVALID_SALE');
   }
   const current = buildFilterClauses({
+    customerId,
     alertOnly,
     from,
     issue,
@@ -119,6 +125,7 @@ export function parseSalesFilters(
     previous && !saleId
       ? {
           ...buildFilterClauses({
+            customerId,
             alertOnly,
             from: previous.from,
             issue,
@@ -133,6 +140,7 @@ export function parseSalesFilters(
       : null;
 
   return {
+    customerId,
     alertOnly,
     bindings: current.bindings,
     comparison,
@@ -150,6 +158,7 @@ export function parseSalesFilters(
 }
 
 function buildFilterClauses({
+  customerId,
   alertOnly,
   from,
   issue,
@@ -159,6 +168,7 @@ function buildFilterClauses({
   storeId,
   to,
 }: {
+  customerId: string | null;
   alertOnly: boolean;
   from: number | null;
   issue: SalesIssue | null;
@@ -170,6 +180,10 @@ function buildFilterClauses({
 }) {
   const where = ['s.store_id = ?'];
   const bindings: Array<string | number> = [storeId];
+  if (customerId) {
+    where.push('s.customer_id = ?');
+    bindings.push(customerId);
+  }
   if (from !== null) {
     where.push('s.created_at >= ?');
     bindings.push(from);

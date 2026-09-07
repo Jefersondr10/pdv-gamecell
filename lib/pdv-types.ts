@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.07-correcao-pagamentos-v13';
+export const GUIDE_VERSION = '2026.09.07-ranking-clientes-produtos-v14';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
@@ -180,6 +180,19 @@ export type SalesGroupRecord = {
 };
 
 export type SalesGrouping = 'model' | 'customer' | 'seller';
+
+export type RankingDimension = 'customer' | 'seller' | 'product';
+export type RankingOrder = 'items' | 'value';
+export type RankingRecord = SalesGroupRecord & {
+  position: number;
+  color: string | null;
+  memory: string | null;
+};
+export type RankingPage = {
+  items: RankingRecord[];
+  nextOffset: number | null;
+  totals: { participants: number; itemCount: number; amountCents: number };
+};
 
 export type SalesAggregates = {
   amountCents: number;
