@@ -3,7 +3,7 @@ services:
     image: ${PDV_IMAGE:?Set PDV_IMAGE to a tested release}
     container_name: atacadoapple-app
     restart: unless-stopped
-    env_file: .env.runtime
+    env_file: ./data/.env.runtime
     environment:
       PDV_DATA_DIR: /data
       VINEXT_TRUST_PROXY: '1'

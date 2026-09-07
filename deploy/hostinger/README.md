@@ -21,7 +21,8 @@ in database responses or the image. Run one app process per data directory.
    totals, stock and every attachment hash. Keep source data and export.
 6. Pre-create the runtime data directory and chown only that directory to
    `1000:1000`. Container is non-root/read-only; data must remain writable.
-   Keep `.env.runtime` separately, root-readable, outside public web files.
+   Keep `.env.runtime` in that private data directory, mode 600 and owned by
+   UID 1000. Compose and backup read the same file, outside public web files.
 7. Add the Caddy routes from `pdv.Caddyfile`, substituting the proxy token
    privately. Verify anonymous origin requests are 403, accepted proxy calls
    use the canonical public HTTPS host, and public callers cannot spoof IP.

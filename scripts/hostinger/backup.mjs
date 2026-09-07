@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile, access, readdir, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, access, readdir, unlink, open } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -42,19 +42,41 @@ async function transfer(kind, bytes) {
   if (!response.ok) throw new Error(`Off-site upload failed: ${response.status}`);
   return digest;
 }
-async function transferLarge(bytes) {
+async function transferLarge(path) {
   const parts = [];
-  for (let offset = 0; offset < bytes.length; offset += 8 * 1024 * 1024) {
-    parts.push(await transfer('objects', encrypt(bytes.subarray(offset, offset + 8 * 1024 * 1024))));
-  }
-  return { parts, size: bytes.length, digest: hash(bytes) };
+  const file = await open(path, 'r');
+  const digest = createHash('sha256');
+  let size = 0;
+  try {
+    const buffer = Buffer.alloc(8 * 1024 * 1024);
+    while (true) {
+      const { bytesRead } = await file.read(buffer);
+      if (!bytesRead) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      digest.update(chunk); size += bytesRead;
+      parts.push(await transfer('objects', encrypt(chunk)));
+    }
+  } finally { await file.close(); }
+  return { parts, size, digest: digest.digest('hex') };
 }
-async function retrieveLarge(reference) {
-  if (typeof reference === 'string') return retrieve('objects', reference);
+async function restoreLarge(reference, path) {
+  if (typeof reference === 'string') {
+    await writeFile(path, await retrieve('objects', reference), { flag: 'wx', mode: 0o600 });
+    return;
+  }
   if (!Array.isArray(reference.parts) || !reference.parts.length) throw new Error('Invalid multipart backup');
-  const bytes = Buffer.concat(await Promise.all(reference.parts.map((digest) => retrieve('objects', digest))));
-  if (bytes.length !== reference.size || hash(bytes) !== reference.digest) throw new Error('Multipart backup integrity mismatch');
-  return bytes;
+  const file = await open(path, 'wx', 0o600);
+  const digest = createHash('sha256');
+  let size = 0;
+  try {
+    for (const part of reference.parts) {
+      const bytes = await retrieve('objects', part);
+      digest.update(bytes); size += bytes.length;
+      await file.writeFile(bytes);
+    }
+    await file.sync();
+  } finally { await file.close(); }
+  if (size !== reference.size || digest.digest('hex') !== reference.digest) throw new Error('Multipart backup integrity mismatch');
 }
 async function retrieve(kind, digest) {
   if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid backup digest');
@@ -74,7 +96,7 @@ if (action === 'create') {
   source.close();
   const db = new DatabaseSync(snapshotPath, { readOnly: true });
   if (db.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new Error('Backup database integrity failed');
-  const manifest = { version: 2, capturedAt, files: [], database: await transferLarge(await readFile(snapshotPath)),
+  const manifest = { version: 2, capturedAt, files: [], database: await transferLarge(snapshotPath),
     environment: await transfer('objects', encrypt(await readFile(join(directory, '.env.runtime')))) };
   for (const row of db.prepare('SELECT r2_key AS key FROM attachments').all()) {
     const basename = hash(row.key);
@@ -105,7 +127,7 @@ if (action === 'create') {
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const manifest = JSON.parse(await retrieve('snapshots', snapshotHash));
   await mkdir(join(directory, 'objects'), { recursive: true, mode: 0o700 });
-  await writeFile(join(directory, 'pdv.sqlite'), await retrieveLarge(manifest.database), { flag: 'wx', mode: 0o600 });
+  await restoreLarge(manifest.database, join(directory, 'pdv.sqlite'));
   await writeFile(join(directory, '.env.runtime'), await retrieve('objects', manifest.environment), { flag: 'wx', mode: 0o600 });
   for (const file of manifest.files) {
     if (!/^[a-f0-9]{64}$/.test(file.basename) || hash(file.metadata.key) !== file.basename) throw new Error('Invalid backup object path');
