@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
+import { useServerReceiptJobs } from '@/components/pdv/server-receipt-runtime';
 import {
   GroupDetailsDialog,
   type SelectedGroup,
@@ -1190,6 +1191,17 @@ function EditSaleDialog({
     ),
   );
   const receiptValueOperationIdRef = useRef(createOperationId());
+  const dirtyReceiptIds = useRef(new Set<string>());
+  const [dirtyReceipts, setDirtyReceipts] = useState(new Set<string>());
+  const serverReceipts = useServerReceiptJobs(sale?.id, (jobs) => {
+    setSavedReceiptValues((current) => {
+      const next = { ...current };
+      for (const row of jobs)
+        if (!dirtyReceiptIds.current.has(row.id))
+          next[row.id] = { amountCents: row.amountCents, source: row.source };
+      return next;
+    });
+  });
   const attachmentOperationIdRef = useRef(createOperationId());
   const [itemFiles, setItemFiles] = useState<Record<string, File[]>>({});
   const [preparing, setPreparing] = useState(false);
@@ -1299,6 +1311,7 @@ function EditSaleDialog({
     (paymentMethod !== 'pix' || Boolean(paymentPixAccountId));
   const changedSavedReceiptValues = (sale?.receipts ?? []).flatMap(
     (receipt) => {
+      if (serverReceipts.enabled && !dirtyReceipts.has(receipt.id)) return [];
       const value = savedReceiptValues[receipt.id] ?? {
         amountCents: null,
         source: null,
@@ -1897,10 +1910,17 @@ function EditSaleDialog({
                     onFiles={prepareReceipts}
                   />
                 </div>
+                {serverReceipts.error && (
+                  <output className="mt-2 block text-xs text-muted-foreground">
+                    {serverReceipts.error}
+                  </output>
+                )}
                 {sale.receipts.length > 0 && (
                   <div className="mt-3 space-y-2">
                     {sale.receipts.map((receipt) => (
                       <SavedReceiptValueEditor
+                        serverJob={serverReceipts.jobs[receipt.id]}
+                        onServerRetry={() => serverReceipts.retry(receipt.id)}
                         disabled={preparing || uploadBusy}
                         key={receipt.id}
                         onAutoValueFound={async (value) => {
@@ -1921,12 +1941,14 @@ function EditSaleDialog({
                           );
                           await onChanged();
                         }}
-                        onValueChange={(value) =>
+                        onValueChange={(value) => {
+                          dirtyReceiptIds.current.add(receipt.id);
+                          setDirtyReceipts(new Set(dirtyReceiptIds.current));
                           setSavedReceiptValues((current) => ({
                             ...current,
                             [receipt.id]: value,
-                          }))
-                        }
+                          }));
+                        }}
                         receipt={receipt}
                         value={
                           savedReceiptValues[receipt.id] ?? {
@@ -2225,6 +2247,10 @@ function EditSaleDialog({
                           },
                         );
                         receiptValuesSaved = true;
+                        changedSavedReceiptValues.forEach((receipt) =>
+                          dirtyReceiptIds.current.delete(receipt.id),
+                        );
+                        setDirtyReceipts(new Set(dirtyReceiptIds.current));
                       }
                       if (selectedFiles.length > 0) {
                         const form = new FormData();
@@ -2254,17 +2280,19 @@ function EditSaleDialog({
                           headers: { 'x-csrf-token': data.csrfToken },
                           body: form,
                         });
-                        void enqueueReceiptOcrJobs({
-                          attachments: attachmentResult.receipts ?? [],
-                          files: attachmentResult.replayed
-                            ? undefined
-                            : receiptFiles,
-                          receiptValues: attachmentResult.replayed
-                            ? undefined
-                            : receiptValues,
-                          saleId: sale.id,
-                          storeId: data.store.id,
-                        }).catch(() => {});
+                        window.dispatchEvent(new Event('pdv:receipts-saved'));
+                        if (!data.serverReceiptOcr)
+                          void enqueueReceiptOcrJobs({
+                            attachments: attachmentResult.receipts ?? [],
+                            files: attachmentResult.replayed
+                              ? undefined
+                              : receiptFiles,
+                            receiptValues: attachmentResult.replayed
+                              ? undefined
+                              : receiptValues,
+                            saleId: sale.id,
+                            storeId: data.store.id,
+                          }).catch(() => {});
                         attachmentsSaved = true;
                       }
                       await onChanged();

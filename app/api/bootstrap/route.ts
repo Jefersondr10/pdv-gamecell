@@ -157,6 +157,7 @@ export async function GET(request: Request) {
       mustChangePassword: Boolean(user.mustChangePassword),
     }));
     const data: BootstrapData = {
+      serverReceiptOcr: Boolean(runtime().RECEIPT_OCR_ENGINE_URL),
       csrfToken: session.csrfToken,
       user: {
         id: session.id,

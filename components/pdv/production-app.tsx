@@ -20,6 +20,8 @@ import {
 
 import { unlockScannerAudio } from '@/components/pdv/barcode-scanner';
 import { RecoveryCodesPanel } from '@/components/pdv/recovery-codes-panel';
+import { OperationRecoveryPanel } from '@/components/pdv/operation-recovery-panel';
+import { submitRecoverableOperation } from '@/lib/client-operation-recovery';
 import {
   EntryWizard,
   type EntryProduct,
@@ -61,10 +63,11 @@ import { messageOf, requestJson } from '@/lib/client-api';
 import {
   activateReceiptOcrQueue,
   enqueueReceiptOcrJobs,
-  type ReceiptOcrAttachment,
 } from '@/lib/client-receipt-background';
 import { displayCommercialCode } from '@/lib/commercial-code';
 import type { BootstrapData } from '@/lib/pdv-types';
+import { ServerReceiptProvider } from '@/components/pdv/server-receipt-runtime';
+import { BackupStatusCard } from '@/components/pdv/backup-status-card';
 import { preloadScannerDecoder } from '@/lib/scanner';
 
 const CatalogProductionView = dynamic(
@@ -378,12 +381,12 @@ function CloudPdv({
   }, [reload]);
 
   useEffect(() => {
-    if (!data?.store.id || !data.csrfToken) return;
+    if (!data?.store.id || !data.csrfToken || data.serverReceiptOcr) return;
     return activateReceiptOcrQueue({
       storeId: data.store.id,
       csrfToken: data.csrfToken,
     });
-  }, [data?.csrfToken, data?.store.id]);
+  }, [data?.csrfToken, data?.store.id, data?.serverReceiptOcr]);
 
   useEffect(() => {
     if (!data?.systemCatalog.updateAvailable) return;
@@ -535,13 +538,23 @@ function CloudPdv({
       }),
     );
     entry.photos.forEach((photo) => form.append('photos', photo));
-    const result = await requestJson<{ added: number }>('/api/entries', {
-      method: 'POST',
-      headers: { 'x-csrf-token': data!.csrfToken },
-      body: form,
-    });
+    const result = await submitRecoverableOperation(
+      {
+        storeId: data!.store.id,
+        userId: data!.user.id,
+        csrfToken: data!.csrfToken,
+      },
+      'entry',
+      entry.operationId,
+      `${entry.productName} · ${entry.serials.length} aparelho(s)`,
+      form,
+    );
     void reload(true);
-    return { added: result.added, duplicates: 0, capacityReached: false };
+    return {
+      added: result.added ?? entry.serials.length,
+      duplicates: 0,
+      capacityReached: false,
+    };
   };
 
   const createSaleCustomer = async (input: {
@@ -599,22 +612,26 @@ function CloudPdv({
       ),
     );
     sale.receipts.forEach((receipt) => form.append('receipts', receipt));
-    const result = await requestJson<{
-      id: string;
-      receipts: ReceiptOcrAttachment[];
-      replayed?: boolean;
-    }>('/api/sales', {
-      method: 'POST',
-      headers: { 'x-csrf-token': data!.csrfToken },
-      body: form,
-    });
-    void enqueueReceiptOcrJobs({
-      storeId: data!.store.id,
-      saleId: result.id,
-      attachments: result.receipts ?? [],
-      files: result.replayed ? undefined : sale.receipts,
-      receiptValues: result.replayed ? undefined : sale.receiptValues,
-    }).catch(() => {});
+    const result = await submitRecoverableOperation(
+      {
+        storeId: data!.store.id,
+        userId: data!.user.id,
+        csrfToken: data!.csrfToken,
+      },
+      'sale',
+      sale.operationId,
+      `${sale.customer} · ${sale.items.length} aparelho(s)`,
+      form,
+    );
+    if (!data!.serverReceiptOcr)
+      void enqueueReceiptOcrJobs({
+        storeId: data!.store.id,
+        saleId: result.id,
+        attachments: result.receipts ?? [],
+        files: undefined,
+        receiptValues: undefined,
+      }).catch(() => {});
+    window.dispatchEvent(new Event('pdv:receipts-saved'));
     void reload(true);
   };
 
@@ -638,214 +655,234 @@ function CloudPdv({
   if (!data) return <LoadingScreen label="Carregando sua loja…" />;
 
   return (
-    <main className="h-dvh overflow-hidden bg-background text-foreground">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar px-5 py-6 lg:flex lg:flex-col">
-        <Brand storeName={data.store.name} />
-        <DesktopNavigation active={activeView} onChange={changeView} />
-        <button
-          className="mt-auto w-full rounded-2xl border bg-card p-4 text-left transition hover:bg-muted/40"
-          onClick={() => setProfileOpen(true)}
-          type="button"
-        >
-          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-            Operador
-          </p>
-          <div className="mt-2 flex items-center gap-3">
-            <span className="grid size-10 place-items-center rounded-full bg-secondary text-primary">
-              <CircleUserRound className="size-5" />
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate font-bold">
-                {data.user.displayName}
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                {roleLabel(data.user.role)} · Ajuda
-              </span>
-            </span>
-          </div>
-        </button>
-      </aside>
-
-      <section className="mx-auto flex h-dvh min-h-0 max-w-[1500px] flex-col overflow-hidden lg:ml-64">
-        <header className="relative z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:h-[4.5rem] lg:px-10 lg:pt-0">
+    <ServerReceiptProvider
+      key={`${data.store.id}:${data.user.id}`}
+      enabled={Boolean(data?.serverReceiptOcr)}
+      csrfToken={data?.csrfToken ?? ''}
+    >
+      <main className="h-dvh overflow-hidden bg-background text-foreground">
+        <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar px-5 py-6 lg:flex lg:flex-col">
+          <Brand storeName={data.store.name} />
+          <DesktopNavigation active={activeView} onChange={changeView} />
           <button
-            aria-controls="mobile-primary-navigation"
-            aria-expanded={mobileMenuOpen}
-            aria-haspopup="dialog"
-            aria-label={`Abrir menu da loja ${data.store.name}`}
-            className="group flex min-w-0 items-center gap-1 rounded-2xl py-1 pr-1 text-left outline-none transition hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
-            onClick={() => setMobileMenuOpen(true)}
+            className="mt-auto w-full rounded-2xl border bg-card p-4 text-left transition hover:bg-muted/40"
+            onClick={() => setProfileOpen(true)}
             type="button"
           >
-            <Brand compact storeName={data.store.name} />
-            <ChevronDown
-              className={`size-4 shrink-0 text-muted-foreground transition-transform ${mobileMenuOpen ? 'rotate-180' : ''}`}
-            />
-          </button>
-          <div className="hidden lg:block">
-            <p className="text-sm font-bold">{data.store.name}</p>
-            <p className="text-xs text-muted-foreground">
-              Loja {data.store.code}
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Operador
             </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-            <Button
-              aria-label={`Abrir perfil, ajuda e conta de ${data.user.displayName}`}
-              className="h-11 min-w-11 rounded-full px-3 text-sm lg:hidden"
-              onClick={() => setProfileOpen(true)}
-              size="sm"
-              variant="ghost"
-            >
-              <CircleUserRound />{' '}
-              <span className="hidden min-[430px]:inline">
-                {firstName(data.user.displayName)}
+            <div className="mt-2 flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-full bg-secondary text-primary">
+                <CircleUserRound className="size-5" />
               </span>
-            </Button>
-            <output aria-live="polite">
-              <Badge
-                className={
-                  online
-                    ? 'bg-success/10 text-success hover:bg-success/10'
-                    : 'bg-amber-500/15 text-amber-900 hover:bg-amber-500/15'
-                }
+              <span className="min-w-0">
+                <span className="block truncate font-bold">
+                  {data.user.displayName}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  {roleLabel(data.user.role)} · Ajuda
+                </span>
+              </span>
+            </div>
+          </button>
+        </aside>
+
+        <section className="mx-auto flex h-dvh min-h-0 max-w-[1500px] flex-col overflow-hidden lg:ml-64">
+          <header className="relative z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:h-[4.5rem] lg:px-10 lg:pt-0">
+            <button
+              aria-controls="mobile-primary-navigation"
+              aria-expanded={mobileMenuOpen}
+              aria-haspopup="dialog"
+              aria-label={`Abrir menu da loja ${data.store.name}`}
+              className="group flex min-w-0 items-center gap-1 rounded-2xl py-1 pr-1 text-left outline-none transition hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
+              onClick={() => setMobileMenuOpen(true)}
+              type="button"
+            >
+              <Brand compact storeName={data.store.name} />
+              <ChevronDown
+                className={`size-4 shrink-0 text-muted-foreground transition-transform ${mobileMenuOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            <div className="hidden lg:block">
+              <p className="text-sm font-bold">{data.store.name}</p>
+              <p className="text-xs text-muted-foreground">
+                Loja {data.store.code}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+              <Button
+                aria-label={`Abrir perfil, ajuda e conta de ${data.user.displayName}`}
+                className="h-11 min-w-11 rounded-full px-3 text-sm lg:hidden"
+                onClick={() => setProfileOpen(true)}
+                size="sm"
+                variant="ghost"
               >
-                <span
-                  className={`mr-1 size-1.5 rounded-full ${online ? 'bg-success' : 'bg-amber-600'}`}
-                />
-                {online ? 'Online' : 'Sem conexão'}
-              </Badge>
-            </output>
+                <CircleUserRound />{' '}
+                <span className="hidden min-[430px]:inline">
+                  {firstName(data.user.displayName)}
+                </span>
+              </Button>
+              <output aria-live="polite">
+                <Badge
+                  className={
+                    online
+                      ? 'bg-success/10 text-success hover:bg-success/10'
+                      : 'bg-amber-500/15 text-amber-900 hover:bg-amber-500/15'
+                  }
+                >
+                  <span
+                    className={`mr-1 size-1.5 rounded-full ${online ? 'bg-success' : 'bg-amber-600'}`}
+                  />
+                  {online ? 'Online' : 'Sem conexão'}
+                </Badge>
+              </output>
+            </div>
+          </header>
+
+          <OperationRecoveryPanel
+            key={`recovery-${data.store.id}-${data.user.id}`}
+            context={{
+              storeId: data.store.id,
+              userId: data.user.id,
+              csrfToken: data.csrfToken,
+            }}
+            onChanged={reload}
+          />
+          {['owner', 'admin'].includes(data.user.role) && (
+            <BackupStatusCard alertOnly />
+          )}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {activeView === 'sell' && (
+              <SellWizard
+                recoveryScope={{ storeId: data.store.id, userId: data.user.id }}
+                customers={data.clients
+                  .filter((client) => client.active)
+                  .map(({ id, name, phone }) => ({ id, name, phone }))}
+                key={`sell-${data.store.id}-${data.user.id}-${run}`}
+                onComplete={saveSale}
+                onCreateCustomer={createSaleCustomer}
+                pixAccounts={data.pixAccounts
+                  .filter((account) => account.active)
+                  .map(({ id, name }) => ({ id, name }))}
+                resolveSerials={lookupSerials}
+              />
+            )}
+            {activeView === 'entry' && (
+              <EntryWizard
+                recoveryScope={{ storeId: data.store.id, userId: data.user.id }}
+                key={`entry-${data.store.id}-${data.user.id}-${run}`}
+                lookupSerials={lookupSerials}
+                onConfirmEntry={saveEntry}
+                productsByCode={productsByCode}
+              />
+            )}
+            {activeView === 'stock' && (
+              <StockProductionView
+                data={data}
+                key={`stock-${run}`}
+                onOpenSale={(saleId) => {
+                  setSaleToOpen(saleId);
+                  changeView('sales');
+                }}
+              />
+            )}
+            {activeView === 'sales' && (
+              <SalesProductionView
+                data={data}
+                key={`sales-${run}`}
+                onChanged={() => reload(true)}
+                onOpenSaleHandled={() => setSaleToOpen(null)}
+                openSaleId={saleToOpen}
+              />
+            )}
+            {activeView === 'catalog' && (
+              <CatalogProductionView
+                data={data}
+                key={`catalog-${run}`}
+                onChanged={() => reload(true)}
+                onOpenSale={(saleId) => {
+                  setSaleToOpen(saleId);
+                  changeView('sales');
+                }}
+              />
+            )}
+            {activeView === 'ranking' && (
+              <RankingProductionView
+                key={`ranking-${run}`}
+                onOpenSale={(saleId) => {
+                  setSaleToOpen(saleId);
+                  changeView('sales');
+                }}
+              />
+            )}
+            {activeView === 'entries' && (
+              <EntryHistoryView key={`entries-${run}`} />
+            )}
+            {activeView === 'settings' && (
+              <SettingsProductionView
+                data={data}
+                installAvailable={Boolean(installPrompt)}
+                installed={installed}
+                key={`settings-${run}`}
+                onChanged={() => reload(true)}
+                onInstall={async () => {
+                  if (!installPrompt) return;
+                  await installPrompt.prompt();
+                  await installPrompt.userChoice;
+                  setInstallPrompt(null);
+                }}
+              />
+            )}
           </div>
-        </header>
+        </section>
 
-        <div className="min-h-0 flex-1 overflow-hidden">
-          {activeView === 'sell' && (
-            <SellWizard
-              customers={data.clients
-                .filter((client) => client.active)
-                .map(({ id, name, phone }) => ({ id, name, phone }))}
-              key={`sell-${run}`}
-              onComplete={saveSale}
-              onCreateCustomer={createSaleCustomer}
-              pixAccounts={data.pixAccounts
-                .filter((account) => account.active)
-                .map(({ id, name }) => ({ id, name }))}
-              resolveSerials={lookupSerials}
-            />
-          )}
-          {activeView === 'entry' && (
-            <EntryWizard
-              key={`entry-${run}`}
-              lookupSerials={lookupSerials}
-              onConfirmEntry={saveEntry}
-              productsByCode={productsByCode}
-            />
-          )}
-          {activeView === 'stock' && (
-            <StockProductionView
-              data={data}
-              key={`stock-${run}`}
-              onOpenSale={(saleId) => {
-                setSaleToOpen(saleId);
-                changeView('sales');
-              }}
-            />
-          )}
-          {activeView === 'sales' && (
-            <SalesProductionView
-              data={data}
-              key={`sales-${run}`}
-              onChanged={() => reload(true)}
-              onOpenSaleHandled={() => setSaleToOpen(null)}
-              openSaleId={saleToOpen}
-            />
-          )}
-          {activeView === 'catalog' && (
-            <CatalogProductionView
-              data={data}
-              key={`catalog-${run}`}
-              onChanged={() => reload(true)}
-              onOpenSale={(saleId) => {
-                setSaleToOpen(saleId);
-                changeView('sales');
-              }}
-            />
-          )}
-          {activeView === 'ranking' && (
-            <RankingProductionView
-              key={`ranking-${run}`}
-              onOpenSale={(saleId) => {
-                setSaleToOpen(saleId);
-                changeView('sales');
-              }}
-            />
-          )}
-          {activeView === 'entries' && (
-            <EntryHistoryView key={`entries-${run}`} />
-          )}
-          {activeView === 'settings' && (
-            <SettingsProductionView
-              data={data}
-              installAvailable={Boolean(installPrompt)}
-              installed={installed}
-              key={`settings-${run}`}
-              onChanged={() => reload(true)}
-              onInstall={async () => {
-                if (!installPrompt) return;
-                await installPrompt.prompt();
-                await installPrompt.userChoice;
-                setInstallPrompt(null);
-              }}
-            />
-          )}
-        </div>
-      </section>
-
-      <MobileNavigation
-        active={activeView}
-        onChange={changeView}
-        onOpenChange={setMobileMenuOpen}
-        open={mobileMenuOpen}
-        storeCode={data.store.code}
-        storeName={data.store.name}
-      />
-      <ProfileDialog
-        data={data}
-        onEntries={() => {
-          setProfileOpen(false);
-          changeView('entries');
-        }}
-        onGuide={() => {
-          setProfileOpen(false);
-          setGuideOpen(true);
-        }}
-        onLogout={() => void logout()}
-        onOpenChange={setProfileOpen}
-        onSettings={() => {
-          setProfileOpen(false);
-          changeView('settings');
-        }}
-        open={profileOpen}
-      />
-      <GuideDialog
-        onAcknowledge={async () => {
-          await requestJson('/api/guide', {
-            method: 'POST',
-            headers: { 'x-csrf-token': data.csrfToken },
-          });
-          setData((current) =>
-            current ? { ...current, guideRequired: false } : current,
-          );
-          setGuideOpen(false);
-        }}
-        onOpenChange={(open) => {
-          if (!open && data.guideRequired) return;
-          setGuideOpen(open);
-        }}
-        open={guideOpen}
-        required={data.guideRequired}
-      />
-    </main>
+        <MobileNavigation
+          active={activeView}
+          onChange={changeView}
+          onOpenChange={setMobileMenuOpen}
+          open={mobileMenuOpen}
+          storeCode={data.store.code}
+          storeName={data.store.name}
+        />
+        <ProfileDialog
+          data={data}
+          onEntries={() => {
+            setProfileOpen(false);
+            changeView('entries');
+          }}
+          onGuide={() => {
+            setProfileOpen(false);
+            setGuideOpen(true);
+          }}
+          onLogout={() => void logout()}
+          onOpenChange={setProfileOpen}
+          onSettings={() => {
+            setProfileOpen(false);
+            changeView('settings');
+          }}
+          open={profileOpen}
+        />
+        <GuideDialog
+          onAcknowledge={async () => {
+            await requestJson('/api/guide', {
+              method: 'POST',
+              headers: { 'x-csrf-token': data.csrfToken },
+            });
+            setData((current) =>
+              current ? { ...current, guideRequired: false } : current,
+            );
+            setGuideOpen(false);
+          }}
+          onOpenChange={(open) => {
+            if (!open && data.guideRequired) return;
+            setGuideOpen(open);
+          }}
+          open={guideOpen}
+          required={data.guideRequired}
+        />
+      </main>
+    </ServerReceiptProvider>
   );
 }
 
@@ -1486,12 +1523,13 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="3" title="Venda por etapas">
             Pesquise ou cadastre o cliente, bipe um ou mais SNs, adicione fotos,
-            confira ou altere o preço e anexe ou pule o comprovante. A leitura
-            do valor acontece automaticamente no próprio aparelho. Você pode
-            salvar a venda enquanto ela continua; quando terminar, a venda é
-            atualizada sem recarregar a página. Também é possível salvar sem
-            informar pagamento e completar depois. Ao reabrir uma venda, a
-            leitura não é repetida; use Ler novamente somente quando desejar.
+            confira ou altere o preço e anexe ou pule o comprovante. Na versão
+            de produção, após salvar o envio, o servidor lê o comprovante sem
+            depender do celular aberto. O resultado atualiza a venda e pode ser
+            corrigido manualmente. Um arquivo sem valor identificado fica para
+            conferência. Também é possível salvar sem informar pagamento e
+            completar depois. A conferência de valores não prova que a
+            transferência bancária foi efetivada.
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
@@ -1537,6 +1575,21 @@ function GuideDialog({
             Cadastros › Clientes, toque no cliente para ver todas as compras,
             inclusive canceladas. Toque em Filtros para localizar vendas sem
             comprovante, com pagamento pendente ou por status.
+          </GuideStep>
+          <GuideStep number="9" title="Recuperar uma operação interrompida">
+            Rascunhos e envios de novas vendas e entradas são guardados neste
+            aparelho. Se a conexão cair, reabra com a mesma conta e consulte
+            Envios. Não refaça a operação: o sistema procura a confirmação antes
+            de reenviar. Guardado no aparelho não significa confirmado no
+            servidor. Não limpe os dados nem desinstale antes de confirmar os
+            envios pendentes. A recuperação não equivale a funcionamento
+            completo sem internet.
+          </GuideStep>
+          <GuideStep number="10" title="Acompanhar o backup">
+            Proprietários e administradores consultam a última cópia externa em
+            Ajustes › Sistema. Um atraso ou falha também aparece no topo do
+            aplicativo. O painel informa separadamente se o envio de alertas
+            externos já foi ativado.
           </GuideStep>
         </div>
         <DialogFooter>

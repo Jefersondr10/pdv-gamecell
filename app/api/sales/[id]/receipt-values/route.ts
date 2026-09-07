@@ -199,6 +199,18 @@ export async function PATCH(
     try {
       const results = await db.batch([
         ...updateStatements,
+        ...receiptsToUpdate.map((receipt) =>
+          db
+            .prepare(
+              `UPDATE receipt_ocr_jobs SET generation=generation+1, status=?, attempts=0, next_attempt_at=?, lease_token=NULL, lease_until=NULL, error_code=NULL, updated_at=? WHERE attachment_id=?`,
+            )
+            .bind(
+              receipt.amountCents === null ? 'pending' : 'cancelled',
+              now,
+              now,
+              receipt.id,
+            ),
+        ),
         db
           .prepare(
             `INSERT INTO audit_events

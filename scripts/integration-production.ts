@@ -1554,6 +1554,115 @@ if (primaryStoreToken) {
 }
 
 const manifest = await fetch(`${baseUrl}/manifest.webmanifest`);
+
+// Recovery endpoints reveal only this operation's store and initiating user.
+const finalSession = await call('/api/auth/session', { cookie: ownerCookie });
+const ownerActor = String((finalSession.body.user as { id: string }).id);
+for (const [kind, id] of [
+  ['entry', entryId],
+  ['sale', saleId],
+]) {
+  const path = `/api/operations?kind=${kind}&id=${id}&actor=${ownerActor}`;
+  const lookup = await call(path, { cookie: ownerCookie });
+  assert.equal(lookup.body.found, true);
+  assert.equal((lookup.body.result as { id: string }).id, id);
+  await call(path, { expected: 401 });
+  await call(`${path}&id=${id}`, { cookie: ownerCookie, expected: 400 });
+  await call(path.replace(ownerActor, crypto.randomUUID()), {
+    cookie: ownerCookie,
+    expected: 403,
+  });
+}
+const backupState = await call('/api/system/backup-status', {
+  cookie: ownerCookie,
+});
+assert.deepEqual(Object.keys(backupState.body).sort(), [
+  'externalAlerts',
+  'lastSuccessAt',
+  'state',
+]);
+assert.equal(backupState.body.externalAlerts, false);
+await call('/api/system/backup-status', { cookie: staffCookie, expected: 403 });
+
+const secondShop = await call('/api/auth/register-owner', {
+  method: 'POST',
+  expected: 201,
+  ...jsonBody({
+    ...ownerPayload,
+    email: `isolation-${runId}@example.com`,
+    storeCode: `isolation-${runId}`,
+    setupToken: passwordSignupToken,
+  }),
+});
+const secondShopCookie = sessionCookie(secondShop.response);
+const secondSession = await call('/api/auth/session', {
+  cookie: secondShopCookie,
+});
+const secondActor = String((secondSession.body.user as { id: string }).id);
+const isolatedLookup = await call(
+  `/api/operations?kind=sale&id=${saleId}&actor=${secondActor}`,
+  { cookie: secondShopCookie },
+);
+assert.equal(isolatedLookup.body.found, false);
+const isolatedOcr = await call(`/api/sales/${activeSaleId}/receipt-ocr`, {
+  cookie: secondShopCookie,
+});
+assert.deepEqual(isolatedOcr.body.receipts, []);
+
+// Optional real-engine proof, ONLY on synthetic integration data. No browser OCR.
+if (process.env.PDV_TEST_RECEIPT_FIXTURE_PATH) {
+  const { readFile } = await import('node:fs/promises');
+  const upload = new FormData();
+  upload.set('operationId', crypto.randomUUID());
+  upload.append(
+    'receipts',
+    new Blob(
+      [
+        new Uint8Array(
+          await readFile(process.env.PDV_TEST_RECEIPT_FIXTURE_PATH),
+        ),
+      ],
+      { type: 'application/pdf' },
+    ),
+    'teste-sem-validade.pdf',
+  );
+  const uploaded = await call(`/api/sales/${activeSaleId}/attachments`, {
+    method: 'POST',
+    cookie: ownerCookie,
+    headers: { 'x-csrf-token': String(finalSession.body.csrfToken) },
+    body: upload,
+  });
+  const attachmentId = (uploaded.body.receipts as { id: string }[])[0].id;
+  let completed = false;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const status = await call(`/api/sales/${activeSaleId}/receipt-ocr`, {
+      cookie: ownerCookie,
+    });
+    assert.equal(status.body.enabled, true);
+    const row = (
+      status.body.receipts as {
+        id: string;
+        amountCents: number | null;
+        status: string;
+      }[]
+    ).find((row) => row.id === attachmentId);
+    if (row?.status === 'done') {
+      assert.equal(row.amountCents, 284000);
+      completed = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  assert.equal(
+    completed,
+    true,
+    'Real receipt engine must complete without a browser.',
+  );
+  console.log('Real receipt engine persisted R$ 2.840,00 without a browser.');
+}
+console.log(
+  'Operation recovery lookup, authorization, tenant isolation and backup visibility passed.',
+);
 assert.equal(manifest.status, 200);
 const privacy = await fetch(`${baseUrl}/privacidade`);
 assert.equal(privacy.status, 200);

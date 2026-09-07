@@ -2,6 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { SqliteDatabase } from './node/sqlite.mjs';
 import { FileObjectStore } from './node/object-store.mjs';
+import { startReceiptJobs } from './node/receipt-jobs.mjs';
+import { readBackupStatus } from './node/backup-status.mjs';
 
 let value: Record<string, unknown> | undefined;
 
@@ -15,7 +17,14 @@ export function provideRuntime() {
       ...process.env,
       DB: new SqliteDatabase(join(directory, 'pdv.sqlite')),
       FILES: new FileObjectStore(join(directory, 'objects')),
+      READ_BACKUP_STATUS: () => readBackupStatus(directory),
     };
+    if (process.env.RECEIPT_OCR_ENGINE_URL)
+      startReceiptJobs(
+        value.DB,
+        value.FILES,
+        process.env.RECEIPT_OCR_ENGINE_URL,
+      );
   }
   return value;
 }

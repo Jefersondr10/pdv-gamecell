@@ -1,4 +1,5 @@
 import { assertCsrf, requireSession } from '@/lib/server/auth';
+import { queueSaleReceipts } from '@/lib/server/receipt-ocr-jobs';
 import {
   assertFormDataKeys,
   boundedFormData,
@@ -367,6 +368,7 @@ export async function POST(
       .join(' AND ');
     const batchResults = await db.batch([
       ...attachmentStatements,
+      queueSaleReceipts(db, session.storeId!, saleId, now),
       db
         .prepare(
           `INSERT INTO audit_events

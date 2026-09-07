@@ -84,6 +84,11 @@ export async function POST(
       await db.batch([
         db
           .prepare(
+            `UPDATE receipt_ocr_jobs SET status='cancelled', generation=generation+1, lease_token=NULL, lease_until=NULL, updated_at=? WHERE status IN ('pending','processing','retry') AND attachment_id IN (SELECT id FROM attachments WHERE store_id=? AND sale_id=?)`,
+          )
+          .bind(now, storeId, saleId),
+        db
+          .prepare(
             `UPDATE sales SET status = 'cancelled', cancelled_at = ?,
              cancelled_by = ?, cancellation_reason = ?
              WHERE id = ? AND store_id = ? AND status = 'completed'`,

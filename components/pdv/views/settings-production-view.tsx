@@ -29,6 +29,7 @@ import {
 } from '@/components/pdv/product-options';
 import { Badge } from '@/components/ui/badge';
 import { RecoveryCodesPanel } from '@/components/pdv/recovery-codes-panel';
+import { BackupStatusCard } from '@/components/pdv/backup-status-card';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -172,6 +173,7 @@ export function SettingsProductionView({
           />
         </Tab>
         <Tab value="system">
+          {canManage && <BackupStatusCard />}
           {data.user.role === 'owner' && data.user.authKind === 'password' && (
             <SettingsCard
               icon={KeyRound}

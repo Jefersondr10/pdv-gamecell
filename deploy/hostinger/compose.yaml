@@ -8,12 +8,14 @@ services:
       PDV_DATA_DIR: /data
       VINEXT_TRUST_PROXY: '1'
       VINEXT_TRUSTED_HOSTS: atacadoapple.nucleodeoperacao.com.br
+      RECEIPT_OCR_ENGINE_URL: http://receipt-engine:3001
     volumes:
       - ./data:/data
     ports:
       - 127.0.0.1:3108:3000
     networks:
       - edge
+      - receipt-private
     mem_limit: 1536m
     cpus: 2
     pids_limit: 128
@@ -29,6 +31,28 @@ services:
       options:
         max-size: 10m
         max-file: '3'
+  receipt-engine:
+    image: ${PDV_OCR_IMAGE:?Set PDV_OCR_IMAGE to a tested OCR release}
+    restart: unless-stopped
+    networks:
+      - receipt-private
+    mem_limit: 1024m
+    cpus: 1
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:size=192m,mode=1777,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '2'
 networks:
+  receipt-private:
+    internal: true
   edge:
     external: true

@@ -25,6 +25,10 @@ import {
 import { cn } from '@/lib/utils';
 
 import type { ReceiptAttachmentRecord } from '@/lib/pdv-types';
+import {
+  useReceiptRuntime,
+  type ServerReceiptJob,
+} from '@/components/pdv/server-receipt-runtime';
 
 type AnalysisState = {
   message: string;
@@ -49,6 +53,7 @@ export function ReceiptReconciliationEditor({
   targetCents: number;
   values: ReceiptValueInput[];
 }) {
+  const { enabled: serverReading } = useReceiptRuntime();
   const [analysis, setAnalysis] = useState<Record<string, AnalysisState>>({});
   const processedRef = useRef(new Set<string>());
   const filesRef = useRef(files);
@@ -62,6 +67,7 @@ export function ReceiptReconciliationEditor({
   }, [files, onValueChange, values]);
 
   useEffect(() => {
+    if (serverReading) return;
     const visibleKeys = new Set(files.map(fileKey));
     for (const key of processedRef.current) {
       if (!visibleKeys.has(key)) processedRef.current.delete(key);
@@ -136,7 +142,7 @@ export function ReceiptReconciliationEditor({
           }));
         });
     });
-  }, [files, values]);
+  }, [files, values, serverReading]);
 
   const reconciliation = useMemo(
     () => deriveReceiptReconciliation(values, targetCents),
@@ -159,8 +165,9 @@ export function ReceiptReconciliationEditor({
         <div className="min-w-0">
           <h3 className="text-sm font-extrabold">Conferir comprovantes</h3>
           <p className="text-xs text-muted-foreground">
-            A leitura acontece neste aparelho. O valor encontrado é salvo
-            automaticamente e pode ser corrigido.
+            {serverReading
+              ? 'Salve a venda normalmente. A leitura será feita no servidor após o envio, mesmo com o aplicativo fechado. Você pode corrigir o valor depois.'
+              : 'A leitura acontece neste aparelho. O valor encontrado é salvo automaticamente e pode ser corrigido.'}
           </p>
         </div>
       </div>
@@ -208,7 +215,10 @@ export function ReceiptReconciliationEditor({
                 </div>
               )}
               <p className="mt-1 text-xs font-semibold text-muted-foreground">
-                {state?.message ?? 'Aguardando leitura…'}
+                {state?.message ??
+                  (serverReading
+                    ? 'Pronto para enviar. Leitura automática após salvar.'
+                    : 'Aguardando leitura…')}
               </p>
               <ReceiptMoneyInput
                 disabled={disabled}
@@ -300,13 +310,18 @@ export function SavedReceiptValueEditor({
   onValueChange,
   receipt,
   value,
+  serverJob,
+  onServerRetry,
 }: {
   disabled?: boolean;
   onAutoValueFound?: (value: ReceiptValueInput) => Promise<void>;
   onValueChange: (value: ReceiptValueInput) => void;
   receipt: ReceiptAttachmentRecord;
   value: ReceiptValueInput;
+  serverJob?: ServerReceiptJob;
+  onServerRetry?: () => Promise<void>;
 }) {
+  const { enabled: serverReading } = useReceiptRuntime();
   const [state, setState] = useState<AnalysisState | null>(null);
   const mountedRef = useRef(false);
   const onAutoValueFoundRef = useRef(onAutoValueFound);
@@ -461,6 +476,58 @@ export function SavedReceiptValueEditor({
       }
     }
   }, [receipt.mimeType, receipt.name, receipt.url, receiptIdentity]);
+
+  if (serverReading)
+    return (
+      <div className="rounded-xl border bg-muted/20 p-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <a
+            className="min-w-0 flex-1 truncate text-xs font-bold underline-offset-2 hover:underline"
+            href={receipt.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {receipt.name}
+          </a>
+          {serverJob?.status === 'needs_review' &&
+            value.amountCents === null && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                onClick={() => void onServerRetry?.()}
+              >
+                <FileSearch />
+                Tentar leitura
+              </Button>
+            )}
+        </div>
+        <output className="mt-1 block text-xs text-muted-foreground">
+          {value.amountCents !== null
+            ? value.source === 'manual'
+              ? 'Valor manual preservado.'
+              : 'Valor lido e salvo. Confira se corresponde à transação.'
+            : serverJob?.status === 'needs_review'
+              ? 'Não foi possível identificar o valor. Digite abaixo ou tente outra leitura.'
+              : serverJob?.status === 'cancelled'
+                ? 'Leitura encerrada. Confira o valor da transação.'
+                : serverJob?.status === 'processing'
+                  ? 'Lendo no servidor. Você pode fechar o aplicativo.'
+                  : 'Aguardando leitura no servidor. Não é necessário manter esta tela aberta.'}
+        </output>
+        <ReceiptMoneyInput
+          disabled={disabled}
+          valueCents={value.amountCents}
+          onChange={(amountCents) =>
+            onValueChange({
+              amountCents,
+              source: amountCents === null ? null : 'manual',
+            })
+          }
+        />
+      </div>
+    );
 
   return (
     <div className="rounded-xl border bg-muted/20 p-2.5">

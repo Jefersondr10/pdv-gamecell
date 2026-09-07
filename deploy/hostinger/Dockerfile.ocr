@@ -1,0 +1,10 @@
+FROM node:24.20.0-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-por poppler-utils libheif-examples && rm -rf /var/lib/apt/lists/*
+WORKDIR /engine
+COPY --chown=node:node scripts/hostinger/receipt-engine.mjs ./scripts/hostinger/receipt-engine.mjs
+COPY --chown=node:node lib/receipt-amount.ts lib/money.ts ./lib/
+ENV NODE_ENV=production OMP_THREAD_LIMIT=1
+USER node
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "scripts/hostinger/receipt-engine.mjs"]

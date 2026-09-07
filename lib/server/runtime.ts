@@ -20,6 +20,9 @@ export type AppRuntime = {
   MIGRATION_EXPORT_EXPIRES_AT?: string;
   MIGRATION_READ_ONLY?: string;
   VPS_BACKUP_TOKEN?: string;
+  VPS_BACKUP_MONITOR_TOKEN?: string;
+  READ_BACKUP_STATUS?: () => Promise<{ successAt: unknown; failed: boolean }>;
+  RECEIPT_OCR_ENGINE_URL?: string;
 };
 
 export function runtime(): AppRuntime {

@@ -465,6 +465,20 @@ export const attachments = sqliteTable(
   ],
 );
 
+export const receiptOcrJobs = sqliteTable('receipt_ocr_jobs', {
+  attachmentId: text('attachment_id').primaryKey().references(() => attachments.id, { onDelete: 'cascade' }),
+  status: text('status', { enum: ['pending', 'processing', 'retry', 'done', 'needs_review', 'cancelled'] }).notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  generation: integer('generation').notNull().default(1),
+  leaseToken: text('lease_token'),
+  leaseUntil: integer('lease_until'),
+  nextAttemptAt: integer('next_attempt_at').notNull(),
+  errorCode: text('error_code'),
+  confidence: text('confidence'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (table) => [index('idx_receipt_ocr_ready').on(table.status, table.nextAttemptAt, table.leaseUntil)]);
+
 export const guideReads = sqliteTable(
   'guide_reads',
   {

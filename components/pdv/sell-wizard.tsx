@@ -55,6 +55,11 @@ import {
   type PreparedMediaSelection,
 } from '@/lib/client-media';
 import { createOperationId } from '@/lib/client-operation-id';
+import {
+  PendingOperationError,
+  type RecoveryScope,
+} from '@/lib/client-operation-recovery';
+import { useRecoverableDraft } from '@/components/pdv/use-recoverable-draft';
 import { parseMoneyInput } from '@/lib/money';
 import { ReceiptReconciliationEditor } from '@/components/pdv/receipt-reconciliation-editor';
 import {
@@ -167,7 +172,9 @@ export function SellWizard({
   onCreateCustomer,
   unavailableSerials,
   resolveSerials,
+  recoveryScope,
 }: {
+  recoveryScope?: RecoveryScope;
   stagedSerial?: string;
   productsBySerial?: SaleProductLookup;
   customers?: SaleCustomer[];
@@ -233,6 +240,66 @@ export function SellWizard({
   const operationIdRef = useRef(createOperationId());
   const checkingSerialRef = useRef(false);
   const serialLookupGenerationRef = useRef(0);
+  const draftValue = useMemo(
+    () => ({
+      step,
+      customerId,
+      customer,
+      customerQuery,
+      pendingSerial,
+      pendingProduct,
+      photoFiles,
+      price,
+      items,
+      payments,
+      receiptFiles,
+      receiptValues,
+    }),
+    [
+      step,
+      customerId,
+      customer,
+      customerQuery,
+      pendingSerial,
+      pendingProduct,
+      photoFiles,
+      price,
+      items,
+      payments,
+      receiptFiles,
+      receiptValues,
+    ],
+  );
+  const draft = useRecoverableDraft({
+    scope: recoveryScope,
+    kind: 'sale',
+    operationId: operationIdRef,
+    value: draftValue,
+    empty: !customerId && !customerQuery && !items.length,
+    done: step === 'done',
+    restore: (value) => {
+      setStep(value.step);
+      setCustomerId(value.customerId);
+      setCustomer(value.customer);
+      setCustomerQuery(value.customerQuery);
+      setPendingSerial(value.pendingSerial);
+      setPendingProduct(value.pendingProduct);
+      setPhotoFiles(value.photoFiles);
+      setPrice(value.price);
+      setItems(value.items);
+      itemsRef.current = value.items;
+      setPayments(value.payments);
+      setReceiptFiles(value.receiptFiles);
+      setReceiptValues(value.receiptValues);
+      setAnnouncement('Rascunho recuperado. Confira os dados e continue.');
+    },
+    confirmed: () => {
+      setStep('done');
+      setSaving(false);
+      setSubmitError('');
+      completionSentRef.current = true;
+    },
+  });
 
   useEffect(
     () => () => {
@@ -631,11 +698,43 @@ export function SellWizard({
     );
   };
 
+  if (!draft.ready)
+    return (
+      <output className="block p-5 text-sm">Recuperando o andamento…</output>
+    );
+  if (draft.blocked)
+    return (
+      <div className="m-4 rounded-xl border p-5" role="alert">
+        <p>{draft.blocked}</p>
+        <Button className="mt-3" onClick={() => window.location.reload()}>
+          Reabrir com segurança
+        </Button>
+      </div>
+    );
+  if (draft.waiting)
+    return (
+      <div className="m-4 rounded-2xl border bg-card p-5">
+        <h2 className="font-bold">Venda aguardando confirmação</h2>
+        <p className="my-3 text-sm">
+          O envio está guardado neste aparelho. Não faça outra venda com os
+          mesmos aparelhos.
+        </p>
+        <Button
+          onClick={() => window.dispatchEvent(new Event('pdv:show-operations'))}
+        >
+          Acompanhar envio
+        </Button>
+      </div>
+    );
   return (
     <FlowFrame
       announcement={announcement}
       currentStep={STEP_INDEX[step]}
-      description={description}
+      description={
+        step !== 'done' && draft.label
+          ? `${description} ${draft.label}.`
+          : description
+      }
       eyebrow="Ponto de venda"
       steps={SALE_STEPS}
       title={step === 'done' ? 'Venda concluída' : 'Nova venda'}
@@ -837,6 +936,8 @@ export function SellWizard({
                 });
               } catch (error) {
                 completionSentRef.current = false;
+                if (error instanceof PendingOperationError)
+                  draft.setWaiting(true);
                 setSaving(false);
                 const message =
                   error instanceof Error

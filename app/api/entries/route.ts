@@ -197,6 +197,7 @@ export async function POST(request: Request) {
   let entryId: string | null = null;
   let storeId: string | null = null;
   let operationFingerprint: string | null = null;
+  let incomingAliases: string[] = [];
   try {
     assertSameOrigin(request);
     const session = await requireSession(request);
@@ -313,6 +314,7 @@ export async function POST(request: Request) {
       );
     }
     operationFingerprint = await entryFingerprint(productId, gtin14, serials);
+    incomingAliases = Array.from(new Set(serials.flatMap(serialAliases)));
     const replay = await findEntryCommit(db, session.storeId!, entryId);
     if (replay) {
       assertSameEntryOperation(
@@ -453,6 +455,7 @@ export async function POST(request: Request) {
              ON pc.product_id = p.id AND pc.store_id = p.store_id
            WHERE p.id = ? AND p.store_id = ? AND p.active = 1
              AND pc.code = ?
+             AND NOT EXISTS (SELECT 1 FROM inventory_units u WHERE u.store_id=p.store_id AND u.serial IN (SELECT value FROM json_each(?)))
            LIMIT 1`,
         )
         .bind(
@@ -464,6 +467,7 @@ export async function POST(request: Request) {
           productId,
           session.storeId,
           gtin14,
+          JSON.stringify(incomingAliases),
         ),
       ...inventoryStatements,
       ...attachmentStatements,
@@ -569,6 +573,22 @@ export async function POST(request: Request) {
       error instanceof Error &&
       /FOREIGN KEY constraint failed/i.test(error.message)
     ) {
+      if (storeId && incomingAliases.length) {
+        const duplicate = await runtime()
+          .DB.prepare(
+            'SELECT id FROM inventory_units WHERE store_id=? AND serial IN (SELECT value FROM json_each(?)) LIMIT 1',
+          )
+          .bind(storeId, JSON.stringify(incomingAliases))
+          .first();
+        if (duplicate)
+          return apiError(
+            new HttpError(
+              409,
+              'Um dos SNs já foi cadastrado em outra entrada.',
+              'SERIAL_EXISTS',
+            ),
+          );
+      }
       return apiError(
         new HttpError(
           409,

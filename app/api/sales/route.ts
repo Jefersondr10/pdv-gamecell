@@ -25,6 +25,7 @@ import {
 } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import { parseReceiptValues } from '@/lib/server/receipt-values';
+import { queueSaleReceipts } from '@/lib/server/receipt-ocr-jobs';
 import { parseSalesFilters, SALE_ALERT_SQL } from '@/lib/server/sales-filters';
 import {
   isValidAppleSerial,
@@ -668,6 +669,7 @@ export async function POST(request: Request) {
           session.storeId,
         ),
       ...attachmentStatements,
+      queueSaleReceipts(db, session.storeId!, saleId, now),
     ];
     statements.push(
       db

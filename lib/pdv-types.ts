@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.07-ranking-clientes-produtos-v14';
+export const GUIDE_VERSION = '2026.09.07-recuperacao-comprovantes-v15';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
@@ -266,6 +266,7 @@ export type UserRecord = {
 };
 
 export type BootstrapData = {
+  serverReceiptOcr: boolean;
   csrfToken: string;
   user: UserRecord & { photoUrl: string | null };
   store: { id: string; name: string; code: string };

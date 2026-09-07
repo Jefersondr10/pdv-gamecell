@@ -31,6 +31,11 @@ import {
   sumFileBytes,
 } from '@/lib/client-media';
 import { createOperationId } from '@/lib/client-operation-id';
+import {
+  PendingOperationError,
+  type RecoveryScope,
+} from '@/lib/client-operation-recovery';
+import { useRecoverableDraft } from '@/components/pdv/use-recoverable-draft';
 import type { ScanCandidate } from '@/lib/scanner';
 
 type EntryStep =
@@ -75,6 +80,7 @@ export type EntryCommitResult = {
 };
 
 type EntryWizardProps = {
+  recoveryScope?: RecoveryScope;
   existingTestSerials?: readonly string[];
   productsByCode?: Record<string, EntryProduct>;
   onConfirmEntry?: (
@@ -105,6 +111,7 @@ export function EntryWizard({
   productsByCode = {},
   onConfirmEntry,
   lookupSerials,
+  recoveryScope,
 }: EntryWizardProps) {
   const [step, setStep] = useState<EntryStep>('product-scan');
   const [commercialCode, setCommercialCode] = useState<ScanCandidate | null>(
@@ -133,6 +140,34 @@ export function EntryWizard({
     () => new Set(existingTestSerials),
     [existingTestSerials],
   );
+  const draftValue = useMemo(
+    () => ({ step, commercialCode, product, serials, photos }),
+    [step, commercialCode, product, serials, photos],
+  );
+  const draft = useRecoverableDraft({
+    scope: recoveryScope,
+    kind: 'entry',
+    operationId: operationIdRef,
+    value: draftValue,
+    empty: !commercialCode && !serials.length,
+    done: step === 'done',
+    restore: (value) => {
+      setStep(value.step);
+      setCommercialCode(value.commercialCode);
+      setProduct(value.product);
+      setSerials(value.serials);
+      serialsRef.current = value.serials;
+      setPhotos(value.photos);
+      setAnnouncement('Rascunho recuperado. Confira os dados e continue.');
+    },
+    confirmed: (result) => {
+      setSavedCount(result.added ?? serialsRef.current.length);
+      setStep('done');
+      setSaving(false);
+      setSubmitError('');
+      committedRef.current = true;
+    },
+  });
 
   useEffect(
     () => () => {
@@ -294,11 +329,42 @@ export function EntryWizard({
 
   const acceptSerial = (candidate: ScanCandidate) => addSerial(candidate);
 
+  if (!draft.ready)
+    return (
+      <output className="block p-5 text-sm">Recuperando o andamento…</output>
+    );
+  if (draft.blocked)
+    return (
+      <div className="m-4 rounded-xl border p-5" role="alert">
+        <p>{draft.blocked}</p>
+        <Button className="mt-3" onClick={() => window.location.reload()}>
+          Reabrir com segurança
+        </Button>
+      </div>
+    );
+  if (draft.waiting)
+    return (
+      <div className="m-4 rounded-2xl border bg-card p-5">
+        <h2 className="font-bold">Entrada aguardando confirmação</h2>
+        <p className="my-3 text-sm">
+          O envio está guardado neste aparelho. Não bipe os aparelhos novamente.
+        </p>
+        <Button
+          onClick={() => window.dispatchEvent(new Event('pdv:show-operations'))}
+        >
+          Acompanhar envio
+        </Button>
+      </div>
+    );
   return (
     <FlowFrame
       announcement={announcement}
       currentStep={STEP_INDEX[step]}
-      description={description}
+      description={
+        step !== 'done' && draft.label
+          ? `${description} ${draft.label}.`
+          : description
+      }
       eyebrow="Entrada de estoque"
       steps={ENTRY_STEPS}
       title={step === 'done' ? 'Entrada concluída' : 'Nova entrada'}
@@ -460,6 +526,8 @@ export function EntryWizard({
               };
             } catch (error) {
               committedRef.current = false;
+              if (error instanceof PendingOperationError)
+                draft.setWaiting(true);
               setSaving(false);
               const message =
                 error instanceof Error
