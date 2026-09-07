@@ -108,8 +108,22 @@ if (action === 'create') {
     environment: await transfer('objects', encrypt(await readFile(join(directory, '.env.runtime')))) };
   for (const row of db.prepare('SELECT r2_key AS key FROM attachments').all()) {
     const basename = hash(row.key);
-    const blob = await readFile(join(directory, 'objects', `${basename}.blob`));
     const metadata = JSON.parse(await readFile(join(directory, 'objects', `${basename}.json`), 'utf8'));
+    const referencePath = join(archive, `reference-${metadata.etag}.enc`);
+    let reference;
+    try { reference = JSON.parse(decrypt(await readFile(referencePath))); }
+    catch { reference = null; }
+    if (reference?.etag === metadata.etag && reference?.size === metadata.size && /^[a-f0-9]{64}$/.test(reference.object)) {
+      const existing = await fetch(`${config.origin}/api/system/vps-backup?kind=objects&hash=${reference.object}`, {
+        method: 'HEAD', headers: { authorization: `Bearer ${config.token}` }, signal: AbortSignal.timeout(30_000),
+      });
+      if (existing.ok) {
+        manifest.files.push({ basename, metadata, object: reference.object });
+        continue;
+      }
+      if (existing.status !== 404) throw new Error(`Off-site object check failed: ${existing.status}`);
+    }
+    const blob = await readFile(join(directory, 'objects', `${basename}.blob`));
     if (blob.length !== metadata.size || hash(blob) !== metadata.etag) throw new Error('Backup file integrity failed');
     const cachePath = join(archive, `object-${metadata.etag}.enc`);
     let encrypted;
@@ -120,7 +134,9 @@ if (action === 'create') {
     }
     catch (error) { if (error.code !== 'ENOENT') throw error; encrypted = encrypt(blob); await writeFile(cachePath, encrypted, { mode: 0o600 }); }
     // Reuse identical encrypted bytes so append-only off-site objects deduplicate.
-    manifest.files.push({ basename, metadata, object: await transfer('objects', encrypted) });
+    const object = await transfer('objects', encrypted);
+    await writeFile(referencePath, encrypt(Buffer.from(JSON.stringify({ etag: metadata.etag, size: metadata.size, object }))), { mode: 0o600 });
+    manifest.files.push({ basename, metadata, object });
   }
   db.close();
   const encrypted = encrypt(Buffer.from(JSON.stringify(manifest)));
