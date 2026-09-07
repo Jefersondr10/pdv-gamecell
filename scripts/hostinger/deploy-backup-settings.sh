@@ -18,9 +18,26 @@ test "$(grep -c '^PDV_IMAGE=' .env)" = 1
 test "$(sed -n 's/^PDV_IMAGE=//p' .env)" = "atacadoapple:$previous"
 # Pause only the timer during the short container replacement. Never start a backup.
 # A service already in progress is left alone, and this deployment aborts.
+rollback_needed=0
 cleanup() {
-  status=${1:-$?}
+  status=$1
   trap - EXIT
+  # Cleanup must reach timer restoration even if a rollback command fails.
+  set +e
+  if test "$status" -ne 0 && test "$rollback_needed" = 1; then
+    restored=0
+    if cp -p ".env.pre-$release" .env && docker compose -p atacadoapple --env-file .env up -d --no-deps app; then
+      for attempt in $(seq 1 50); do
+        if test "$(docker inspect --format '{{.State.Health.Status}}' atacadoapple-app)" = healthy && test "$(docker inspect --format '{{.Config.Image}}' atacadoapple-app)" = "atacadoapple:$previous"; then restored=1; break; fi
+        sleep 1
+      done
+    fi
+    if test "$restored" = 1; then
+      echo 'Previous app healthy; additive settings table and current data retained.'
+    else
+      echo 'Rollback health requires attention. Current data retained.'
+    fi
+  fi
   systemctl start atacadoapple-backup.timer || { echo 'Backup timer requires attention.'; exit 1; }
   exit "$status"
 }
@@ -33,20 +50,7 @@ test ! -e ".env.pre-$release"
 cp -p .env ".env.pre-$release"
 # Makes only an on-server online SQLite safety copy before additive SQL.
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-backup-alert-migration.mjs /data/pdv.sqlite
-rollback() {
-  trap 'cleanup "$?"' EXIT
-  cp -p ".env.pre-$release" .env
-  docker compose -p atacadoapple --env-file .env up -d --no-deps app
-  restored=0
-  for attempt in $(seq 1 50); do
-    if test "$(docker inspect --format '{{.State.Health.Status}}' atacadoapple-app)" = healthy; then restored=1; break; fi
-    sleep 1
-  done
-  test "$restored" = 1 || { echo 'Rollback health requires attention. Current data retained.'; exit 1; }
-  echo 'Previous app healthy; additive settings table and current data retained.'
-  exit 1
-}
-trap 'status=$?; if test "$status" -ne 0; then rollback; else cleanup "$status"; fi' EXIT
+rollback_needed=1
 sed -i "s/^PDV_IMAGE=.*/PDV_IMAGE=atacadoapple:$release/" .env
 docker compose -p atacadoapple --env-file .env up -d --no-deps app
 healthy=0
