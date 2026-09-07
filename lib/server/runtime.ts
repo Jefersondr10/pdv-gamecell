@@ -19,6 +19,7 @@ export type AppRuntime = {
   MIGRATION_EXPORT_TOKEN?: string;
   MIGRATION_EXPORT_EXPIRES_AT?: string;
   MIGRATION_READ_ONLY?: string;
+  VPS_BACKUP_TOKEN?: string;
 };
 
 export function runtime(): AppRuntime {

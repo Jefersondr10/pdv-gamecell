@@ -1,6 +1,7 @@
 import handler from 'vinext/server/fetch-handler';
 
 type WorkerEnvironment = {
+  APP_ORIGIN?: string;
   MIGRATION_TARGET_ORIGIN?: string;
   MIGRATION_PROXY_TOKEN?: string;
   MIGRATION_READ_ONLY?: string;
@@ -11,7 +12,8 @@ const worker = {
     const url = new URL(request.url);
     if (
       url.pathname.startsWith('/api/') &&
-      url.pathname !== '/api/system/migration-export'
+      url.pathname !== '/api/system/migration-export' &&
+      url.pathname !== '/api/system/vps-backup'
     ) {
       if (env.MIGRATION_TARGET_ORIGIN) {
         const target = new URL(env.MIGRATION_TARGET_ORIGIN);
@@ -39,6 +41,12 @@ const worker = {
         ])
           headers.delete(name);
         headers.set('x-pdv-proxy-token', env.MIGRATION_PROXY_TOKEN);
+        const publicOrigin = new URL(env.APP_ORIGIN ?? request.url);
+        headers.set('x-forwarded-host', publicOrigin.host);
+        headers.set('x-forwarded-proto', publicOrigin.protocol.replace(':', ''));
+        headers.delete('forwarded');
+        headers.delete('x-forwarded-for');
+        headers.delete('x-real-ip');
         headers.set(
           'x-pdv-client-ip',
           request.headers.get('cf-connecting-ip') ?? 'unknown',

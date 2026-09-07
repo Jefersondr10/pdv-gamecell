@@ -34,10 +34,11 @@ async function fetchExport(origin, body, path) {
   await rename(`${path}.tmp`, path);
   return bytes;
 }
-if (action === 'export') {
+if (action === 'export' || action === 'export-final') {
   const origin = new URL(targetArgument).origin;
   if (!origin.startsWith('https://') && !origin.includes('localhost')) throw new Error('HTTPS required');
   const manifest = JSON.parse(await fetchExport(origin, { action: 'manifest' }, join(directory, 'manifest.enc')));
+  if (action === 'export-final' && !manifest.readOnly) throw new Error('Production cutover requires a frozen source.');
   await mkdir(join(directory, 'tables'), { recursive: true, mode: 0o700 });
   await mkdir(join(directory, 'files'), { recursive: true, mode: 0o700 });
   const attachments = [];
@@ -63,13 +64,14 @@ if (action === 'export') {
   }
   await writeFile(join(directory, 'verification.json'), JSON.stringify({ capturedAt: manifest.capturedAt, readOnly: manifest.readOnly, files, tables: manifest.tables }, null, 2), { mode: 0o600 });
   console.log(`Verified ${files.length} attachments. Frozen snapshot: ${manifest.readOnly}`);
-} else if (action === 'import') {
+} else if (action === 'import' || action === 'import-candidate') {
   const target = resolve(targetArgument);
   await mkdir(target, { recursive: true, mode: 0o700 });
   try { await access(join(target, 'pdv.sqlite')); throw new Error('Refusing to overwrite an existing database. Use a NEW recovery directory.'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const manifest = JSON.parse(await decryptFile(join(directory, 'manifest.enc')));
   const verification = JSON.parse(await readFile(join(directory, 'verification.json'), 'utf8'));
+  if (action === 'import' && (!manifest.readOnly || !verification.readOnly)) throw new Error('Live import requires a frozen snapshot. Use import-candidate only for isolated tests.');
   if (verification.capturedAt !== manifest.capturedAt) throw new Error('Export verification does not match snapshot.');
   const db = new DatabaseSync(join(target, 'pdv.sqlite'));
   db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;');

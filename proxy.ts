@@ -25,7 +25,8 @@ export function proxy(request: NextRequest) {
   if (
     environment.MIGRATION_READ_ONLY === '1' &&
     request.nextUrl.pathname.startsWith('/api/') &&
-    request.nextUrl.pathname !== '/api/system/migration-export'
+    request.nextUrl.pathname !== '/api/system/migration-export' &&
+    request.nextUrl.pathname !== '/api/system/vps-backup'
   ) {
     return NextResponse.json(
       {

@@ -1,0 +1,36 @@
+# Append these routes to the existing gateway; preserve every unrelated route.
+# PDV_PROXY_TOKEN is substituted privately when preparing the gateway config.
+srv1939926.hstgr.cloud {
+  @authorized header X-Pdv-Proxy-Token ${PDV_PROXY_TOKEN}
+  handle @authorized {
+    request_body {
+      max_size 52MB
+    }
+    reverse_proxy atacadoapple-app:3000 {
+      header_up Host atacadoapple.nucleodeoperacao.com.br
+      header_up X-Forwarded-Host atacadoapple.nucleodeoperacao.com.br
+      header_up X-Forwarded-Proto https
+      header_up CF-Connecting-IP {http.request.header.X-Pdv-Client-Ip}
+      header_up -X-Pdv-Proxy-Token
+      header_up -X-Pdv-Client-Ip
+    }
+  }
+  handle {
+    respond "Forbidden" 403
+  }
+}
+
+atacadoapple.nucleodeoperacao.com.br {
+  encode zstd gzip
+  request_body {
+    max_size 52MB
+  }
+  reverse_proxy atacadoapple-app:3000 {
+    header_up Host atacadoapple.nucleodeoperacao.com.br
+    header_up X-Forwarded-Host atacadoapple.nucleodeoperacao.com.br
+    header_up X-Forwarded-Proto https
+    header_up CF-Connecting-IP {remote_host}
+    header_up -X-Pdv-Proxy-Token
+    header_up -X-Pdv-Client-Ip
+  }
+}
