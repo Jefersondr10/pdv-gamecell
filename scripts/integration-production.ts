@@ -1537,6 +1537,43 @@ const isolatedHistory = await call(
 assert.deepEqual(isolatedHistory.body.items, []);
 console.log('Client history and all three rankings integration passed.');
 
+// Overview reads metadata only and compares receipts to payments, not prices.
+await call('/api/overview?period=all', { expected: 401 });
+const overview = await call('/api/overview?period=all', {
+  cookie: staffCookie,
+});
+const overviewTotals = overview.body.totals as {
+  saleCount: number;
+  receivedCents: number;
+  cashCents: number;
+  receiptCents: number;
+  receiptCount: number;
+  pendingCount: number;
+  missingCount: number;
+};
+assert.equal(overviewTotals.saleCount, 1);
+assert.equal(overviewTotals.receivedCents, 500_000);
+assert.equal(overviewTotals.cashCents, 500_000);
+assert.equal(overviewTotals.receiptCents, 0);
+assert.equal(overviewTotals.receiptCount, 1);
+assert.equal(overviewTotals.pendingCount, 1);
+const overviewItems = overview.body.items as {
+  id: string;
+  receipts: { id: string; url: string; receiptAmountCents: number | null }[];
+}[];
+assert.equal(overviewItems[0].id, activeSaleId);
+assert.equal(overviewItems[0].receipts[0].receiptAmountCents, null);
+assert.ok(overviewItems[0].receipts[0].url.startsWith('/api/files/'));
+assert.equal(JSON.stringify(overview.body).includes('r2Key'), false);
+assert.equal(JSON.stringify(overview.body).includes('base64'), false);
+await call('/api/overview?period=all&cursor=invalid', {
+  cookie: staffCookie,
+  expected: 400,
+});
+console.log(
+  'Overview integration: completed sales only, paid/cash/receipt totals, pending files, lightweight metadata and operator access passed.',
+);
+
 const rotatedCodesResult = await call('/api/me/recovery-codes', {
   method: 'POST',
   cookie: ownerCookie,
@@ -1754,6 +1791,50 @@ assert.equal(isolatedLookup.body.found, false);
 const isolatedOcr = await call(`/api/sales/${activeSaleId}/receipt-ocr`, {
   cookie: secondShopCookie,
 });
+const isolatedOverview = await call('/api/overview?period=all', {
+  cookie: secondShopCookie,
+});
+assert.equal(
+  (isolatedOverview.body.totals as { saleCount: number }).saleCount,
+  0,
+);
+assert.deepEqual(isolatedOverview.body.items, []);
+await call(overviewItems[0].receipts[0].url, {
+  cookie: secondShopCookie,
+  expected: 404,
+});
+for (const amountCents of [500_000, 499_999]) {
+  await call(`/api/sales/${activeSaleId}/receipt-values`, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    headers: {
+      'content-type': 'application/json',
+      'x-csrf-token': String(finalSession.body.csrfToken),
+    },
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      receipts: [
+        { id: overviewItems[0].receipts[0].id, amountCents, source: 'manual' },
+      ],
+    }),
+  });
+  const refreshedOverview = await call('/api/overview?period=all', {
+    cookie: ownerCookie,
+  });
+  const refreshedTotals = refreshedOverview.body.totals as {
+    receiptCents: number;
+    receivedCents: number;
+    pendingCount: number;
+    divergentCount: number;
+  };
+  assert.equal(refreshedTotals.receiptCents, amountCents);
+  assert.equal(refreshedTotals.receivedCents, 500_000);
+  assert.equal(refreshedTotals.pendingCount, 0);
+  assert.equal(refreshedTotals.divergentCount, amountCents === 500_000 ? 0 : 1);
+}
+console.log(
+  'Overview refresh: receipt edits immediately update totals and one-cent differences; tenant files remain protected.',
+);
 assert.deepEqual(isolatedOcr.body.receipts, []);
 
 // Optional real-engine proof, ONLY on synthetic integration data. No browser OCR.

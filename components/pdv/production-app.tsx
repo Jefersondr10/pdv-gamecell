@@ -7,6 +7,7 @@ import {
   ChevronDown,
   CircleUserRound,
   History,
+  LayoutDashboard,
   LoaderCircle,
   LogOut,
   Package,
@@ -98,6 +99,13 @@ const RankingProductionView = dynamic(
     ),
   { loading: ViewLoading },
 );
+const OverviewProductionView = dynamic(
+  () =>
+    import('@/components/pdv/views/overview-production-view').then(
+      (module) => module.OverviewProductionView,
+    ),
+  { loading: ViewLoading },
+);
 const SettingsProductionView = dynamic(
   () =>
     import('@/components/pdv/views/settings-production-view').then(
@@ -132,6 +140,7 @@ type View =
   | 'stock'
   | 'sales'
   | 'ranking'
+  | 'overview'
   | 'catalog'
   | 'entries'
   | 'settings';
@@ -168,6 +177,12 @@ const navigation: Array<{
   { view: 'sell', label: 'Vender', short: 'Venda', icon: ShoppingBag },
   { view: 'entry', label: 'Nova entrada', short: 'Entrada', icon: Package },
   { view: 'ranking', label: 'Ranking', short: 'Ranking', icon: Trophy },
+  {
+    view: 'overview',
+    label: 'Visão geral',
+    short: 'Visão geral',
+    icon: LayoutDashboard,
+  },
   { view: 'stock', label: 'Estoque', short: 'Estoque', icon: Warehouse },
   { view: 'sales', label: 'Vendas', short: 'Vendas', icon: History },
   {
@@ -818,6 +833,15 @@ function CloudPdv({
             )}
             {activeView === 'entries' && (
               <EntryHistoryView key={`entries-${run}`} />
+            )}
+            {activeView === 'overview' && (
+              <OverviewProductionView
+                key={`overview-${run}`}
+                onOpenSale={(saleId) => {
+                  setSaleToOpen(saleId);
+                  changeView('sales');
+                }}
+              />
             )}
             {activeView === 'settings' && (
               <SettingsProductionView
@@ -1491,6 +1515,16 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="Visão geral: conferir comprovantes">
+            No menu da loja, abra Visão geral e escolha o período pela data da
+            venda. Compare o pago informado com os valores dos comprovantes,
+            separados por venda. Toque em um arquivo para abrir a foto ou PDF,
+            passe para o próximo ou abra a venda para corrigir dados. Valores
+            ainda não identificados ficam pendentes; anexos só são carregados ao
+            abrir. Vendas canceladas não entram. Pagamentos em dinheiro são
+            identificados e podem não ter comprovante. Esta conferência é
+            documental: não confirma crédito na conta bancária.
+          </GuideStep>
           <GuideStep number="Novo" title="iPhone 15 e cores revisadas">
             O catálogo padrão inclui agora o iPhone 15 base, com cinco cores e
             opções de 128, 256 e 512 GB. Não inclui 15 Plus, Pro ou Pro Max.

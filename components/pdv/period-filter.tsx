@@ -36,6 +36,7 @@ export function PeriodFilter({
   onPeriod,
   onDay,
   onMonth,
+  label = 'ranking',
 }: {
   period: SalesPeriod;
   day: string;
@@ -43,6 +44,7 @@ export function PeriodFilter({
   onPeriod: (value: SalesPeriod) => void;
   onDay: (value: string) => void;
   onMonth: (value: string) => void;
+  label?: string;
 }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -54,7 +56,7 @@ export function PeriodFilter({
       >
         <SelectTrigger
           size="lg"
-          aria-label="Período do ranking"
+          aria-label={`Período: ${label}`}
           className="h-11 min-w-40 flex-1 rounded-xl font-bold"
         >
           <SelectValue>
@@ -75,7 +77,7 @@ export function PeriodFilter({
       </Select>
       {period === 'day' && (
         <Input
-          aria-label="Dia do ranking"
+          aria-label={`Dia: ${label}`}
           className="h-11 w-full sm:w-44"
           type="date"
           value={day}
@@ -84,7 +86,7 @@ export function PeriodFilter({
       )}
       {period === 'month' && (
         <Input
-          aria-label="Mês do ranking"
+          aria-label={`Mês: ${label}`}
           className="h-11 w-full sm:w-44"
           type="month"
           value={month}

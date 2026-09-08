@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.07-ranking-cadastro-v18';
+export const GUIDE_VERSION = '2026.09.07-visao-geral-v19';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
