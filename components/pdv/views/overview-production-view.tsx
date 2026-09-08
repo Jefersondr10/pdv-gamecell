@@ -74,6 +74,7 @@ export function OverviewProductionView({
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
+  const paginationBusy = useRef(false);
   const params = new URLSearchParams({
     period,
     day,
@@ -95,7 +96,10 @@ export function OverviewProductionView({
     } catch (error) {
       if (!request.signal.aborted) setError(messageOf(error));
     } finally {
-      if (!request.signal.aborted) setLoading(false);
+      if (!request.signal.aborted) {
+        paginationBusy.current = false;
+        setLoading(false);
+      }
     }
   }, [params]);
   useEffect(() => {
@@ -114,6 +118,7 @@ export function OverviewProductionView({
     };
     window.addEventListener('pdv:sales-changed', changed);
     window.addEventListener('online', changed);
+    window.addEventListener('focus', changed);
     document.addEventListener('visibilitychange', visible);
     return () => {
       clearTimeout(initial);
@@ -121,6 +126,7 @@ export function OverviewProductionView({
       controller.current?.abort();
       window.removeEventListener('pdv:sales-changed', changed);
       window.removeEventListener('online', changed);
+      window.removeEventListener('focus', changed);
       document.removeEventListener('visibilitychange', visible);
     };
   }, [load]);
@@ -419,7 +425,12 @@ export function OverviewProductionView({
                 <Button
                   variant="outline"
                   disabled={!pageIndex || loading}
-                  onClick={() => setCursors((current) => current.slice(0, -1))}
+                  onClick={() => {
+                    if (paginationBusy.current) return;
+                    paginationBusy.current = true;
+                    setLoading(true);
+                    setCursors((current) => current.slice(0, -1));
+                  }}
                 >
                   <ArrowLeft className="size-4" />
                   Anterior
@@ -431,8 +442,11 @@ export function OverviewProductionView({
                   variant="outline"
                   disabled={page?.nextCursor == null || loading}
                   onClick={() => {
-                    if (page?.nextCursor != null)
+                    if (page?.nextCursor != null && !paginationBusy.current) {
+                      paginationBusy.current = true;
+                      setLoading(true);
                       setCursors((current) => [...current, page.nextCursor!]);
+                    }
                   }}
                 >
                   Próxima
