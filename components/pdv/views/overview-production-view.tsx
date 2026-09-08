@@ -62,7 +62,7 @@ function receiptState(receipt: Receipt) {
 export function OverviewProductionView({
   onOpenSale,
 }: {
-  onOpenSale: (id: string) => void;
+  onOpenSale?: (id: string) => void;
 }) {
   const [period, setPeriod] = useState<SalesPeriod>('today');
   const [day, setDay] = useState(localDateKey);
@@ -343,7 +343,8 @@ export function OverviewProductionView({
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => onOpenSale(sale.id)}
+                      disabled={!onOpenSale}
+                      onClick={() => onOpenSale?.(sale.id)}
                     >
                       Ver venda
                       <ArrowRight className="size-3.5" />
@@ -523,7 +524,10 @@ export function OverviewProductionView({
                     <ArrowRight className="size-4" />
                   </Button>
                 </div>
-                <Button onClick={() => onOpenSale(current.sale.id)}>
+                <Button
+                  disabled={!onOpenSale}
+                  onClick={() => onOpenSale?.(current.sale.id)}
+                >
                   Ver venda
                   <ArrowRight className="size-4" />
                 </Button>

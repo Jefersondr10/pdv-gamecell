@@ -44,6 +44,13 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
@@ -103,6 +110,7 @@ export type SaleProductLookup = Record<string, SaleProduct>;
 
 export type SaleCustomer = { id: string; name: string; phone?: string | null };
 export type SalePixAccount = { id: string; name: string };
+type SaleSeller = { id: string; displayName: string };
 
 type PaymentMethod = 'pix' | 'cash';
 
@@ -117,6 +125,7 @@ export type CompletedSalePayload = {
   operationId: string;
   customerId: string;
   customer: string;
+  sellerUserId?: string;
   items: Array<{
     serial: string;
     product: string;
@@ -168,6 +177,8 @@ export function SellWizard({
   productsBySerial = {},
   customers = [],
   pixAccounts = [],
+  sellers = [],
+  defaultSellerId = '',
   onComplete,
   onCreateCustomer,
   unavailableSerials,
@@ -179,6 +190,8 @@ export function SellWizard({
   productsBySerial?: SaleProductLookup;
   customers?: SaleCustomer[];
   pixAccounts?: SalePixAccount[];
+  sellers?: SaleSeller[];
+  defaultSellerId?: string;
   onComplete?: (sale: CompletedSalePayload) => void | Promise<void>;
   onCreateCustomer?: (input: {
     operationId: string;
@@ -202,6 +215,7 @@ export function SellWizard({
   const [customerId, setCustomerId] = useState('');
   const [customer, setCustomer] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
+  const [sellerUserId, setSellerUserId] = useState(defaultSellerId);
   const [pendingSerial, setPendingSerial] = useState<ScanCandidate | null>(
     initialProduct ? initialSerial : null,
   );
@@ -246,6 +260,7 @@ export function SellWizard({
       customerId,
       customer,
       customerQuery,
+      sellerUserId,
       pendingSerial,
       pendingProduct,
       photoFiles,
@@ -260,6 +275,7 @@ export function SellWizard({
       customerId,
       customer,
       customerQuery,
+      sellerUserId,
       pendingSerial,
       pendingProduct,
       photoFiles,
@@ -282,6 +298,7 @@ export function SellWizard({
       setCustomerId(value.customerId);
       setCustomer(value.customer);
       setCustomerQuery(value.customerQuery);
+      setSellerUserId(value.sellerUserId ?? defaultSellerId);
       setPendingSerial(value.pendingSerial);
       setPendingProduct(value.pendingProduct);
       setPhotoFiles(value.photoFiles);
@@ -351,6 +368,7 @@ export function SellWizard({
     setCustomerId('');
     setCustomer('');
     setCustomerQuery('');
+    setSellerUserId(defaultSellerId);
     setPendingSerial(null);
     setPendingProduct(null);
     setPhotoFiles([]);
@@ -898,6 +916,10 @@ export function SellWizard({
       {step === 'review' && (
         <SaleReview
           customer={customer}
+          sellers={sellers}
+          sellerUserId={sellerUserId}
+          defaultSellerId={defaultSellerId}
+          onSellerChange={setSellerUserId}
           error={submitError}
           items={items}
           onEditItems={() => {
@@ -906,6 +928,15 @@ export function SellWizard({
           }}
           onBack={() => setStep('receipt')}
           onConfirm={async () => {
+            if (
+              defaultSellerId &&
+              !sellers.some((seller) => seller.id === sellerUserId)
+            ) {
+              setSubmitError(
+                'Selecione um vendedor ativo da loja antes de finalizar.',
+              );
+              return;
+            }
             if (!completionSentRef.current) {
               completionSentRef.current = true;
               setSaving(true);
@@ -915,6 +946,7 @@ export function SellWizard({
                   operationId: operationIdRef.current,
                   customerId,
                   customer,
+                  sellerUserId: sellerUserId || undefined,
                   items: items.map((item) => ({
                     serial: item.serial.normalizedValue,
                     product: item.product,
@@ -2106,6 +2138,10 @@ function ReceiptStage({
 
 function SaleReview({
   customer,
+  sellers,
+  sellerUserId,
+  defaultSellerId,
+  onSellerChange,
   error,
   items,
   payments,
@@ -2120,6 +2156,10 @@ function SaleReview({
   saving,
 }: {
   customer: string;
+  sellers: SaleSeller[];
+  sellerUserId: string;
+  defaultSellerId: string;
+  onSellerChange: (id: string) => void;
   error: string;
   items: SaleItem[];
   payments: SalePayment[];
@@ -2138,6 +2178,58 @@ function SaleReview({
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
         <div className="mx-auto max-w-3xl">
+          {defaultSellerId && (
+            <div className="mb-4 rounded-2xl border bg-background p-3 sm:p-4">
+              <label
+                className="mb-2 flex items-center gap-2 text-sm font-bold"
+                htmlFor="sale-seller"
+              >
+                <UserRound className="size-4 text-primary" /> Vendedor da venda
+              </label>
+              <Select
+                disabled={saving}
+                items={sellers.map((seller) => ({
+                  value: seller.id,
+                  label: `${seller.displayName}${seller.id === defaultSellerId ? ' (você)' : ''}`,
+                }))}
+                value={
+                  sellers.some((seller) => seller.id === sellerUserId)
+                    ? sellerUserId
+                    : null
+                }
+                onValueChange={(value) => {
+                  if (value) onSellerChange(value);
+                }}
+              >
+                <SelectTrigger
+                  id="sale-seller"
+                  size="lg"
+                  className="w-full rounded-xl text-base font-semibold"
+                >
+                  <SelectValue placeholder="Selecione um vendedor ativo" />
+                </SelectTrigger>
+                <SelectContent
+                  alignItemWithTrigger={false}
+                  className="rounded-xl p-1"
+                >
+                  {sellers.map((seller) => (
+                    <SelectItem
+                      key={seller.id}
+                      value={seller.id}
+                      className="min-h-11 rounded-lg px-3 text-base font-medium"
+                    >
+                      {seller.displayName}
+                      {seller.id === defaultSellerId ? ' (você)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-2 text-sm text-muted-foreground">
+                A venda contará para este vendedor. O sistema também registra
+                quem finalizou.
+              </p>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-3">
             <SummaryTile
               label="Cliente"

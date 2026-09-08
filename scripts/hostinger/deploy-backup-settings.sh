@@ -49,7 +49,7 @@ docker exec atacadoapple-app node --input-type=module -e 'import fs from "node:f
 test ! -e ".env.pre-$release"
 cp -p .env ".env.pre-$release"
 # Makes only an on-server online SQLite safety copy before additive SQL.
-docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-backup-alert-migration.mjs /data/pdv.sqlite
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-user-permissions-migration.mjs /data/pdv.sqlite
 rollback_needed=1
 sed -i "s/^PDV_IMAGE=.*/PDV_IMAGE=atacadoapple:$release/" .env
 docker compose -p atacadoapple --env-file .env up -d --no-deps app

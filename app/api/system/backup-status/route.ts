@@ -5,7 +5,7 @@ import { backupStatus } from '@/lib/backup-status';
 export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
-    if (!['owner', 'admin'].includes(session.role!))
+    if (!session.permissions.includes('backup'))
       throw new HttpError(403, 'Acesso restrito à administração.', 'FORBIDDEN');
     const raw = await runtime().READ_BACKUP_STATUS?.();
     return json(backupStatus(raw?.successAt, Boolean(raw?.failed)));

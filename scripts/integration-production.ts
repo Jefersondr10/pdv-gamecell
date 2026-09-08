@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { defaultPermissions, type Permission } from '../lib/permissions.ts';
 import {
   SYSTEM_CATALOG_PRODUCTS,
   SYSTEM_CATALOG_VERSION,
@@ -2142,5 +2143,408 @@ if (!primaryStoreToken) {
 }
 console.log(
   'Public password registration: no activation token, recovery codes, weak password and duplicate rejection, same-origin and creation rate limits passed.',
+);
+// New access controls and seller attribution use only this isolated fixture shop.
+const accessOwnerHeaders = {
+  'content-type': 'application/json',
+  'x-csrf-token': String(finalSession.body.csrfToken),
+};
+const staffActor = String((changedStaffSession.body.user as { id: string }).id);
+const defaultStaffPermissions = defaultPermissions('operator');
+const permissionRoster = await call('/api/bootstrap', { cookie: staffCookie });
+assert.deepEqual(permissionRoster.body.users, []);
+assert.ok(
+  (permissionRoster.body.sellers as { id: string }[]).some(
+    (row) => row.id === ownerActor,
+  ),
+);
+assert.ok(
+  (permissionRoster.body.sellers as object[]).every(
+    (row) => Object.keys(row).sort().join(',') === 'displayName,id',
+  ),
+);
+const foreignActor = String(
+  (secondCatalogSession.body.user as { id: string }).id,
+);
+assert.ok(
+  !(permissionRoster.body.sellers as { id: string }[]).some(
+    (row) => row.id === foreignActor,
+  ),
+);
+await call(`/api/products/${productId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: accessOwnerHeaders,
+  body: JSON.stringify({ active: true }),
+});
+const attributionEntry = new FormData();
+attributionEntry.set(
+  'payload',
+  JSON.stringify({
+    ...entryPayload,
+    operationId: crypto.randomUUID(),
+    serials: ['J2SELL0001', 'J2SELL0002', 'J2SELL0003'],
+  }),
+);
+attributionEntry.append('photos', tinyPhoto(), 'teste-vendedores.png');
+await call('/api/entries', {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': String(finalSession.body.csrfToken) },
+  body: attributionEntry,
+  expected: 201,
+});
+const attributionId = crypto.randomUUID();
+const attributionPayload = {
+  operationId: attributionId,
+  customerId: staffClientId,
+  sellerUserId: ownerActor,
+  items: [{ serial: 'J2SELL0001', priceCents: 123400 }],
+  payments: [],
+};
+const sellerForm = (payload: unknown, photo = true) => {
+  const form = new FormData();
+  form.set('payload', JSON.stringify(payload));
+  if (photo) form.append('itemPhotos:0', tinyPhoto(), 'teste-venda.png');
+  return form;
+};
+for (const sellerUserId of [foreignActor, crypto.randomUUID()]) {
+  const denied = await call('/api/sales', {
+    method: 'POST',
+    cookie: staffCookie,
+    headers: { 'x-csrf-token': changedStaffCsrf },
+    body: sellerForm({ ...attributionPayload, sellerUserId }),
+    expected: 409,
+  });
+  assert.equal(denied.body.code, 'SELLER_INVALID');
+}
+const attribution = await call('/api/sales', {
+  method: 'POST',
+  cookie: staffCookie,
+  headers: { 'x-csrf-token': changedStaffCsrf },
+  body: sellerForm(attributionPayload),
+  expected: 201,
+});
+assert.equal(attribution.body.id, attributionId);
+assert.equal(
+  (
+    await call('/api/sales', {
+      method: 'POST',
+      cookie: staffCookie,
+      headers: { 'x-csrf-token': changedStaffCsrf },
+      body: sellerForm(attributionPayload, false),
+    })
+  ).body.replayed,
+  true,
+);
+const changedSeller = await call('/api/sales', {
+  method: 'POST',
+  cookie: staffCookie,
+  headers: { 'x-csrf-token': changedStaffCsrf },
+  body: sellerForm({ ...attributionPayload, sellerUserId: staffActor }, false),
+  expected: 409,
+});
+assert.equal(changedSeller.body.code, 'OPERATION_ALREADY_USED');
+const creditedSale = await call(
+  `/api/sales?period=all&saleId=${attributionId}`,
+  { cookie: ownerCookie },
+);
+assert.equal(
+  (creditedSale.body.items as { sellerName: string }[])[0].sellerName,
+  'Proprietário Integração',
+);
+assert.equal(
+  (
+    await call(
+      `/api/operations?kind=sale&id=${attributionId}&actor=${staffActor}`,
+      { cookie: staffCookie },
+    )
+  ).body.found,
+  true,
+);
+assert.equal(
+  (
+    await call(
+      `/api/operations?kind=sale&id=${attributionId}&actor=${ownerActor}`,
+      { cookie: ownerCookie },
+    )
+  ).body.found,
+  false,
+);
+const setStaffPermissions = async (
+  permissions: Permission[],
+  expectedPermissions: Permission[],
+) =>
+  call(`/api/users/${staffActor}`, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    headers: accessOwnerHeaders,
+    body: JSON.stringify({ permissions, expectedPermissions }),
+  });
+const loginAccessStaff = async () => {
+  const login = await call('/api/auth/login', {
+    method: 'POST',
+    ...jsonBody({
+      mode: 'staff',
+      storeCode: ownerPayload.storeCode,
+      username: `operador-${runId}`,
+      password: 'Pessoal67890',
+    }),
+  });
+  const cookie = sessionCookie(login.response);
+  const state = await call('/api/auth/session', { cookie });
+  return {
+    cookie,
+    headers: {
+      'content-type': 'application/json',
+      'x-csrf-token': String(state.body.csrfToken),
+    },
+  };
+};
+await setStaffPermissions(['sales'], defaultStaffPermissions);
+await call('/api/bootstrap', { cookie: staffCookie, expected: 401 });
+let accessStaff = await loginAccessStaff();
+let restrictedBootstrap = (await call('/api/bootstrap', accessStaff)).body;
+assert.deepEqual(
+  (restrictedBootstrap.user as { permissions: string[] }).permissions,
+  ['sales'],
+);
+for (const key of ['users', 'sellers', 'products', 'clients', 'pixAccounts'])
+  assert.deepEqual(restrictedBootstrap[key], []);
+await call('/api/sales?period=all', accessStaff);
+for (const path of [
+  '/api/inventory',
+  '/api/inventory/lookup?serial=J2SELL0002',
+  '/api/entries',
+  '/api/rankings',
+  '/api/overview',
+  '/api/system/backup-status',
+])
+  await call(path, { ...accessStaff, expected: 403 });
+for (const [path, method] of [
+  ['/api/sales', 'POST'],
+  ['/api/entries', 'POST'],
+  ['/api/clients', 'POST'],
+  ['/api/products', 'POST'],
+  ['/api/users', 'POST'],
+  ['/api/pix-accounts', 'POST'],
+  ['/api/order-statuses', 'POST'],
+  [`/api/sales/${attributionId}/payments`, 'POST'],
+  [`/api/sales/${attributionId}/payments`, 'PATCH'],
+  [`/api/sales/${attributionId}/cancel`, 'POST'],
+  [`/api/sales/${attributionId}/attachments`, 'POST'],
+  [`/api/sales/${attributionId}/receipt-values`, 'PATCH'],
+  [`/api/sales/${attributionId}/order-status`, 'PATCH'],
+  [`/api/sales/${attributionId}/receipt-ocr`, 'POST'],
+  [`/api/products/${productId}`, 'PATCH'],
+  [`/api/clients/${staffClientId}`, 'PATCH'],
+  [`/api/pix-accounts/${pixId}`, 'PATCH'],
+])
+  await call(path, { ...accessStaff, method, body: '{}', expected: 403 });
+// Revoking sale creation must not hide a committed operation from its true actor.
+assert.equal(
+  (
+    await call(
+      `/api/operations?kind=sale&id=${attributionId}&actor=${staffActor}`,
+      accessStaff,
+    )
+  ).body.found,
+  true,
+);
+await call(`/api/users/${staffActor}`, {
+  ...accessStaff,
+  method: 'PATCH',
+  body: JSON.stringify({
+    permissions: defaultStaffPermissions,
+    expectedPermissions: ['sales'],
+  }),
+  expected: 403,
+});
+await call(`/api/users/${ownerActor}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: accessOwnerHeaders,
+  body: JSON.stringify({ permissions: [] }),
+  expected: 400,
+});
+await call(`/api/users/${foreignActor}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: accessOwnerHeaders,
+  body: JSON.stringify({ permissions: [], expectedPermissions: [] }),
+  expected: 404,
+});
+await call(`/api/users/${staffActor}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: accessOwnerHeaders,
+  body: JSON.stringify({
+    permissions: ['sales.cancel'],
+    expectedPermissions: ['sales'],
+  }),
+  expected: 400,
+});
+await call(`/api/users/${staffActor}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: accessOwnerHeaders,
+  body: JSON.stringify({
+    permissions: ['unknown'],
+    expectedPermissions: ['sales'],
+  }),
+  expected: 400,
+});
+await call(`/api/users/${staffActor}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: accessOwnerHeaders,
+  body: JSON.stringify({
+    permissions: [],
+    expectedPermissions: defaultStaffPermissions,
+  }),
+  expected: 409,
+});
+await setStaffPermissions(['sell'], ['sales']);
+accessStaff = await loginAccessStaff();
+restrictedBootstrap = (await call('/api/bootstrap', accessStaff)).body;
+assert.deepEqual(
+  (restrictedBootstrap.sellers as { id: string }[]).map((row) => row.id),
+  [staffActor],
+);
+assert.ok(
+  (restrictedBootstrap.pixAccounts as { details: string | null }[]).every(
+    (row) => row.details === null,
+  ),
+);
+await call('/api/sales', {
+  ...accessStaff,
+  method: 'POST',
+  body: sellerForm({
+    ...attributionPayload,
+    operationId: crypto.randomUUID(),
+    items: [{ serial: 'J2SELL0002', priceCents: 100 }],
+  }),
+  headers: { 'x-csrf-token': accessStaff.headers['x-csrf-token'] },
+  expected: 403,
+});
+const selfSale = await call('/api/sales', {
+  ...accessStaff,
+  method: 'POST',
+  body: sellerForm({
+    ...attributionPayload,
+    operationId: crypto.randomUUID(),
+    sellerUserId: undefined,
+    items: [{ serial: 'J2SELL0002', priceCents: 100 }],
+  }),
+  headers: { 'x-csrf-token': accessStaff.headers['x-csrf-token'] },
+  expected: 201,
+});
+assert.equal(
+  (
+    await call(`/api/sales?period=all&saleId=${String(selfSale.body.id)}`, {
+      cookie: ownerCookie,
+    })
+  ).body.items instanceof Array,
+  true,
+);
+const savedSalePhoto = (
+  creditedSale.body.items as { items: { photos: { id: string }[] }[] }[]
+)[0].items[0].photos[0];
+await call(`/api/files/${savedSalePhoto.id}`, {
+  ...accessStaff,
+  expected: 403,
+});
+await setStaffPermissions(['finance', 'finance.manage'], ['sell']);
+accessStaff = await loginAccessStaff();
+const accountBefore = (
+  (await call('/api/bootstrap', { cookie: ownerCookie })).body.pixAccounts as {
+    id: string;
+    name: string;
+    details: string | null;
+  }[]
+).find((row) => row.id === pixId)!;
+const historicalPayments = (
+  (
+    await call(`/api/sales?period=all&saleId=${saleId}`, {
+      cookie: ownerCookie,
+    })
+  ).body.items as { payments: unknown[] }[]
+)[0].payments;
+await call(`/api/pix-accounts/${pixId}`, {
+  ...accessStaff,
+  method: 'PATCH',
+  body: JSON.stringify({
+    name: 'Conta editada no teste',
+    details: 'Titular teste',
+    active: false,
+  }),
+});
+const accountAfter = (
+  (await call('/api/bootstrap', accessStaff)).body.pixAccounts as {
+    id: string;
+    active: boolean;
+    name: string;
+  }[]
+).find((row) => row.id === pixId)!;
+assert.equal(accountAfter.active, false);
+assert.equal(accountAfter.name, 'Conta editada no teste');
+assert.deepEqual(
+  (
+    (
+      await call(`/api/sales?period=all&saleId=${saleId}`, {
+        cookie: ownerCookie,
+      })
+    ).body.items as { payments: unknown[] }[]
+  )[0].payments,
+  historicalPayments,
+);
+await call(`/api/pix-accounts/${pixId}`, {
+  ...accessStaff,
+  method: 'PATCH',
+  body: JSON.stringify({
+    name: accountBefore.name,
+    details: accountBefore.details,
+    active: true,
+  }),
+});
+await setStaffPermissions([], ['finance', 'finance.manage']);
+accessStaff = await loginAccessStaff();
+restrictedBootstrap = (await call('/api/bootstrap', accessStaff)).body;
+for (const key of [
+  'products',
+  'clients',
+  'pixAccounts',
+  'orderStatuses',
+  'users',
+  'sellers',
+])
+  assert.deepEqual(restrictedBootstrap[key], []);
+await call(`/api/files/${savedSalePhoto.id}`, {
+  ...accessStaff,
+  expected: 403,
+});
+await setStaffPermissions(['clients', 'clients.history'], []);
+accessStaff = await loginAccessStaff();
+await call('/api/sales?period=all', { ...accessStaff, expected: 403 });
+const restrictedHistory = (
+  await call(`/api/sales?period=all&customerId=${staffClientId}`, accessStaff)
+).body.items as { customerId: string; items: object[] }[];
+assert.ok(restrictedHistory.length);
+for (const row of restrictedHistory) {
+  assert.equal(row.customerId, staffClientId);
+  for (const key of ['payments', 'receipts', 'reconciliation'])
+    assert.ok(!(key in row));
+  assert.ok(row.items.every((item) => !('photos' in item)));
+}
+await call(`/api/files/${savedSalePhoto.id}`, {
+  ...accessStaff,
+  expected: 403,
+});
+await setStaffPermissions(defaultStaffPermissions, [
+  'clients',
+  'clients.history',
+]);
+console.log(
+  'Seller selection/default/replay/actor recovery, menu/action enforcement, session revocation, owner and tenant protection, file access, bank editing/inactivation and history preservation passed.',
 );
 console.log('Production integration flow passed.');

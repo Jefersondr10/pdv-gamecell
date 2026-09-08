@@ -1,4 +1,5 @@
 import { requireSession } from '@/lib/server/auth';
+import { assertPermission } from '@/lib/server/permissions';
 import { apiError, HttpError } from '@/lib/server/http';
 import { runtime } from '@/lib/server/runtime';
 
@@ -14,13 +15,21 @@ export async function GET(
     const db = runtime().DB;
     const metadata = await db
       .prepare(
-        `SELECT r2_key AS r2Key, file_name AS fileName, mime_type AS mimeType
+        `SELECT r2_key AS r2Key, file_name AS fileName, mime_type AS mimeType, kind
          FROM attachments WHERE id = ? AND store_id = ? LIMIT 1`,
       )
       .bind(id, session.storeId)
-      .first<{ r2Key: string; fileName: string; mimeType: string }>();
+      .first<{
+        r2Key: string;
+        fileName: string;
+        mimeType: string;
+        kind: string;
+      }>();
     if (!metadata)
       throw new HttpError(404, 'Arquivo não encontrado.', 'NOT_FOUND');
+    if (metadata.kind === 'entry_photo')
+      assertPermission(session, 'stock', 'entries');
+    else assertPermission(session, 'sales', 'overview');
     const object = await runtime().FILES.get(metadata.r2Key);
     if (!object?.body)
       throw new HttpError(404, 'Arquivo não encontrado.', 'NOT_FOUND');

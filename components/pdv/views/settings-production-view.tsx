@@ -1,6 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import { AccountsManager } from './catalog-production-view';
+import { can, defaultPermissions } from '@/lib/permissions';
+import {
+  PermissionFields,
+  UserPermissionsDialog,
+} from '@/components/pdv/user-permissions';
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -50,6 +56,15 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
+  Combobox,
+  ComboboxInput,
+  ComboboxContent,
+  ComboboxList,
+  ComboboxItem,
+  ComboboxEmpty,
+} from '@/components/ui/combobox';
+import { matchesProductSearch } from '@/lib/product-search';
+import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
@@ -63,6 +78,7 @@ import {
   type OrderStatusColor,
   type OrderStatusRecord,
   type UserRecord,
+  type ProductRecord,
 } from '@/lib/pdv-types';
 
 type Manager =
@@ -91,7 +107,6 @@ export function SettingsProductionView({
   onInstall: () => Promise<void>;
 }) {
   const [manager, setManager] = useState<Manager>(null);
-  const canManage = data.user.role === 'owner' || data.user.role === 'admin';
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden px-3 py-3 sm:px-6 sm:py-5 lg:px-10">
       <div className="mb-3 shrink-0">
@@ -105,7 +120,15 @@ export function SettingsProductionView({
       </div>
       <Tabs
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
-        defaultValue="products"
+        defaultValue={
+          can(data.user, 'products.manage')
+            ? 'products'
+            : can(data.user, 'users.manage') || can(data.user, 'clients.create')
+              ? 'people'
+              : can(data.user, 'finance.manage')
+                ? 'finance'
+                : 'system'
+        }
       >
         <TabsList
           className="mb-3 w-full shrink-0 justify-start overflow-x-auto rounded-xl bg-muted p-1 sm:w-fit"
@@ -122,7 +145,7 @@ export function SettingsProductionView({
             title="Produtos, variações e preços"
             detail={`${data.products.length} ${data.products.length === 1 ? 'variação' : 'variações'}`}
             description="Modelo, cor, memória, preço padrão e códigos comerciais."
-            disabled={!canManage}
+            disabled={!can(data.user, 'products.manage')}
             onManage={() => setManager('products')}
           />
           <SettingsCard
@@ -130,7 +153,7 @@ export function SettingsProductionView({
             title="UPC, EAN e JAN"
             detail={`${data.products.reduce((sum, product) => sum + product.codes.length, 0)} códigos`}
             description="Vários códigos podem apontar para a mesma variação."
-            disabled={!canManage}
+            disabled={!can(data.user, 'products.manage')}
             onManage={() => setManager('products')}
           />
         </Tab>
@@ -138,6 +161,7 @@ export function SettingsProductionView({
           <SettingsCard
             icon={UsersRound}
             title="Clientes"
+            disabled={!can(data.user, 'clients.create')}
             detail={`${data.clients.length} cadastrados`}
             description="Só aparecem na venda depois que o operador pesquisar."
             onManage={() => setManager('clients')}
@@ -147,7 +171,7 @@ export function SettingsProductionView({
             title="Usuários da loja"
             detail={`${data.users.filter((user) => user.active).length} ativos`}
             description="Administrador cria usuário e senha para cada funcionário."
-            disabled={!canManage}
+            disabled={!can(data.user, 'users.manage')}
             onManage={() => setManager('users')}
           />
         </Tab>
@@ -157,7 +181,7 @@ export function SettingsProductionView({
             title="Status do pedido"
             detail={`${data.orderStatuses.length} de 30 cadastrados`}
             description="Crie etapas como Pendente, Pagamento pendente e Faturado."
-            disabled={!canManage}
+            disabled={!can(data.user, 'finance.manage')}
             onManage={() => setManager('order-statuses')}
           />
           <SettingsCard
@@ -165,7 +189,7 @@ export function SettingsProductionView({
             title="Contas Pix"
             detail={`${data.pixAccounts.filter((account) => account.active).length} ativas`}
             description="A conta escolhida fica registrada no pagamento."
-            disabled={!canManage}
+            disabled={!can(data.user, 'finance.manage')}
             onManage={() => setManager('pix')}
           />
           <SettingsCard
@@ -177,7 +201,7 @@ export function SettingsProductionView({
           />
         </Tab>
         <Tab value="system">
-          {canManage && <BackupStatusCard />}
+          {can(data.user, 'backup') && <BackupStatusCard />}
           {data.user.role === 'owner' && (
             <BackupAlertSettingsCard csrfToken={data.csrfToken} />
           )}
@@ -212,13 +236,15 @@ export function SettingsProductionView({
           />
         </Tab>
       </Tabs>
-      <ProductsDialog
-        data={data}
-        onChanged={onChanged}
-        onStatusChanged={onStatusChanged}
-        onOpenChange={(open) => !open && setManager(null)}
-        open={manager === 'products'}
-      />
+      {manager === 'products' && (
+        <ProductsDialog
+          data={data}
+          onChanged={onChanged}
+          onStatusChanged={onStatusChanged}
+          onOpenChange={(open) => !open && setManager(null)}
+          open={manager === 'products'}
+        />
+      )}
       <ClientsDialog
         data={data}
         onChanged={onChanged}
@@ -239,6 +265,7 @@ export function SettingsProductionView({
       />
       <UsersDialog
         data={data}
+        onPermissionsChanged={onStatusChanged}
         onChanged={onChanged}
         onOpenChange={(open) => !open && setManager(null)}
         open={manager === 'users'}
@@ -274,7 +301,7 @@ function ProductsDialog({
     codes: '',
     price: '',
   });
-  const [selectedId, setSelectedId] = useState(data.products[0]?.id ?? '');
+  const [selectedId, setSelectedId] = useState('');
   const selected = data.products.find((product) => product.id === selectedId);
   const [price, setPrice] = useState(
     selected ? moneyInput(selected.defaultPriceCents) : '',
@@ -288,7 +315,7 @@ function ProductsDialog({
     setShowNew(false);
   };
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
+    <Dialog onOpenChange={(next) => !busy && onOpenChange(next)} open={open}>
       <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-[90dvh] sm:max-w-2xl sm:rounded-2xl">
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
           <DialogTitle>Produtos e preços</DialogTitle>
@@ -303,7 +330,11 @@ function ProductsDialog({
             <p className="font-bold">
               {data.products.length} variações cadastradas
             </p>
-            <Button onClick={() => setShowNew((value) => !value)} size="sm">
+            <Button
+              disabled={busy}
+              onClick={() => setShowNew((value) => !value)}
+              size="sm"
+            >
               <Plus /> Novo produto
             </Button>
           </div>
@@ -410,29 +441,65 @@ function ProductsDialog({
           )}
           {data.products.length ? (
             <>
-              <label className="text-sm font-semibold">
-                Alterar preço cadastrado
-                <NativeSelect
-                  className="mt-1 h-11 w-full [&_select]:h-11"
-                  onChange={(event) => {
-                    const product = data.products.find(
-                      (item) => item.id === event.target.value,
-                    );
-                    setSelectedId(event.target.value);
+              <div>
+                <label
+                  htmlFor="settings-product-search"
+                  className="mb-2 block text-sm font-semibold"
+                >
+                  Pesquisar produto para alterar o preço
+                </label>
+                <Combobox<ProductRecord>
+                  items={data.products}
+                  value={selected ?? null}
+                  disabled={busy}
+                  itemToStringLabel={(product) =>
+                    `${product.model} · ${product.detail}${product.active ? '' : ' · Inativo'}`
+                  }
+                  isItemEqualToValue={(left, right) => left.id === right.id}
+                  filter={matchesProductSearch}
+                  onValueChange={(product) => {
+                    setSelectedId(product?.id ?? '');
                     setPrice(
                       product ? moneyInput(product.defaultPriceCents) : '',
                     );
                   }}
-                  value={selectedId}
                 >
-                  {data.products.map((product) => (
-                    <NativeSelectOption key={product.id} value={product.id}>
-                      {product.model} · {product.detail}
-                      {!product.active ? ' · Inativo' : ''}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </label>
+                  <ComboboxInput
+                    id="settings-product-search"
+                    className="h-12 w-full rounded-xl [&_input]:text-base"
+                    placeholder="Modelo, cor, memória ou UPC/EAN"
+                    showClear
+                  />
+                  <ComboboxContent className="rounded-xl">
+                    <ComboboxEmpty className="p-3">
+                      Nenhum produto encontrado.
+                    </ComboboxEmpty>
+                    <ComboboxList>
+                      {(product) => (
+                        <ComboboxItem
+                          key={product.id}
+                          value={product}
+                          className="min-h-12 gap-3 rounded-lg px-3 py-2"
+                        >
+                          <ProductColorSwatch
+                            color={product.color}
+                            model={product.model}
+                          />
+                          <span className="min-w-0">
+                            <span className="block font-semibold">
+                              {product.model}
+                            </span>
+                            <span className="block text-sm text-muted-foreground">
+                              {product.detail}
+                              {product.active ? '' : ' · Inativo'}
+                            </span>
+                          </span>
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
+              </div>
               {selected && (
                 <div className="mt-3 rounded-2xl border p-4">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -509,7 +576,11 @@ function ProductsDialog({
           )}
         </div>
         <DialogFooter className="shrink-0 border-t p-3">
-          <Button onClick={() => onOpenChange(false)} variant="outline">
+          <Button
+            disabled={busy}
+            onClick={() => onOpenChange(false)}
+            variant="outline"
+          >
             Fechar
           </Button>
         </DialogFooter>
@@ -615,81 +686,29 @@ function ClientsDialog({
 }
 
 function PixDialog({ data, open, onOpenChange, onChanged }: CommonDialogProps) {
-  const [name, setName] = useState('');
-  const [details, setDetails] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
+      <DialogContent className="flex h-[85dvh] max-h-[92dvh] max-w-2xl flex-col overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b p-4 pr-12">
           <DialogTitle>Contas Pix</DialogTitle>
           <DialogDescription>
-            Cadastre as contas que podem receber pagamentos.
+            Cadastre, edite ou desative contas. Os pagamentos anteriores ficam
+            preservados.
           </DialogDescription>
         </DialogHeader>
-        {error && <ErrorBox>{error}</ErrorBox>}
-        <form
-          className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            setBusy(true);
-            setError('');
-            try {
-              await postJson('/api/pix-accounts', data.csrfToken, {
-                name,
-                details,
-              });
-              setName('');
-              setDetails('');
-              await onChanged();
-            } catch (caught) {
-              setError(messageOf(caught));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <Field label="Nome">
-            <Input
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Nubank principal"
-              required
-              value={name}
-            />
-          </Field>
-          <Field label="Detalhes (opcional)">
-            <Input
-              onChange={(event) => setDetails(event.target.value)}
-              placeholder="Titular ou final"
-              value={details}
-            />
-          </Field>
-          <Button className="mt-auto h-10" disabled={busy} type="submit">
-            <Plus /> Adicionar
-          </Button>
-        </form>
-        <div className="max-h-64 overflow-y-auto divide-y rounded-2xl border">
-          {data.pixAccounts.map((account) => (
-            <div
-              className="flex items-center justify-between px-3 py-2"
-              key={account.id}
-            >
-              <div>
-                <p className="font-bold">{account.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {account.details || 'Sem detalhes'}
-                </p>
-              </div>
-              <Badge className="bg-success/10 text-success hover:bg-success/10">
-                Ativa
-              </Badge>
-            </div>
-          ))}
-          {data.pixAccounts.length === 0 && (
-            <EmptyText>Nenhuma conta Pix cadastrada.</EmptyText>
-          )}
+        <div className="min-h-0 flex-1 p-4">
+          <AccountsManager
+            items={data.pixAccounts}
+            csrfToken={data.csrfToken}
+            canManage={can(data.user, 'finance.manage')}
+            onChanged={onChanged}
+          />
         </div>
+        <DialogFooter className="shrink-0 border-t p-3">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Fechar
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -947,7 +966,14 @@ function UsersDialog({
   open,
   onOpenChange,
   onChanged,
-}: CommonDialogProps) {
+  onPermissionsChanged,
+}: CommonDialogProps & { onPermissionsChanged: () => Promise<void> }) {
+  const [permissionTarget, setPermissionTarget] = useState<UserRecord | null>(
+    null,
+  );
+  const [newPermissions, setNewPermissions] = useState(() =>
+    defaultPermissions('operator'),
+  );
   const [showNew, setShowNew] = useState(false);
   const [values, setValues] = useState({
     displayName: '',
@@ -988,7 +1014,13 @@ function UsersDialog({
                 setBusy(true);
                 setError('');
                 try {
-                  await postJson('/api/users', data.csrfToken, values);
+                  await postJson('/api/users', data.csrfToken, {
+                    ...values,
+                    ...(data.user.role === 'owner'
+                      ? { permissions: newPermissions }
+                      : {}),
+                  });
+                  setNewPermissions(defaultPermissions('operator'));
                   setValues({
                     displayName: '',
                     username: '',
@@ -1031,7 +1063,14 @@ function UsersDialog({
               <Field label="Função">
                 <NativeSelect
                   className="h-10 w-full [&_select]:h-10"
-                  onChange={(event) => set('role', event.target.value)}
+                  onChange={(event) => {
+                    set('role', event.target.value);
+                    setNewPermissions(
+                      defaultPermissions(
+                        event.target.value === 'admin' ? 'admin' : 'operator',
+                      ),
+                    );
+                  }}
                   value={values.role}
                 >
                   <NativeSelectOption value="operator">
@@ -1044,6 +1083,19 @@ function UsersDialog({
                   )}
                 </NativeSelect>
               </Field>
+              {data.user.role === 'owner' && (
+                <details className="sm:col-span-2">
+                  <summary className="cursor-pointer py-2 text-sm font-bold">
+                    Escolher menus e ações deste usuário
+                  </summary>
+                  <PermissionFields
+                    role={values.role === 'admin' ? 'admin' : 'operator'}
+                    value={newPermissions}
+                    onChange={setNewPermissions}
+                    disabled={busy}
+                  />
+                </details>
+              )}
               <p className="text-xs text-muted-foreground sm:col-span-2">
                 No primeiro acesso, o funcionário será obrigado a trocar esta
                 senha.
@@ -1073,45 +1125,72 @@ function UsersDialog({
                     · {roleLabel(user.role)}
                   </p>
                 </div>
-                {user.id !== data.user.id && user.role !== 'owner' && (
-                  <div className="flex gap-1">
-                    {user.authKind === 'password' && (
+                {user.id !== data.user.id &&
+                  user.role !== 'owner' &&
+                  (data.user.role === 'owner' ||
+                    (user.role === 'operator' &&
+                      (user.permissions ?? defaultPermissions(user.role)).every(
+                        (permission) => can(data.user, permission),
+                      ))) && (
+                    <div className="flex flex-wrap justify-end gap-1">
+                      {data.user.role === 'owner' && (
+                        <Button
+                          disabled={busy}
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setPermissionTarget(user)}
+                        >
+                          Acessos
+                        </Button>
+                      )}
+                      {user.authKind === 'password' && (
+                        <Button
+                          aria-label="Redefinir senha"
+                          disabled={busy}
+                          onClick={() => setResetTarget(user)}
+                          size="icon"
+                          variant="ghost"
+                        >
+                          <KeyRound />
+                        </Button>
+                      )}
                       <Button
-                        aria-label="Redefinir senha"
-                        onClick={() => setResetTarget(user)}
-                        size="icon"
-                        variant="ghost"
+                        disabled={busy}
+                        onClick={async () => {
+                          setBusy(true);
+                          setError('');
+                          try {
+                            await patchJson(
+                              `/api/users/${user.id}`,
+                              data.csrfToken,
+                              { active: !user.active },
+                            );
+                            await onChanged();
+                          } catch (caught) {
+                            setError(messageOf(caught));
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                        size="sm"
+                        variant={user.active ? 'outline' : 'secondary'}
                       >
-                        <KeyRound />
+                        {user.active ? 'Desativar' : 'Ativar'}
                       </Button>
-                    )}
-                    <Button
-                      onClick={async () => {
-                        setBusy(true);
-                        setError('');
-                        try {
-                          await patchJson(
-                            `/api/users/${user.id}`,
-                            data.csrfToken,
-                            { active: !user.active },
-                          );
-                          await onChanged();
-                        } catch (caught) {
-                          setError(messageOf(caught));
-                        } finally {
-                          setBusy(false);
-                        }
-                      }}
-                      size="sm"
-                      variant={user.active ? 'outline' : 'secondary'}
-                    >
-                      {user.active ? 'Desativar' : 'Ativar'}
-                    </Button>
-                  </div>
-                )}
+                    </div>
+                  )}
               </div>
             ))}
           </div>
+          {permissionTarget && (
+            <UserPermissionsDialog
+              key={permissionTarget.id}
+              user={permissionTarget}
+              csrfToken={data.csrfToken}
+              onClose={() => setPermissionTarget(null)}
+              onChanged={onPermissionsChanged}
+            />
+          )}
           {resetTarget && (
             <div className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
               <p className="font-bold">

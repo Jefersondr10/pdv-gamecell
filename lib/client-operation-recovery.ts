@@ -261,7 +261,8 @@ async function recoverNow(context: RecoveryContext, row: SavedOperation) {
       if (after.found && after.result) return await confirm(after.result);
       if (
         error instanceof ApiError &&
-        [400, 404, 409, 413, 415, 422].includes(error.status)
+        ([400, 404, 409, 413, 415, 422].includes(error.status) ||
+          (error.status === 403 && error.code === 'PERMISSION_DENIED'))
       ) {
         await update<SavedOperation | undefined>(key, (current) =>
           current

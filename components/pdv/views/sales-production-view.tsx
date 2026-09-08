@@ -3,6 +3,7 @@
 /* oxlint-disable next/no-img-element, jsx-a11y/label-has-associated-control -- report media is authenticated and the custom textarea is wrapped by its label */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { can, canAny } from '@/lib/permissions';
 import {
   AlertTriangle,
   ArrowDown,
@@ -217,7 +218,13 @@ export function SalesProductionView({
   const analyticsCacheRef = useRef(
     new Map<string, { loadedAt: number; value: SalesAnalytics }>(),
   );
-  const canCancel = data.user.role === 'owner' || data.user.role === 'admin';
+  const canCancel = can(data.user, 'sales.cancel');
+  const canEdit = canAny(data.user, [
+    'sales.payments',
+    'sales.attachments',
+    'sales.receipts',
+    'sales.status',
+  ]);
   const filterParams = useMemo(() => {
     const params = new URLSearchParams({ period });
     if (period === 'day') params.set('day', selectedDay);
@@ -807,6 +814,7 @@ export function SalesProductionView({
             <>
               <SaleList
                 canCancel={canCancel}
+                canEdit={canEdit}
                 onCancel={setCancelSale}
                 onEdit={setEditSale}
                 onReport={setReportSale}
@@ -920,12 +928,14 @@ export function SalesProductionView({
 function SaleList({
   sales,
   canCancel,
+  canEdit,
   onEdit,
   onReport,
   onCancel,
 }: {
   sales: SaleRecord[];
   canCancel: boolean;
+  canEdit: boolean;
   onEdit: (sale: SaleRecord) => void;
   onReport: (sale: SaleRecord) => void;
   onCancel: (sale: SaleRecord) => void;
@@ -1037,7 +1047,7 @@ function SaleList({
                   <FileText className="text-primary" />
                   <span className="hidden sm:inline">PDF</span>
                 </Button>
-                {sale.status === 'completed' && (
+                {canEdit && sale.status === 'completed' && (
                   <Button
                     aria-label={`Editar venda ${sale.number}`}
                     className="size-10 px-0 sm:h-8 sm:w-auto sm:px-2"
@@ -1172,6 +1182,9 @@ function EditSaleDialog({
   onOpenChange: (open: boolean) => void;
   onChanged: () => Promise<void>;
 }) {
+  const canPayments = can(data.user, 'sales.payments');
+  const canAttachments = can(data.user, 'sales.attachments');
+  const canReceipts = can(data.user, 'sales.receipts');
   const initialStatusId = sale?.orderStatus?.id ?? '';
   const [selectedStatusId, setSelectedStatusId] = useState(initialStatusId);
   const [currentStatusId, setCurrentStatusId] = useState(initialStatusId);
@@ -1479,6 +1492,7 @@ function EditSaleDialog({
                 <div className="mt-3">
                   <NativeSelect
                     aria-label="Status do pedido desta venda"
+                    disabled={!can(data.user, 'sales.status') || uploadBusy}
                     className="h-11 w-full [&_select]:h-11"
                     onChange={(event) =>
                       setSelectedStatusId(event.target.value)
@@ -1507,7 +1521,7 @@ function EditSaleDialog({
                 )}
               </section>
 
-              {sale.status === 'completed' && (
+              {canPayments && sale.status === 'completed' && (
                 <section className="rounded-2xl border p-4">
                   <div className="flex items-start gap-3">
                     <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
@@ -1900,6 +1914,7 @@ function EditSaleDialog({
                     accessibleLabel="comprovantes da venda"
                     allowPdf
                     disabled={
+                      !canAttachments ||
                       preparing ||
                       uploadBusy ||
                       sale.receipts.length + receiptFiles.length >=
@@ -1921,9 +1936,10 @@ function EditSaleDialog({
                       <SavedReceiptValueEditor
                         serverJob={serverReceipts.jobs[receipt.id]}
                         onServerRetry={() => serverReceipts.retry(receipt.id)}
-                        disabled={preparing || uploadBusy}
+                        disabled={!canReceipts || preparing || uploadBusy}
                         key={receipt.id}
                         onAutoValueFound={async (value) => {
+                          if (!canReceipts) return;
                           await requestJson(
                             `/api/sales/${sale.id}/receipt-values`,
                             {
@@ -2033,6 +2049,7 @@ function EditSaleDialog({
                           <MediaPickerButtons
                             accessibleLabel={`fotos do aparelho ${item.productName}, SN ${item.serial}`}
                             disabled={
+                              !canAttachments ||
                               preparing ||
                               uploadBusy ||
                               item.photos.length + selected.length >=
@@ -2283,6 +2300,7 @@ function EditSaleDialog({
                         window.dispatchEvent(new Event('pdv:receipts-saved'));
                         if (!data.serverReceiptOcr)
                           void enqueueReceiptOcrJobs({
+                            userId: data.user.id,
                             attachments: attachmentResult.receipts ?? [],
                             files: attachmentResult.replayed
                               ? undefined

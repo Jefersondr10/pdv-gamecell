@@ -34,7 +34,12 @@ export async function GET(request: Request) {
       kind === 'sale'
         ? await db
             .prepare(
-              'SELECT id, number, status FROM sales WHERE id = ? AND store_id = ? AND seller_user_id = ?',
+              `SELECT id, number, status FROM sales s
+               WHERE id = ? AND store_id = ? AND EXISTS (
+                 SELECT 1 FROM audit_events a
+                 WHERE a.entity_id = s.id AND a.store_id = s.store_id
+                   AND a.action = 'sale.created' AND a.actor_user_id = ?
+               )`,
             )
             .bind(id, session.storeId, session.id)
             .first()

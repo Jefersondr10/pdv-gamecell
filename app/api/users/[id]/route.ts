@@ -10,6 +10,8 @@ import {
 } from '@/lib/server/http';
 import { consumeControlWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { can, resolvePermissions } from '@/lib/permissions';
+import { parsePermissions } from '@/lib/server/permissions';
 import { hashPassword, sha256, validatePassword } from '@/lib/server/security';
 
 type TargetUser = {
@@ -18,6 +20,8 @@ type TargetUser = {
   authKind: 'google' | 'password';
   username: string | null;
   active: number;
+  permissionsJson: string | null;
+  updatedAt: number;
 };
 
 export async function PATCH(
@@ -43,7 +47,7 @@ export async function PATCH(
     const target = await db
       .prepare(
         `SELECT id, role, auth_kind AS authKind,
-                username_normalized AS username, active
+                username_normalized AS username, active, permissions_json AS permissionsJson, updated_at AS updatedAt
          FROM users WHERE id = ? AND store_id = ? LIMIT 1`,
       )
       .bind(id, session.storeId)
@@ -65,6 +69,18 @@ export async function PATCH(
       );
     }
     const body = (await boundedJson(request)) as Record<string, unknown>;
+    if (
+      session.role !== 'owner' &&
+      resolvePermissions(target.role, target.permissionsJson).some(
+        (key) => !can(session, key),
+      )
+    ) {
+      throw new HttpError(
+        403,
+        'Somente o proprietário pode alterar um funcionário com acessos superiores aos seus.',
+        'FORBIDDEN',
+      );
+    }
     await consumeControlWriteBudget(
       db,
       Date.now(),
@@ -75,10 +91,40 @@ export async function PATCH(
     const updates: string[] = [];
     const bindings: unknown[] = [];
     let revoke = false;
+    let nextPermissions;
+    if (body.permissions !== undefined) {
+      if (session.role !== 'owner')
+        throw new HttpError(
+          403,
+          'Somente o proprietário define permissões.',
+          'FORBIDDEN',
+        );
+      nextPermissions = parsePermissions(
+        body.permissions,
+        body.role === 'admin' || body.role === 'operator'
+          ? body.role
+          : target.role,
+      );
+      const expected = parsePermissions(body.expectedPermissions, target.role);
+      if (
+        JSON.stringify(expected) !==
+        JSON.stringify(
+          resolvePermissions(target.role, target.permissionsJson).sort(),
+        )
+      )
+        throw new HttpError(
+          409,
+          'As permissões mudaram. Atualize a lista antes de salvar.',
+          'USER_CHANGED',
+        );
+      updates.push('permissions_json = ?');
+      bindings.push(JSON.stringify(nextPermissions));
+      revoke = true;
+    }
     if (typeof body.active === 'boolean') {
       updates.push('active = ?');
       bindings.push(body.active ? 1 : 0);
-      revoke = !body.active;
+      revoke = revoke || !body.active;
     }
     if (body.role !== undefined) {
       if (body.role !== 'operator' && body.role !== 'admin') {
@@ -127,7 +173,7 @@ export async function PATCH(
     updates.push('updated_at = ?');
     const now = Date.now();
     const roleGuard = session.role === 'admin' ? " AND role = 'operator'" : '';
-    bindings.push(now, id, session.storeId);
+    bindings.push(now, id, session.storeId, target.updatedAt);
     const credentialAttemptKey =
       body.password !== undefined && target.username && session.storeCode
         ? await sha256(
@@ -139,7 +185,7 @@ export async function PATCH(
         db
           .prepare(
             `UPDATE users SET ${updates.join(', ')}
-             WHERE id = ? AND store_id = ?${roleGuard}`,
+             WHERE id = ? AND store_id = ? AND updated_at = ?${roleGuard}`,
           )
           .bind(...bindings),
         ...(revoke
@@ -176,6 +222,10 @@ export async function PATCH(
                 typeof body.active === 'boolean' ? body.active : undefined,
               role: body.role,
               passwordReset: body.password !== undefined,
+              permissions: nextPermissions,
+              previousPermissions: nextPermissions
+                ? resolvePermissions(target.role, target.permissionsJson)
+                : undefined,
             }),
             now,
           ),

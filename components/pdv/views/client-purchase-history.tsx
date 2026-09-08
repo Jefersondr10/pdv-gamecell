@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import { messageOf, requestJson } from '@/lib/client-api';
-import type { ClientRecord, SalesPage } from '@/lib/pdv-types';
+import type { ClientRecord, ClientHistoryPage } from '@/lib/pdv-types';
 
 const money = (cents: number) =>
   (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -29,9 +29,9 @@ export function ClientPurchaseHistory({
 }: {
   client: ClientRecord;
   onBack: () => void;
-  onOpenSale: (id: string) => void;
+  onOpenSale?: (id: string) => void;
 }) {
-  const [page, setPage] = useState<SalesPage | null>(null);
+  const [page, setPage] = useState<ClientHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const requestRef = useRef<AbortController | null>(null);
@@ -50,9 +50,12 @@ export function ClientPurchaseHistory({
           limit: '30',
         });
         if (cursor) params.set('cursor', cursor);
-        const result = await requestJson<SalesPage>(`/api/sales?${params}`, {
-          signal: controller.signal,
-        });
+        const result = await requestJson<ClientHistoryPage>(
+          `/api/sales?${params}`,
+          {
+            signal: controller.signal,
+          },
+        );
         if (controller.signal.aborted) return;
         setPage((current) =>
           cursor && current
@@ -157,7 +160,8 @@ export function ClientPurchaseHistory({
                 )}
               </div>
               <Button
-                onClick={() => onOpenSale(sale.id)}
+                disabled={!onOpenSale}
+                onClick={() => onOpenSale?.(sale.id)}
                 size="sm"
                 variant="outline"
                 className="h-10"

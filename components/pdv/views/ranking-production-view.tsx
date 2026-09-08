@@ -57,7 +57,7 @@ const money = (cents: number) =>
 export function RankingProductionView({
   onOpenSale,
 }: {
-  onOpenSale: (id: string) => void;
+  onOpenSale?: (id: string) => void;
 }) {
   const [dimension, setDimension] = useState<RankingDimension>('customer');
   const [order, setOrder] = useState<RankingOrder>('items');

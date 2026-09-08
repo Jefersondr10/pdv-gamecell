@@ -35,14 +35,19 @@ export const systemCatalogSyncs = sqliteTable('system_catalog_syncs', {
   syncedAt: integer('synced_at', { mode: 'number' }).notNull(),
 });
 
-export const storeBackupAlertSettings = sqliteTable('store_backup_alert_settings', {
-  storeId: text('store_id').primaryKey().references(() => stores.id, { onDelete: 'cascade' }),
-  email: text('email'),
-  revision: integer('revision').notNull().default(0),
-  updatedBy: text('updated_by').notNull(),
-  mutationId: text('mutation_id').notNull(),
-  ...timestamps,
-});
+export const storeBackupAlertSettings = sqliteTable(
+  'store_backup_alert_settings',
+  {
+    storeId: text('store_id')
+      .primaryKey()
+      .references(() => stores.id, { onDelete: 'cascade' }),
+    email: text('email'),
+    revision: integer('revision').notNull().default(0),
+    updatedBy: text('updated_by').notNull(),
+    mutationId: text('mutation_id').notNull(),
+    ...timestamps,
+  },
+);
 
 export const users = sqliteTable(
   'users',
@@ -50,6 +55,7 @@ export const users = sqliteTable(
     id: text('id').primaryKey(),
     storeId: text('store_id').references(() => stores.id),
     role: text('role', { enum: ['owner', 'admin', 'operator'] }).notNull(),
+    permissionsJson: text('permissions_json'),
     authKind: text('auth_kind', { enum: ['google', 'password'] }).notNull(),
     googleSub: text('google_sub'),
     email: text('email'),
@@ -474,19 +480,42 @@ export const attachments = sqliteTable(
   ],
 );
 
-export const receiptOcrJobs = sqliteTable('receipt_ocr_jobs', {
-  attachmentId: text('attachment_id').primaryKey().references(() => attachments.id, { onDelete: 'cascade' }),
-  status: text('status', { enum: ['pending', 'processing', 'retry', 'done', 'needs_review', 'cancelled'] }).notNull().default('pending'),
-  attempts: integer('attempts').notNull().default(0),
-  generation: integer('generation').notNull().default(1),
-  leaseToken: text('lease_token'),
-  leaseUntil: integer('lease_until'),
-  nextAttemptAt: integer('next_attempt_at').notNull(),
-  errorCode: text('error_code'),
-  confidence: text('confidence'),
-  createdAt: integer('created_at').notNull(),
-  updatedAt: integer('updated_at').notNull(),
-}, (table) => [index('idx_receipt_ocr_ready').on(table.status, table.nextAttemptAt, table.leaseUntil)]);
+export const receiptOcrJobs = sqliteTable(
+  'receipt_ocr_jobs',
+  {
+    attachmentId: text('attachment_id')
+      .primaryKey()
+      .references(() => attachments.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: [
+        'pending',
+        'processing',
+        'retry',
+        'done',
+        'needs_review',
+        'cancelled',
+      ],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    generation: integer('generation').notNull().default(1),
+    leaseToken: text('lease_token'),
+    leaseUntil: integer('lease_until'),
+    nextAttemptAt: integer('next_attempt_at').notNull(),
+    errorCode: text('error_code'),
+    confidence: text('confidence'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('idx_receipt_ocr_ready').on(
+      table.status,
+      table.nextAttemptAt,
+      table.leaseUntil,
+    ),
+  ],
+);
 
 export const guideReads = sqliteTable(
   'guide_reads',

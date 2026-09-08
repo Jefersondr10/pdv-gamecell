@@ -39,6 +39,16 @@ globalThis.fetch = async (url, init) => {
   const payload = JSON.parse(init.body.get('payload'));
   assert.equal(init.headers['x-csrf-token'], context.csrfToken);
   if (mode === 'reject') return response({ error: 'SN já cadastrado' }, 409);
+  if (mode === 'forbidden')
+    return response(
+      { error: 'Acesso revogado', code: 'PERMISSION_DENIED' },
+      403,
+    );
+  if (mode === 'BAD_CSRF' || mode === 'PASSWORD_CHANGE_REQUIRED')
+    return response(
+      { error: 'Sessão precisa ser atualizada', code: mode },
+      403,
+    );
   if (mode === 'hold')
     await new Promise((resolve) => {
       release = resolve;
@@ -137,6 +147,51 @@ const rejected = (await api.listOperations(context)).find(
 );
 assert.equal(rejected.state, 'rejected');
 assert.equal(rejected.form.length, 0);
+
+mode = 'forbidden';
+const forbiddenId = crypto.randomUUID();
+await assert.rejects(
+  () =>
+    api.submitRecoverableOperation(
+      context,
+      'sale',
+      forbiddenId,
+      'Revoked access',
+      form(forbiddenId),
+    ),
+  api.RejectedOperationError,
+);
+assert.equal(
+  (await api.listOperations(context)).find((row) => row.id === forbiddenId)
+    .state,
+  'rejected',
+);
+
+for (const recoverableCode of ['BAD_CSRF', 'PASSWORD_CHANGE_REQUIRED']) {
+  mode = recoverableCode;
+  const sessionId = crypto.randomUUID();
+  await assert.rejects(
+    () =>
+      api.submitRecoverableOperation(
+        context,
+        'sale',
+        sessionId,
+        'Refresh session',
+        form(sessionId),
+      ),
+    api.PendingOperationError,
+  );
+  const saved = (await api.listOperations(context)).find(
+    (row) => row.id === sessionId,
+  );
+  assert.equal(saved.state, 'pending');
+  assert.ok(
+    saved.form.length,
+    'Session errors must preserve the unsent payload',
+  );
+  mode = 'ok';
+  assert.equal((await api.recoverOperation(context, saved)).id, sessionId);
+}
 
 mode = 'hold';
 const simultaneousId = crypto.randomUUID();

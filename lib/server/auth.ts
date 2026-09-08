@@ -1,4 +1,6 @@
 import { HttpError, cookieHeader, readCookies } from '@/lib/server/http';
+import { resolvePermissions, type Permission } from '@/lib/permissions';
+import { assertPermission, routePermissions } from '@/lib/server/permissions';
 import { requiredSecret, runtime } from '@/lib/server/runtime';
 import {
   fromBase64Url,
@@ -26,6 +28,7 @@ export type SessionUser = {
   storeName: string | null;
   storeCode: string | null;
   role: 'owner' | 'admin' | 'operator';
+  permissions: Permission[];
   authKind: 'google' | 'password';
   email: string | null;
   username: string | null;
@@ -42,6 +45,7 @@ type SessionRow = {
   storeName: string | null;
   storeCode: string | null;
   role: SessionUser['role'];
+  permissionsJson: string | null;
   authKind: SessionUser['authKind'];
   email: string | null;
   username: string | null;
@@ -147,6 +151,7 @@ export async function getSession(
          st.name AS storeName,
          st.code AS storeCode,
          u.role AS role,
+         u.permissions_json AS permissionsJson,
          u.auth_kind AS authKind,
          u.email AS email,
          u.username_normalized AS username,
@@ -178,6 +183,7 @@ export async function getSession(
     storeName: row.storeName,
     storeCode: row.storeCode,
     role: row.role,
+    permissions: resolvePermissions(row.role, row.permissionsJson),
     authKind: row.authKind,
     email: row.email,
     username: row.username,
@@ -221,7 +227,22 @@ export async function requireSession(
       'STORE_REQUIRED',
     );
   }
-  if (options.roles && !options.roles.includes(session.role)) {
+  const permissions = routePermissions(request);
+  if (permissions) assertPermission(session, ...permissions);
+  const permissionReplacesRole =
+    permissions?.some((permission) =>
+      [
+        'products.manage',
+        'clients.manage',
+        'finance.manage',
+        'sales.cancel',
+      ].includes(permission),
+    ) && options.roles?.includes('admin');
+  if (
+    options.roles &&
+    !permissionReplacesRole &&
+    !options.roles.includes(session.role)
+  ) {
     throw new HttpError(
       403,
       'Seu usuário não possui essa permissão.',

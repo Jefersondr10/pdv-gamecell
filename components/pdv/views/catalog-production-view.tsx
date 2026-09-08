@@ -1,9 +1,11 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { can } from '@/lib/permissions';
 import {
   Barcode,
   Pencil,
+  Power,
   Plus,
   RotateCcw,
   Search,
@@ -60,9 +62,8 @@ export function CatalogProductionView({
   data: BootstrapData;
   onChanged: () => Promise<void>;
   onStatusChanged: () => Promise<void>;
-  onOpenSale: (id: string) => void;
+  onOpenSale?: (id: string) => void;
 }) {
-  const canManage = data.user.role === 'owner' || data.user.role === 'admin';
   const [historyId, setHistoryId] = useState<string | null>(null);
   const historyClient = data.clients.find((client) => client.id === historyId);
   if (historyClient)
@@ -87,25 +88,33 @@ export function CatalogProductionView({
       </header>
       <Tabs
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
-        defaultValue="clients"
+        defaultValue={
+          can(data.user, 'clients')
+            ? 'clients'
+            : can(data.user, 'products')
+              ? 'products'
+              : 'accounts'
+        }
       >
         <TabsList
           className="mb-3 grid w-full shrink-0 grid-cols-3 rounded-xl bg-muted p-1 [&_[data-slot=tabs-trigger]]:min-h-10 lg:w-fit lg:min-w-[34rem]"
           size="lg"
         >
-          <TabsTrigger value="clients">
+          <TabsTrigger value="clients" disabled={!can(data.user, 'clients')}>
             <UserRound /> Clientes
           </TabsTrigger>
-          <TabsTrigger value="products">
+          <TabsTrigger value="products" disabled={!can(data.user, 'products')}>
             <Smartphone /> Produtos
           </TabsTrigger>
-          <TabsTrigger value="accounts">
+          <TabsTrigger value="accounts" disabled={!can(data.user, 'finance')}>
             <WalletCards /> Contas
           </TabsTrigger>
         </TabsList>
         <TabsContent className="min-h-0 flex-1 overflow-hidden" value="clients">
           <ClientsManager
-            canManage={canManage}
+            canManage={can(data.user, 'clients.manage')}
+            canCreate={can(data.user, 'clients.create')}
+            canHistory={can(data.user, 'clients.history')}
             csrfToken={data.csrfToken}
             items={data.clients}
             onOpenHistory={setHistoryId}
@@ -117,7 +126,7 @@ export function CatalogProductionView({
           value="products"
         >
           <ProductsManager
-            canManage={canManage}
+            canManage={can(data.user, 'products.manage')}
             csrfToken={data.csrfToken}
             items={data.products}
             onChanged={onChanged}
@@ -129,7 +138,7 @@ export function CatalogProductionView({
           value="accounts"
         >
           <AccountsManager
-            canManage={canManage}
+            canManage={can(data.user, 'finance.manage')}
             csrfToken={data.csrfToken}
             items={data.pixAccounts}
             onChanged={onChanged}
@@ -144,12 +153,16 @@ function ClientsManager({
   items,
   csrfToken,
   canManage,
+  canCreate,
+  canHistory,
   onChanged,
   onOpenHistory,
 }: {
   items: ClientRecord[];
   csrfToken: string;
   canManage: boolean;
+  canCreate: boolean;
+  canHistory: boolean;
   onChanged: () => Promise<void>;
   onOpenHistory: (id: string) => void;
 }) {
@@ -178,7 +191,7 @@ function ClientsManager({
       action={
         <Button
           className="h-11 rounded-xl"
-          disabled={!canManage}
+          disabled={!canCreate}
           onClick={() => setEditingId('new')}
         >
           <Plus /> Novo cliente
@@ -220,6 +233,7 @@ function ClientsManager({
           <button
             type="button"
             onClick={() => onOpenHistory(client.id)}
+            disabled={!canHistory}
             aria-label={`Ver compras de ${client.name}`}
             className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-primary"
           >
@@ -235,9 +249,11 @@ function ClientsManager({
                 {[client.phone, client.email].filter(Boolean).join(' · ') ||
                   'Sem contato informado'}
               </p>
-              <p className="mt-1 text-xs font-semibold text-primary">
-                Ver histórico de compras
-              </p>
+              {canHistory && (
+                <p className="mt-1 text-xs font-semibold text-primary">
+                  Ver histórico de compras
+                </p>
+              )}
             </div>
           </button>
           {canManage && (
@@ -453,7 +469,7 @@ function ProductsManager({
   );
 }
 
-function AccountsManager({
+export function AccountsManager({
   items,
   csrfToken,
   canManage,
@@ -506,7 +522,7 @@ function AccountsManager({
           >
             <NativeSelectOption value="all">Todas</NativeSelectOption>
             <NativeSelectOption value="active">Ativas</NativeSelectOption>
-            <NativeSelectOption value="inactive">Excluídas</NativeSelectOption>
+            <NativeSelectOption value="inactive">Inativas</NativeSelectOption>
           </NativeSelect>
         </>
       }
@@ -523,7 +539,7 @@ function AccountsManager({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <p className="truncate font-bold">{account.name}</p>
-              <StatusBadge active={account.active} />
+              <StatusBadge active={account.active} inactiveLabel="Inativa" />
             </div>
             <p className="truncate text-xs text-muted-foreground">
               {account.details || 'Sem detalhes informados'}
@@ -994,6 +1010,7 @@ function AccountEditor({
   return (
     <EditorDialog
       description="A conta ativa fica disponível quando um pagamento Pix é adicionado."
+      busy={busy}
       onClose={onClose}
       title={account ? 'Editar conta' : 'Nova conta'}
     >
@@ -1142,7 +1159,9 @@ function RecordStatusControl({
     return (
       <div className="mt-5 rounded-2xl border bg-muted/30 p-3">
         <p className="text-sm text-muted-foreground">
-          Este {label} está excluído das novas operações.
+          {label === 'conta'
+            ? 'Esta conta está inativa para novos pagamentos.'
+            : `Este ${label} está excluído das novas operações.`}
         </p>
         <Button
           className="mt-2"
@@ -1151,7 +1170,8 @@ function RecordStatusControl({
           type="button"
           variant="secondary"
         >
-          <RotateCcw /> Restaurar {label}
+          <RotateCcw />{' '}
+          {label === 'conta' ? 'Reativar conta' : `Restaurar ${label}`}
         </Button>
       </div>
     );
@@ -1161,27 +1181,43 @@ function RecordStatusControl({
       {!confirming ? (
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
-            A exclusão preserva vendas e históricos anteriores.
+            {label === 'conta'
+              ? 'Desativar bloqueia novos pagamentos, sem apagar os anteriores.'
+              : 'A exclusão preserva vendas e históricos anteriores.'}
           </p>
           <Button
             disabled={busy}
             onClick={() => setConfirming(true)}
             type="button"
-            variant="destructive"
+            variant={label === 'conta' ? 'outline' : 'destructive'}
           >
-            <Trash2 /> Excluir
+            {label === 'conta' ? (
+              <>
+                <Power /> Desativar conta
+              </>
+            ) : (
+              <>
+                <Trash2 /> Excluir
+              </>
+            )}
           </Button>
         </div>
       ) : (
         <div>
-          <p className="font-bold">Confirmar exclusão?</p>
+          <p className="font-bold">
+            {label === 'conta'
+              ? 'Desativar esta conta?'
+              : 'Confirmar exclusão?'}
+          </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            O {label} deixará de aparecer nas novas operações, mas continuará
-            nos históricos.
+            {label === 'conta'
+              ? 'A conta sairá das opções de novos pagamentos. Os pagamentos já registrados não mudam. Você pode reativá-la depois.'
+              : `O ${label} deixará de aparecer nas novas operações, mas continuará nos históricos.`}
           </p>
           <div className="mt-3 flex justify-end gap-2">
             <Button
               onClick={() => setConfirming(false)}
+              disabled={busy}
               type="button"
               variant="ghost"
             >
@@ -1193,7 +1229,9 @@ function RecordStatusControl({
               type="button"
               variant="destructive"
             >
-              Confirmar exclusão
+              {label === 'conta'
+                ? 'Confirmar desativação'
+                : 'Confirmar exclusão'}
             </Button>
           </div>
         </div>

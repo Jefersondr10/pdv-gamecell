@@ -1,4 +1,5 @@
 import { requireSession } from '@/lib/server/auth';
+import { can, canAny, resolvePermissions } from '@/lib/permissions';
 import { apiError, json } from '@/lib/server/http';
 import { GUIDE_VERSION } from '@/lib/pdv-types';
 import type {
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
     const storeId = session.storeId!;
     const db = runtime().DB;
     await consumeStoreReadBudget(db, Date.now(), storeId, 20);
-    const includeUsers = session.role === 'owner' || session.role === 'admin';
+    const includeUsers = can(session, 'users.manage');
     const today = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Sao_Paulo',
       year: 'numeric',
@@ -88,6 +89,7 @@ export async function GET(request: Request) {
               `SELECT id, display_name AS displayName,
                       username_normalized AS username, email, role,
                       auth_kind AS authKind, active,
+                      permissions_json AS permissionsJson,
                       must_change_password AS mustChangePassword,
                       last_login_at AS lastLoginAt
                FROM users WHERE store_id = ?
@@ -113,6 +115,13 @@ export async function GET(request: Request) {
         .prepare(
           `SELECT catalog_version AS catalogVersion
            FROM system_catalog_syncs WHERE store_id = ? LIMIT 1`,
+        )
+        .bind(storeId),
+      db
+        .prepare(
+          `SELECT id, display_name AS displayName, role, permissions_json AS permissionsJson
+           FROM users WHERE store_id = ? AND active = 1
+           ORDER BY display_name COLLATE NOCASE, id`,
         )
         .bind(storeId),
     ]);
@@ -151,8 +160,11 @@ export async function GET(request: Request) {
       ...status,
       active: Boolean(status.active),
     }));
-    const users = rows<UserRow>(results[5]).map((user) => ({
+    const users = rows<UserRow & { permissionsJson: string | null }>(
+      results[5],
+    ).map(({ permissionsJson, ...user }) => ({
       ...user,
+      permissions: resolvePermissions(user.role, permissionsJson),
       active: Boolean(user.active),
       mustChangePassword: Boolean(user.mustChangePassword),
     }));
@@ -165,6 +177,7 @@ export async function GET(request: Request) {
         username: session.username,
         email: session.email,
         role: session.role,
+        permissions: session.permissions,
         authKind: session.authKind,
         active: true,
         mustChangePassword: session.mustChangePassword,
@@ -176,16 +189,54 @@ export async function GET(request: Request) {
         name: session.storeName!,
         code: session.storeCode!,
       },
-      products,
-      clients,
-      pixAccounts,
-      orderStatuses,
+      products: canAny(session, ['products', 'stock', 'entry']) ? products : [],
+      clients: can(session, 'clients')
+        ? clients
+        : can(session, 'sell')
+          ? clients
+              .filter((client) => client.active)
+              .map((client) => ({ ...client, email: null, notes: null }))
+          : [],
+      pixAccounts: can(session, 'finance')
+        ? pixAccounts
+        : canAny(session, ['sell', 'sales.payments'])
+          ? pixAccounts
+              .filter((account) => account.active)
+              .map((account) => ({ ...account, details: null }))
+          : [],
+      orderStatuses: canAny(session, ['finance', 'sales']) ? orderStatuses : [],
       metrics: {
-        soldTodayItems: Number(
-          rows<{ soldTodayItems: number }>(results[7])[0]?.soldTodayItems ?? 0,
-        ),
+        soldTodayItems: canAny(session, ['sales', 'ranking', 'overview'])
+          ? Number(
+              rows<{ soldTodayItems: number }>(results[7])[0]?.soldTodayItems ??
+                0,
+            )
+          : 0,
       },
       users,
+      sellers: can(session, 'sell')
+        ? rows<{
+            id: string;
+            displayName: string;
+            role: UserRecord['role'];
+            permissionsJson: string | null;
+          }>(results[9])
+            .filter(
+              (seller) =>
+                can(
+                  {
+                    role: seller.role,
+                    permissions: resolvePermissions(
+                      seller.role,
+                      seller.permissionsJson,
+                    ),
+                  },
+                  'sell',
+                ) &&
+                (seller.id === session.id || can(session, 'sell.assign')),
+            )
+            .map(({ id, displayName }) => ({ id, displayName }))
+        : [],
       systemCatalog: {
         currentVersion: SYSTEM_CATALOG_VERSION,
         syncedVersion: Number(

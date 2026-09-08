@@ -1,4 +1,6 @@
 import { assertCsrf, requireSession } from '@/lib/server/auth';
+import { can, resolvePermissions } from '@/lib/permissions';
+import { assertPermission } from '@/lib/server/permissions';
 import {
   assertFormDataKeys,
   boundedFormData,
@@ -38,6 +40,7 @@ import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
 import type {
   AttachmentRecord,
+  ClientHistoryPage,
   OrderStatusColor,
   ReceiptAttachmentRecord,
   SaleItemRecord,
@@ -219,7 +222,7 @@ export async function GET(request: Request) {
     const ids = visible.map((sale) => sale.id);
     const sales = ids.length ? await hydrateSales(db, storeId, visible) : [];
     const last = visible.at(-1);
-    return json({
+    const page = {
       items: sales,
       groups: [],
       nextCursor:
@@ -227,7 +230,34 @@ export async function GET(request: Request) {
       total: Number(aggregate?.total ?? 0),
       aggregates: numericSalesAggregates(aggregate),
       comparison: salesComparison(comparison, aggregate),
-    } satisfies SalesPage);
+    } satisfies SalesPage;
+    if (!can(session, 'sales')) {
+      return json({
+        ...page,
+        items: sales.map((sale) => ({
+          id: sale.id,
+          number: sale.number,
+          customerId: sale.customerId,
+          customerName: sale.customerName,
+          sellerName: sale.sellerName,
+          orderStatus: sale.orderStatus,
+          productsTotalCents: sale.productsTotalCents,
+          receivedTotalCents: sale.receivedTotalCents,
+          status: sale.status,
+          createdAt: sale.createdAt,
+          cancelledAt: sale.cancelledAt,
+          cancellationReason: sale.cancellationReason,
+          items: sale.items.map((item) => ({
+            id: item.id,
+            productName: item.productName,
+            productDetail: item.productDetail,
+            serial: item.serial,
+            soldPriceCents: item.soldPriceCents,
+          })),
+        })),
+      } satisfies ClientHistoryPage);
+    }
+    return json(page);
   } catch (error) {
     return apiError(error);
   }
@@ -240,6 +270,7 @@ export async function POST(request: Request) {
   let saleId: string | null = null;
   let storeId: string | null = null;
   let operationFingerprint: string | null = null;
+  let operationSellerId: string | null = null;
   try {
     assertSameOrigin(request);
     const session = await requireSession(request);
@@ -317,6 +348,12 @@ export async function POST(request: Request) {
     const payload = parseJsonObject(payloadValue, 'Dados da venda inválidos.');
     saleId = operationIdField(payload.operationId);
     const customerId = stringField(payload.customerId, 'Cliente', { max: 80 });
+    const sellerUserId =
+      payload.sellerUserId === undefined
+        ? session.id
+        : stringField(payload.sellerUserId, 'Vendedor', { max: 80 });
+    operationSellerId = sellerUserId;
+    if (sellerUserId !== session.id) assertPermission(session, 'sell.assign');
     const items = parseItems(payload.items);
     const payments = parsePayments(payload.payments);
     const productsTotalCents = items.reduce(
@@ -333,6 +370,7 @@ export async function POST(request: Request) {
       assertSameSaleOperation(
         replay,
         operationFingerprint,
+        sellerUserId,
         customerId,
         items,
         payments,
@@ -348,6 +386,31 @@ export async function POST(request: Request) {
         replayed: true,
       });
     }
+    const seller = await db
+      .prepare(
+        'SELECT id, role, permissions_json AS permissionsJson FROM users WHERE id = ? AND store_id = ? AND active = 1 LIMIT 1',
+      )
+      .bind(sellerUserId, session.storeId)
+      .first<{
+        id: string;
+        role: 'owner' | 'admin' | 'operator';
+        permissionsJson: string | null;
+      }>();
+    if (
+      !seller ||
+      !can(
+        {
+          role: seller.role,
+          permissions: resolvePermissions(seller.role, seller.permissionsJson),
+        },
+        'sell',
+      )
+    )
+      throw new HttpError(
+        409,
+        'Selecione um vendedor ativo e com acesso a vendas nesta loja.',
+        'SELLER_INVALID',
+      );
     const customer = await db
       .prepare(
         'SELECT id, name FROM clients WHERE id = ? AND store_id = ? AND active = 1 LIMIT 1',
@@ -603,18 +666,20 @@ export async function POST(request: Request) {
             reference_total_cents, price_difference_cents, status, created_at)
            SELECT ?, stores.id, stores.next_sale_number,
                   active_customer.id, active_customer.name,
-                  ?, ?, ?, ?, ?, ?, ?,
+                  active_seller.id, active_seller.display_name, ?, ?, ?, ?, ?,
                   'completed', ?
            FROM stores
            JOIN clients active_customer
              ON active_customer.id = ? AND active_customer.store_id = stores.id
             AND active_customer.active = 1
+           LEFT JOIN users active_seller
+             ON active_seller.id = ? AND active_seller.store_id = stores.id
+            AND active_seller.active = 1
+            AND active_seller.permissions_json IS ? AND active_seller.role = ?
            WHERE stores.id = ?`,
         )
         .bind(
           saleId,
-          session.id,
-          session.displayName,
           productsTotalCents,
           receivedTotalCents,
           receivedTotalCents - productsTotalCents,
@@ -622,6 +687,9 @@ export async function POST(request: Request) {
           priceDifferenceCents,
           now,
           customer.id,
+          seller.id,
+          seller.permissionsJson,
+          seller.role,
           session.storeId,
         ),
       db
@@ -696,6 +764,7 @@ export async function POST(request: Request) {
             items: items.length,
             receivedDifferenceCents: receivedTotalCents - productsTotalCents,
             operationFingerprint,
+            sellerUserId: seller.id,
           }),
           now,
         ),
@@ -758,7 +827,11 @@ export async function POST(request: Request) {
         }
         if (!saved) break;
         try {
-          assertSameSaleOperation(saved, operationFingerprint);
+          assertSameSaleOperation(
+            saved,
+            operationFingerprint,
+            operationSellerId!,
+          );
         } catch (mismatch) {
           await cleanupFiles(uploaded);
           return apiError(mismatch);
@@ -804,6 +877,20 @@ export async function POST(request: Request) {
           409,
           'Um dos aparelhos acabou de ser vendido em outra operação. Atualize e tente novamente.',
           'SERIAL_UNAVAILABLE',
+        ),
+      );
+    }
+    if (
+      error instanceof Error &&
+      /NOT NULL constraint failed:\s*sales\.seller_(?:user_id|name)/i.test(
+        error.message,
+      )
+    ) {
+      return apiError(
+        new HttpError(
+          409,
+          'O vendedor foi desativado durante o envio. Selecione um vendedor ativo e tente novamente.',
+          'SELLER_INVALID',
         ),
       );
     }
@@ -855,6 +942,7 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
   const sale = await db
     .prepare(
       `SELECT id, number, customer_id AS customerId,
+              seller_user_id AS sellerUserId,
               products_total_cents AS productsTotalCents,
               received_total_cents AS receivedTotalCents,
               received_difference_cents AS receivedDifferenceCents,
@@ -871,6 +959,7 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
       id: string;
       number: number;
       customerId: string | null;
+      sellerUserId: string;
       productsTotalCents: number;
       receivedTotalCents: number;
       receivedDifferenceCents: number;
@@ -999,6 +1088,7 @@ function canonicalSaleOperation(
 function assertSameSaleOperation(
   saved: NonNullable<Awaited<ReturnType<typeof findSaleCommit>>>,
   operationFingerprint: string,
+  sellerUserId: string,
   customerId?: string,
   items?: SaleInputItem[],
   payments?: SaleInputPayment[],
@@ -1013,9 +1103,10 @@ function assertSameSaleOperation(
       saved.payments,
     ) === canonicalSaleOperation(customerId, items, payments);
   if (
-    saved.operationFingerprint
+    saved.sellerUserId !== sellerUserId ||
+    (saved.operationFingerprint
       ? saved.operationFingerprint !== operationFingerprint
-      : !fallbackMatches
+      : !fallbackMatches)
   ) {
     throw new HttpError(
       409,

@@ -66,10 +66,36 @@ assert.equal(
   db.prepare('SELECT value FROM fixture_preservation').get().value,
   'synthetic-record',
 );
+db.close();
+const migratePermissions = () =>
+  execFileSync(
+    process.execPath,
+    [resolve('scripts/hostinger/apply-user-permissions-migration.mjs'), path],
+    { stdio: 'pipe' },
+  );
+migratePermissions();
+migratePermissions();
+db = new DatabaseSync(path);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM pdv_release_migrations').get().n,
+  3,
+);
+assert.equal(
+  db
+    .prepare('PRAGMA table_info(users)')
+    .all()
+    .find((row) => row.name === 'permissions_json').dflt_value,
+  null,
+);
+assert.equal(
+  db.prepare('SELECT value FROM fixture_preservation').get().value,
+  'synthetic-record',
+);
 db.prepare('UPDATE pdv_release_migrations SET checksum=?').run('changed');
 db.close();
 assert.throws(migrate, /Migration checksum mismatch/);
 assert.throws(migrateAlerts, /Migration checksum mismatch/);
+assert.throws(migratePermissions, /Migration checksum mismatch/);
 console.log(
   'Additive migration, preservation, backups, repeat and checksum rejection passed.',
 );

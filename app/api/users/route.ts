@@ -11,6 +11,8 @@ import {
 } from '@/lib/server/http';
 import { consumeControlWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { parsePermissions } from '@/lib/server/permissions';
+import { can, defaultPermissions } from '@/lib/permissions';
 import {
   hashPassword,
   normalizeUsername,
@@ -32,7 +34,8 @@ export async function POST(request: Request) {
           key !== 'displayName' &&
           key !== 'username' &&
           key !== 'password' &&
-          key !== 'role',
+          key !== 'role' &&
+          key !== 'permissions',
       )
     ) {
       throw new HttpError(
@@ -50,6 +53,18 @@ export async function POST(request: Request) {
       throw new HttpError(400, 'Função de usuário inválida.', 'INVALID_ROLE');
     }
     const role = body.role;
+    if (body.permissions !== undefined && session.role !== 'owner')
+      throw new HttpError(
+        403,
+        'Somente o proprietário define permissões.',
+        'FORBIDDEN',
+      );
+    const permissions =
+      body.permissions === undefined
+        ? session.role === 'owner'
+          ? null
+          : defaultPermissions(role).filter((key) => can(session, key))
+        : parsePermissions(body.permissions, role);
     if (role === 'admin' && session.role !== 'owner') {
       throw new HttpError(
         403,
@@ -108,17 +123,18 @@ export async function POST(request: Request) {
         db
           .prepare(
             `INSERT INTO users
-           (id, store_id, role, auth_kind, username_normalized, display_name,
+           (id, store_id, role, permissions_json, auth_kind, username_normalized, display_name,
             password_hash, password_salt, password_iterations,
             must_change_password, active, session_version, created_by,
             created_at, updated_at)
-           SELECT ?, ?, ?, 'password', ?, ?, ?, ?, ?, 1, 1, 1, ?, ?, ?
+           SELECT ?, ?, ?, ?, 'password', ?, ?, ?, ?, ?, 1, 1, 1, ?, ?, ?
            WHERE (SELECT COUNT(*) FROM users WHERE store_id = ?) < 100`,
           )
           .bind(
             id,
             session.storeId,
             role,
+            permissions === null ? null : JSON.stringify(permissions),
             username,
             displayName,
             passwordData.hash,
@@ -145,7 +161,7 @@ export async function POST(request: Request) {
             id,
             session.storeId,
             id,
-            JSON.stringify({ role }),
+            JSON.stringify({ role, permissions }),
             now,
           ),
       ]);

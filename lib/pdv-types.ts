@@ -1,4 +1,5 @@
-export const GUIDE_VERSION = '2026.09.08-produtos-ativos-v20';
+import type { Permission } from './permissions';
+export const GUIDE_VERSION = '2026.09.08-acessos-e-vendedor-v21';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 
@@ -215,6 +216,29 @@ export type SalesPage = {
   comparison: SalesComparison | null;
 };
 
+export type ClientHistoryPage = Omit<SalesPage, 'items'> & {
+  items: (Pick<
+    SaleRecord,
+    | 'id'
+    | 'number'
+    | 'customerId'
+    | 'customerName'
+    | 'sellerName'
+    | 'orderStatus'
+    | 'productsTotalCents'
+    | 'receivedTotalCents'
+    | 'status'
+    | 'createdAt'
+    | 'cancelledAt'
+    | 'cancellationReason'
+  > & {
+    items: Pick<
+      SaleItemRecord,
+      'id' | 'productName' | 'productDetail' | 'serial' | 'soldPriceCents'
+    >[];
+  })[];
+};
+
 export type SalesAnalytics = {
   groups: Record<SalesGrouping, SalesGroupRecord[]>;
   total: number;
@@ -259,6 +283,7 @@ export type UserRecord = {
   username: string | null;
   email: string | null;
   role: AppRole;
+  permissions?: Permission[];
   authKind: 'google' | 'password';
   active: boolean;
   mustChangePassword: boolean;
@@ -276,6 +301,7 @@ export type BootstrapData = {
   orderStatuses: OrderStatusRecord[];
   metrics: { soldTodayItems: number };
   users: UserRecord[];
+  sellers: Array<Pick<UserRecord, 'id' | 'displayName'>>;
   systemCatalog: {
     currentVersion: number;
     syncedVersion: number;

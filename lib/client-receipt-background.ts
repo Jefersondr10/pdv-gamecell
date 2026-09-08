@@ -9,6 +9,7 @@ export type ReceiptOcrAttachment = {
 };
 
 type ReceiptOcrJob = ReceiptOcrAttachment & {
+  userId?: string;
   attempts: number;
   createdAt: number;
   nextAttemptAt: number;
@@ -18,6 +19,7 @@ type ReceiptOcrJob = ReceiptOcrAttachment & {
 };
 
 type ReceiptOcrContext = {
+  userId: string;
   csrfToken: string;
   onUpdated?: () => void | Promise<void>;
   storeId: string;
@@ -56,6 +58,7 @@ export function activateReceiptOcrQueue(context: ReceiptOcrContext) {
 }
 
 export async function enqueueReceiptOcrJobs(input: {
+  userId: string;
   attachments: readonly ReceiptOcrAttachment[];
   files?: readonly File[];
   receiptValues?: readonly ReceiptValue[];
@@ -65,7 +68,7 @@ export async function enqueueReceiptOcrJobs(input: {
   const now = Date.now();
   const incoming = input.attachments.flatMap((attachment, index) => {
     if ((input.receiptValues?.[index]?.amountCents ?? null) !== null) return [];
-    const id = jobId(input.storeId, input.saleId, attachment.id);
+    const id = jobId(input.storeId, input.saleId, attachment.id, input.userId);
     const file = input.files?.[index];
     if (file) sourceFiles.set(id, file);
     else sourceFiles.delete(id);
@@ -78,6 +81,7 @@ export async function enqueueReceiptOcrJobs(input: {
         operationId: crypto.randomUUID(),
         saleId: input.saleId,
         storeId: input.storeId,
+        userId: input.userId,
       } satisfies ReceiptOcrJob,
     ];
   });
@@ -126,7 +130,10 @@ async function runQueue() {
     const context = activeContext;
     const jobs = await readJobs(context.storeId);
     const next = jobs
-      .filter((job) => job.storeId === context.storeId)
+      .filter(
+        (job) =>
+          job.storeId === context.storeId && job.userId === context.userId,
+      )
       .sort(
         (left, right) =>
           left.nextAttemptAt - right.nextAttemptAt ||
@@ -163,13 +170,21 @@ async function runQueue() {
 }
 
 async function processJob(job: ReceiptOcrJob, context: ReceiptOcrContext) {
+  if (activeContext !== context || context.userId !== job.userId)
+    throw new QueuePausedError();
   const file = sourceFiles.get(jobIdOf(job)) ?? (await downloadReceipt(job));
   const { readReceiptAmount } = await import('@/lib/client-receipt-ocr');
   const suggestion = await readReceiptAmount(file);
   if (!suggestion) return false;
 
   const current = activeContext;
-  if (!current || current.storeId !== job.storeId) throw new QueuePausedError();
+  if (
+    !current ||
+    current !== context ||
+    current.storeId !== job.storeId ||
+    current.userId !== job.userId
+  )
+    throw new QueuePausedError();
   const response = await fetch(`/api/sales/${job.saleId}/receipt-values`, {
     method: 'PATCH',
     credentials: 'same-origin',
@@ -191,6 +206,8 @@ async function processJob(job: ReceiptOcrJob, context: ReceiptOcrContext) {
     error?: string;
   };
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403)
+      throw new QueuePausedError();
     if (
       body.code === 'SALE_CANCELLED' ||
       body.code === 'SALE_NOT_FOUND' ||
@@ -211,6 +228,8 @@ async function downloadReceipt(job: ReceiptOcrJob) {
   if (response.status === 404 || response.status === 410) {
     throw new PermanentJobError('O comprovante não está mais disponível.');
   }
+  if (response.status === 401 || response.status === 403)
+    throw new QueuePausedError();
   if (!response.ok) {
     throw new Error('Não foi possível carregar o comprovante para leitura.');
   }
@@ -317,10 +336,15 @@ function storageKey(storeId: string) {
   return `${QUEUE_KEY_PREFIX}:${storeId}`;
 }
 
-function jobId(storeId: string, saleId: string, receiptId: string) {
-  return `${storeId}:${saleId}:${receiptId}`;
+function jobId(
+  storeId: string,
+  saleId: string,
+  receiptId: string,
+  userId = 'legacy',
+) {
+  return `${storeId}:${userId}:${saleId}:${receiptId}`;
 }
 
 function jobIdOf(job: ReceiptOcrJob) {
-  return jobId(job.storeId, job.saleId, job.id);
+  return jobId(job.storeId, job.saleId, job.id, job.userId);
 }

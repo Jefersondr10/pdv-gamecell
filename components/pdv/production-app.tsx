@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { can, canAny, type PermissionSubject } from '@/lib/permissions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
@@ -205,6 +206,13 @@ const navigation: Array<{
   },
 ];
 
+function canView(user: PermissionSubject, view: View) {
+  if (view === 'settings') return true;
+  if (view === 'catalog')
+    return canAny(user, ['clients', 'products', 'finance']);
+  return can(user, view);
+}
+
 export function ProductionApp() {
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [sessionError, setSessionError] = useState('');
@@ -400,12 +408,19 @@ function CloudPdv({
   }, [reload]);
 
   useEffect(() => {
-    if (!data?.store.id || !data.csrfToken || data.serverReceiptOcr) return;
+    if (
+      !data?.store.id ||
+      !data.csrfToken ||
+      data.serverReceiptOcr ||
+      !can(data.user, 'sales.receipts')
+    )
+      return;
     return activateReceiptOcrQueue({
+      userId: data.user.id,
       storeId: data.store.id,
       csrfToken: data.csrfToken,
     });
-  }, [data?.csrfToken, data?.store.id, data?.serverReceiptOcr]);
+  }, [data?.csrfToken, data?.store.id, data?.serverReceiptOcr, data?.user]);
 
   useEffect(() => {
     if (!data?.systemCatalog.updateAvailable) return;
@@ -514,6 +529,7 @@ function CloudPdv({
   }, []);
 
   const changeView = (view: View) => {
+    if (data && !canView(data.user, view)) return;
     if (view !== 'sales') setSaleToOpen(null);
     setActiveView(view);
     setRun((value) => value + 1);
@@ -613,6 +629,7 @@ function CloudPdv({
       JSON.stringify({
         operationId: sale.operationId,
         customerId: sale.customerId,
+        sellerUserId: sale.sellerUserId,
         items: sale.items.map((item) => ({
           serial: item.serial,
           priceCents: item.priceCents,
@@ -644,6 +661,7 @@ function CloudPdv({
     );
     if (!data!.serverReceiptOcr)
       void enqueueReceiptOcrJobs({
+        userId: data!.user.id,
         storeId: data!.store.id,
         saleId: result.id,
         attachments: result.receipts ?? [],
@@ -672,17 +690,30 @@ function CloudPdv({
     );
   }
   if (!data) return <LoadingScreen label="Carregando sua loja…" />;
+  const displayedView = canView(data.user, activeView)
+    ? activeView
+    : navigation.find((item) => canView(data.user, item.view))!.view;
+  const allowedNavigation = navigation.filter((item) =>
+    canView(data.user, item.view),
+  );
 
   return (
     <ServerReceiptProvider
       key={`${data.store.id}:${data.user.id}`}
-      enabled={Boolean(data?.serverReceiptOcr)}
+      enabled={
+        Boolean(data?.serverReceiptOcr) &&
+        canAny(data.user, ['sell', 'sales', 'overview'])
+      }
       csrfToken={data?.csrfToken ?? ''}
     >
       <main className="h-dvh overflow-hidden bg-background text-foreground">
         <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar px-5 py-6 lg:flex lg:flex-col">
           <Brand storeName={data.store.name} />
-          <DesktopNavigation active={activeView} onChange={changeView} />
+          <DesktopNavigation
+            items={allowedNavigation}
+            active={displayedView}
+            onChange={changeView}
+          />
           <button
             className="mt-auto w-full rounded-2xl border bg-card p-4 text-left transition hover:bg-muted/40"
             onClick={() => setProfileOpen(true)}
@@ -768,26 +799,34 @@ function CloudPdv({
             }}
             onChanged={reload}
           />
-          {['owner', 'admin'].includes(data.user.role) && (
-            <BackupStatusCard alertOnly />
-          )}
+          {can(data.user, 'backup') && <BackupStatusCard alertOnly />}
           <div className="min-h-0 flex-1 overflow-hidden">
-            {activeView === 'sell' && (
+            {displayedView === 'sell' && (
               <SellWizard
+                defaultSellerId={data.user.id}
+                sellers={
+                  data.sellers ?? [
+                    { id: data.user.id, displayName: data.user.displayName },
+                  ]
+                }
                 recoveryScope={{ storeId: data.store.id, userId: data.user.id }}
                 customers={data.clients
                   .filter((client) => client.active)
                   .map(({ id, name, phone }) => ({ id, name, phone }))}
                 key={`sell-${data.store.id}-${data.user.id}-${run}`}
                 onComplete={saveSale}
-                onCreateCustomer={createSaleCustomer}
+                onCreateCustomer={
+                  can(data.user, 'clients.create')
+                    ? createSaleCustomer
+                    : undefined
+                }
                 pixAccounts={data.pixAccounts
                   .filter((account) => account.active)
                   .map(({ id, name }) => ({ id, name }))}
                 resolveSerials={lookupSerials}
               />
             )}
-            {activeView === 'entry' && (
+            {displayedView === 'entry' && (
               <EntryWizard
                 recoveryScope={{ storeId: data.store.id, userId: data.user.id }}
                 key={`entry-${data.store.id}-${data.user.id}-${run}`}
@@ -796,17 +835,21 @@ function CloudPdv({
                 productsByCode={productsByCode}
               />
             )}
-            {activeView === 'stock' && (
+            {displayedView === 'stock' && (
               <StockProductionView
                 data={data}
                 key={`stock-${run}`}
-                onOpenSale={(saleId) => {
-                  setSaleToOpen(saleId);
-                  changeView('sales');
-                }}
+                onOpenSale={
+                  can(data.user, 'sales')
+                    ? (saleId) => {
+                        setSaleToOpen(saleId);
+                        changeView('sales');
+                      }
+                    : undefined
+                }
               />
             )}
-            {activeView === 'sales' && (
+            {displayedView === 'sales' && (
               <SalesProductionView
                 data={data}
                 key={`sales-${run}`}
@@ -815,40 +858,52 @@ function CloudPdv({
                 openSaleId={saleToOpen}
               />
             )}
-            {activeView === 'catalog' && (
+            {displayedView === 'catalog' && (
               <CatalogProductionView
                 data={data}
                 key={`catalog-${run}`}
                 onChanged={() => reload(true)}
                 onStatusChanged={() => reload(true, true)}
-                onOpenSale={(saleId) => {
-                  setSaleToOpen(saleId);
-                  changeView('sales');
-                }}
+                onOpenSale={
+                  can(data.user, 'sales')
+                    ? (saleId) => {
+                        setSaleToOpen(saleId);
+                        changeView('sales');
+                      }
+                    : undefined
+                }
               />
             )}
-            {activeView === 'ranking' && (
+            {displayedView === 'ranking' && (
               <RankingProductionView
                 key={`ranking-${run}`}
-                onOpenSale={(saleId) => {
-                  setSaleToOpen(saleId);
-                  changeView('sales');
-                }}
+                onOpenSale={
+                  can(data.user, 'sales')
+                    ? (saleId) => {
+                        setSaleToOpen(saleId);
+                        changeView('sales');
+                      }
+                    : undefined
+                }
               />
             )}
-            {activeView === 'entries' && (
+            {displayedView === 'entries' && (
               <EntryHistoryView key={`entries-${run}`} />
             )}
-            {activeView === 'overview' && (
+            {displayedView === 'overview' && (
               <OverviewProductionView
                 key={`overview-${run}`}
-                onOpenSale={(saleId) => {
-                  setSaleToOpen(saleId);
-                  changeView('sales');
-                }}
+                onOpenSale={
+                  can(data.user, 'sales')
+                    ? (saleId) => {
+                        setSaleToOpen(saleId);
+                        changeView('sales');
+                      }
+                    : undefined
+                }
               />
             )}
-            {activeView === 'settings' && (
+            {displayedView === 'settings' && (
               <SettingsProductionView
                 data={data}
                 installAvailable={Boolean(installPrompt)}
@@ -868,7 +923,8 @@ function CloudPdv({
         </section>
 
         <MobileNavigation
-          active={activeView}
+          items={allowedNavigation}
+          active={displayedView}
           onChange={changeView}
           onOpenChange={setMobileMenuOpen}
           open={mobileMenuOpen}
@@ -1456,6 +1512,7 @@ function ProfileDialog({
           <Button
             className="h-12 justify-start rounded-xl lg:hidden"
             onClick={onEntries}
+            disabled={!can(data.user, 'entries')}
             variant="outline"
           >
             <History /> Histórico de entradas
@@ -1521,6 +1578,19 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="Vendedor da venda">
+            Na revisão final, seu usuário já vem selecionado como vendedor. Você
+            pode escolher outro usuário ativo da mesma loja. A venda e o ranking
+            ficam com o vendedor escolhido; o sistema registra quem finalizou a
+            operação. Cada nova venda volta ao seu usuário.
+          </GuideStep>
+          <GuideStep number="Novo" title="Permissões por usuário">
+            Em Configurações › Pessoas › Usuários › Acessos, o proprietário
+            escolhe os menus e ações de cada funcionário. Consultar vendas,
+            alterar pagamentos e cancelar são permissões separadas. Ao mudar os
+            acessos, o funcionário precisa entrar novamente. O proprietário
+            sempre mantém acesso completo.
+          </GuideStep>
           <GuideStep number="Novo" title="Desativar e reativar produtos">
             Em Cadastros › Produtos, use Desativar na lista ou no início da
             edição. A desativação impede novas entradas, sem apagar códigos,
@@ -1718,15 +1788,17 @@ function navigationButtonClass(view: View, selected: boolean, mobile = false) {
 }
 
 function DesktopNavigation({
+  items,
   active,
   onChange,
 }: {
+  items: typeof navigation;
   active: View;
   onChange: (view: View) => void;
 }) {
   return (
     <nav className="mt-8 space-y-1" aria-label="Navegação principal">
-      {navigation.map(({ view, label, icon: Icon }) => (
+      {items.map(({ view, label, icon: Icon }) => (
         <button
           aria-current={active === view ? 'page' : undefined}
           className={navigationButtonClass(view, active === view)}
@@ -1743,6 +1815,7 @@ function DesktopNavigation({
 }
 
 function MobileNavigation({
+  items,
   active,
   onChange,
   onOpenChange,
@@ -1750,6 +1823,7 @@ function MobileNavigation({
   storeCode,
   storeName,
 }: {
+  items: typeof navigation;
   active: View;
   onChange: (view: View) => void;
   onOpenChange: (open: boolean) => void;
@@ -1783,7 +1857,7 @@ function MobileNavigation({
           className="min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-3 pb-[max(1rem,env(safe-area-inset-bottom))]"
         >
           <div className="grid gap-2">
-            {navigation.map(({ view, label, icon: Icon }) => {
+            {items.map(({ view, label, icon: Icon }) => {
               const selected = active === view;
               return (
                 <button
