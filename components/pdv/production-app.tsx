@@ -1513,7 +1513,9 @@ function GuideDialog({
             Seus preços e estoque permanecem preservados. As identificações
             visuais de cores foram revisadas, incluindo o rosa do iPhone 16,
             lavanda, verde-azulado e prateado. Os tons são ilustrativos; confira
-            sempre o nome da cor.
+            sempre o nome da cor. No menu, Vender é a ação principal em
+            destaque; Nova entrada tem destaque secundário para facilitar o
+            acesso sem carregar a tela.
           </GuideStep>
           <GuideStep number="Dica" title="Lista de preços para WhatsApp">
             Em Estoque, toque em WhatsApp para gerar a lista de todos os
@@ -1666,6 +1668,16 @@ function GuideStep({
   );
 }
 
+function navigationButtonClass(view: View, selected: boolean, mobile = false) {
+  const base =
+    'group flex w-full items-center gap-3 rounded-2xl border text-left outline-none transition focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
+  if (view === 'sell')
+    return `${base} ${mobile ? 'min-h-20 px-4 text-lg' : 'mb-2 min-h-14 px-4 text-base'} border-primary bg-primary font-extrabold text-primary-foreground shadow-md shadow-primary/15 hover:bg-primary/90 ${selected ? 'ring-2 ring-primary/25 ring-offset-2 ring-offset-background' : ''}`;
+  if (view === 'entry')
+    return `${base} ${mobile ? 'min-h-16 px-3.5 text-[0.9375rem]' : 'mb-3 min-h-12 px-4 text-sm'} border-primary/20 bg-secondary font-bold text-primary hover:border-primary/40 hover:bg-accent ${selected ? 'border-primary/50 ring-1 ring-inset ring-primary/20' : ''}`;
+  return `${base} ${mobile ? 'min-h-12 px-3.5 text-sm' : 'min-h-11 px-4 text-sm'} font-semibold ${selected ? 'border-border bg-muted text-foreground' : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'}`;
+}
+
 function DesktopNavigation({
   active,
   onChange,
@@ -1678,12 +1690,12 @@ function DesktopNavigation({
       {navigation.map(({ view, label, icon: Icon }) => (
         <button
           aria-current={active === view ? 'page' : undefined}
-          className={`flex min-h-11 w-full items-center gap-3 rounded-2xl px-4 text-left text-sm font-semibold transition ${active === view ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/15' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+          className={navigationButtonClass(view, active === view)}
           key={view}
           onClick={() => onChange(view)}
           type="button"
         >
-          <Icon className="size-[1.1rem]" />
+          <Icon className={view === 'sell' ? 'size-5' : 'size-[1.1rem]'} />
           {label}
         </button>
       ))}
@@ -1737,19 +1749,21 @@ function MobileNavigation({
               return (
                 <button
                   aria-current={selected ? 'page' : undefined}
-                  className={`group flex min-h-16 w-full items-center gap-3 rounded-2xl border px-3.5 text-left text-[0.9375rem] font-bold outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-primary/20 bg-primary text-primary-foreground shadow-lg shadow-primary/15' : 'border-transparent bg-muted/35 text-foreground hover:border-border hover:bg-muted'}`}
+                  className={navigationButtonClass(view, selected, true)}
                   key={view}
                   onClick={() => selectView(view)}
                   type="button"
                 >
                   <span
-                    className={`grid size-10 shrink-0 place-items-center rounded-xl ${selected ? 'bg-white/15' : 'bg-background text-primary shadow-sm'}`}
+                    className={`grid shrink-0 place-items-center rounded-xl ${view === 'sell' ? 'size-11 bg-white/15' : view === 'entry' ? 'size-10 bg-background text-primary' : 'size-8 bg-muted text-muted-foreground'}`}
                   >
                     <Icon className="size-5" />
                   </span>
                   <span className="min-w-0 flex-1 truncate">{label}</span>
                   {selected && (
-                    <span className="rounded-full bg-white/15 px-2 py-1 text-xs">
+                    <span
+                      className={`rounded-full px-2 py-1 text-xs ${view === 'sell' ? 'bg-white/15' : 'bg-background text-muted-foreground'}`}
+                    >
                       Atual
                     </span>
                   )}
