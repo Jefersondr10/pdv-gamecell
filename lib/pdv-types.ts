@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.07-visao-geral-v19';
+export const GUIDE_VERSION = '2026.09.08-produtos-ativos-v20';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 

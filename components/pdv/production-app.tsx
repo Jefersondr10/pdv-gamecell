@@ -373,23 +373,27 @@ function CloudPdv({
   const lastReloadAtRef = useRef(0);
   const catalogSyncRef = useRef(0);
 
-  const reload = useCallback(async (background = false) => {
-    const requestId = ++reloadRequestRef.current;
-    try {
-      if (!background) setLoadingError('');
-      const next = await requestJson<BootstrapData>('/api/bootstrap');
-      if (requestId !== reloadRequestRef.current) return;
-      dataRef.current = next;
-      lastReloadAtRef.current = Date.now();
-      setData(next);
-      if (next.guideRequired) setGuideOpen(true);
-    } catch (error) {
-      if (requestId !== reloadRequestRef.current) return;
-      const message = messageOf(error);
-      if (/Entre novamente/.test(message)) window.location.reload();
-      if (!background || !dataRef.current) setLoadingError(message);
-    }
-  }, []);
+  const reload = useCallback(
+    async (background = false, reportFailure = false) => {
+      const requestId = ++reloadRequestRef.current;
+      try {
+        if (!background) setLoadingError('');
+        const next = await requestJson<BootstrapData>('/api/bootstrap');
+        if (requestId !== reloadRequestRef.current) return;
+        dataRef.current = next;
+        lastReloadAtRef.current = Date.now();
+        setData(next);
+        if (next.guideRequired) setGuideOpen(true);
+      } catch (error) {
+        if (requestId !== reloadRequestRef.current) return;
+        const message = messageOf(error);
+        if (/Entre novamente/.test(message)) window.location.reload();
+        if (!background || !dataRef.current) setLoadingError(message);
+        if (reportFailure) throw error;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     queueMicrotask(() => void reload());
@@ -816,6 +820,7 @@ function CloudPdv({
                 data={data}
                 key={`catalog-${run}`}
                 onChanged={() => reload(true)}
+                onStatusChanged={() => reload(true, true)}
                 onOpenSale={(saleId) => {
                   setSaleToOpen(saleId);
                   changeView('sales');
@@ -850,6 +855,7 @@ function CloudPdv({
                 installed={installed}
                 key={`settings-${run}`}
                 onChanged={() => reload(true)}
+                onStatusChanged={() => reload(true, true)}
                 onInstall={async () => {
                   if (!installPrompt) return;
                   await installPrompt.prompt();
@@ -1515,6 +1521,14 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="Desativar e reativar produtos">
+            Em Cadastros › Produtos, use Desativar na lista ou no início da
+            edição. A desativação impede novas entradas, sem apagar códigos,
+            preços, fotos ou histórico. Aparelhos já disponíveis continuam no
+            estoque e podem ser vendidos. Use o filtro Inativos para localizar o
+            cadastro e Reativar para voltar a receber esse produto. Apenas o
+            proprietário e os administradores podem alterar a situação.
+          </GuideStep>
           <GuideStep number="Novo" title="Visão geral: conferir comprovantes">
             No menu da loja, abra Visão geral e escolha o período pela data da
             venda. Compare o pago informado com os valores dos comprovantes,

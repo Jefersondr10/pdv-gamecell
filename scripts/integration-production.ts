@@ -469,6 +469,82 @@ assert.deepEqual(offerRows[0], {
 });
 assert.ok(Number.isFinite(availableOffer.body.generatedAt));
 
+// Deactivation is reversible catalog management, not deletion of real stock.
+const productBeforeStatus = (
+  (await call('/api/bootstrap', { cookie: ownerCookie })).body
+    .products as Array<{ id: string; active: boolean }>
+).find((row) => row.id === productId)!;
+await call(`/api/products/${productId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: false }),
+});
+const inactiveProduct = (
+  (await call('/api/bootstrap', { cookie: ownerCookie })).body
+    .products as Array<{ id: string; active: boolean }>
+).find((row) => row.id === productId)!;
+assert.equal(inactiveProduct.active, false);
+assert.deepEqual({ ...inactiveProduct, active: true }, productBeforeStatus);
+assert.deepEqual(
+  (await call('/api/inventory?view=summary', { cookie: ownerCookie })).body,
+  availableStock.body,
+);
+assert.deepEqual(
+  (
+    await call('/api/inventory?limit=50&includePhotos=1', {
+      cookie: ownerCookie,
+    })
+  ).body,
+  inventoryPage.body,
+);
+assert.deepEqual(
+  (await call('/api/entries?limit=50', { cookie: ownerCookie })).body,
+  entries.body,
+);
+assert.deepEqual(
+  (await call('/api/inventory?view=whatsapp', { cookie: ownerCookie })).body
+    .rows,
+  offerRows,
+);
+assert.equal(
+  (
+    (
+      await call('/api/inventory/lookup?serial=HC9P06R095', {
+        cookie: ownerCookie,
+      })
+    ).body.matches as { status: string }[]
+  )[0].status,
+  'available',
+);
+const inactiveEntryForm = new FormData();
+inactiveEntryForm.set(
+  'payload',
+  JSON.stringify({
+    operationId: crypto.randomUUID(),
+    productId,
+    gtin14: '00036000291452',
+    serials: ['HC9P06R098'],
+  }),
+);
+inactiveEntryForm.append('photos', tinyPhoto(), 'entrada-bloqueada.png');
+const inactiveEntry = await call('/api/entries', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: inactiveEntryForm,
+});
+assert.equal(inactiveEntry.body.code, 'PRODUCT_CODE_CHANGED');
+assert.deepEqual(
+  (
+    await call('/api/inventory?limit=50&includePhotos=1', {
+      cookie: ownerCookie,
+    })
+  ).body,
+  inventoryPage.body,
+);
+
 const saleOperationId = crypto.randomUUID();
 const salePayload = {
   operationId: saleOperationId,
@@ -493,6 +569,33 @@ const sale = await call('/api/sales', {
 assert.equal(sale.body.number, 1);
 assert.deepEqual(sale.body.receipts, []);
 const saleId = String(sale.body.id);
+// Existing SNs of an inactive product can still be sold; reactivation changes no records.
+const historyBeforeReactivation = await call(
+  '/api/sales?period=all&group=sale',
+  { cookie: ownerCookie },
+);
+await call(`/api/products/${productId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ active: true }),
+});
+assert.deepEqual(
+  (
+    (await call('/api/bootstrap', { cookie: ownerCookie })).body.products as {
+      id: string;
+    }[]
+  ).find((row) => row.id === productId),
+  productBeforeStatus,
+);
+assert.deepEqual(
+  (await call('/api/sales?period=all&group=sale', { cookie: ownerCookie }))
+    .body,
+  historyBeforeReactivation.body,
+);
+console.log(
+  'Product activation: reversible status, unchanged codes/prices/photos/history, rejected new entries, existing stock remains sellable and exportable.',
+);
 const replaySaleForm = new FormData();
 replaySaleForm.set('payload', JSON.stringify(salePayload));
 const replayedSale = await call('/api/sales', {
@@ -1324,6 +1427,16 @@ const changedStaffSession = await call('/api/auth/session', {
   cookie: staffCookie,
 });
 const changedStaffCsrf = String(changedStaffSession.body.csrfToken);
+await call(`/api/products/${productId}`, {
+  method: 'PATCH',
+  cookie: staffCookie,
+  expected: 403,
+  headers: {
+    'x-csrf-token': changedStaffCsrf,
+    'content-type': 'application/json',
+  },
+  body: JSON.stringify({ active: false }),
+});
 await call('/api/bootstrap', { cookie: staffCookie });
 await call('/api/inventory?view=whatsapp', { cookie: staffCookie });
 
@@ -1979,6 +2092,16 @@ assert.deepEqual(
 );
 const secondCatalogSession = await call('/api/auth/session', {
   cookie: secondShopCookie,
+});
+await call(`/api/products/${productId}`, {
+  method: 'PATCH',
+  cookie: secondShopCookie,
+  expected: 404,
+  headers: {
+    'x-csrf-token': String(secondCatalogSession.body.csrfToken),
+    'content-type': 'application/json',
+  },
+  body: JSON.stringify({ active: false }),
 });
 await call('/api/system-catalog/sync', {
   method: 'POST',

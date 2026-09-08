@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
+import { ProductStatusAction } from '@/components/pdv/product-status-action';
 import {
   ORDER_STATUS_COLOR_OPTIONS,
   OrderStatusBadge,
@@ -77,12 +78,14 @@ type Manager =
 export function SettingsProductionView({
   data,
   onChanged,
+  onStatusChanged,
   installAvailable,
   installed,
   onInstall,
 }: {
   data: BootstrapData;
   onChanged: () => Promise<void>;
+  onStatusChanged: () => Promise<void>;
   installAvailable: boolean;
   installed: boolean;
   onInstall: () => Promise<void>;
@@ -212,6 +215,7 @@ export function SettingsProductionView({
       <ProductsDialog
         data={data}
         onChanged={onChanged}
+        onStatusChanged={onStatusChanged}
         onOpenChange={(open) => !open && setManager(null)}
         open={manager === 'products'}
       />
@@ -260,7 +264,8 @@ function ProductsDialog({
   open,
   onOpenChange,
   onChanged,
-}: CommonDialogProps) {
+  onStatusChanged,
+}: CommonDialogProps & { onStatusChanged: () => Promise<void> }) {
   const [showNew, setShowNew] = useState(data.products.length === 0);
   const [values, setValues] = useState({
     model: '',
@@ -423,12 +428,26 @@ function ProductsDialog({
                   {data.products.map((product) => (
                     <NativeSelectOption key={product.id} value={product.id}>
                       {product.model} · {product.detail}
+                      {!product.active ? ' · Inativo' : ''}
                     </NativeSelectOption>
                   ))}
                 </NativeSelect>
               </label>
               {selected && (
                 <div className="mt-3 rounded-2xl border p-4">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <Badge variant={selected.active ? 'outline' : 'secondary'}>
+                      {selected.active ? 'Ativo' : 'Inativo'}
+                    </Badge>
+                    <ProductStatusAction
+                      key={selected.id}
+                      product={selected}
+                      csrfToken={data.csrfToken}
+                      onChanged={onStatusChanged}
+                      disabled={busy}
+                      onBusyChange={setBusy}
+                    />
+                  </div>
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="font-bold">{selected.model}</p>

@@ -13,6 +13,7 @@ import {
   WalletCards,
 } from 'lucide-react';
 
+import { ProductStatusAction } from '@/components/pdv/product-status-action';
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import { ClientPurchaseHistory } from './client-purchase-history';
 import {
@@ -53,10 +54,12 @@ const CLIENT_PAGE_SIZE = 40;
 export function CatalogProductionView({
   data,
   onChanged,
+  onStatusChanged,
   onOpenSale,
 }: {
   data: BootstrapData;
   onChanged: () => Promise<void>;
+  onStatusChanged: () => Promise<void>;
   onOpenSale: (id: string) => void;
 }) {
   const canManage = data.user.role === 'owner' || data.user.role === 'admin';
@@ -118,6 +121,7 @@ export function CatalogProductionView({
             csrfToken={data.csrfToken}
             items={data.products}
             onChanged={onChanged}
+            onStatusChanged={onStatusChanged}
           />
         </TabsContent>
         <TabsContent
@@ -286,11 +290,13 @@ function ProductsManager({
   csrfToken,
   canManage,
   onChanged,
+  onStatusChanged,
 }: {
   items: ProductRecord[];
   csrfToken: string;
   canManage: boolean;
   onChanged: () => Promise<void>;
+  onStatusChanged: () => Promise<void>;
 }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
@@ -345,7 +351,7 @@ function ProductsManager({
           >
             <NativeSelectOption value="all">Todos</NativeSelectOption>
             <NativeSelectOption value="active">Ativos</NativeSelectOption>
-            <NativeSelectOption value="inactive">Excluídos</NativeSelectOption>
+            <NativeSelectOption value="inactive">Inativos</NativeSelectOption>
           </NativeSelect>
         </>
       }
@@ -367,7 +373,7 @@ function ProductsManager({
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="truncate font-bold">{product.model}</p>
-                <StatusBadge active={product.active} />
+                <StatusBadge active={product.active} inactiveLabel="Inativo" />
               </div>
               <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
                 <ProductColorSwatch
@@ -389,12 +395,21 @@ function ProductsManager({
               </Button>
             )}
           </div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {product.codes.map((code) => (
-              <Badge className="font-mono" key={code.id} variant="secondary">
-                {code.kind} {displayCommercialCode(code.code, code.kind)}
-              </Badge>
-            ))}
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+              {product.codes.map((code) => (
+                <Badge className="font-mono" key={code.id} variant="secondary">
+                  {code.kind} {displayCommercialCode(code.code, code.kind)}
+                </Badge>
+              ))}
+            </div>
+            {canManage && (
+              <ProductStatusAction
+                product={product}
+                csrfToken={csrfToken}
+                onChanged={onStatusChanged}
+              />
+            )}
           </div>
         </article>
       ))}
@@ -429,6 +444,7 @@ function ProductsManager({
           csrfToken={csrfToken}
           key={editingId}
           onChanged={onChanged}
+          onStatusChanged={onStatusChanged}
           onClose={() => setEditingId(null)}
           product={editingId === 'new' ? null : selected}
         />
@@ -660,11 +676,13 @@ function ProductEditor({
   product,
   csrfToken,
   onChanged,
+  onStatusChanged,
   onClose,
 }: {
   product: ProductRecord | null;
   csrfToken: string;
   onChanged: () => Promise<void>;
+  onStatusChanged: () => Promise<void>;
   onClose: () => void;
 }) {
   const [values, setValues] = useState({
@@ -681,16 +699,9 @@ function ProductEditor({
   const [error, setError] = useState('');
   const set = (key: keyof typeof values, value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
-  const toggleActive = async (active: boolean) => {
-    if (!product) return;
-    await runAction(setBusy, setError, async () => {
-      await patchJson(`/api/products/${product.id}`, csrfToken, { active });
-      await onChanged();
-      onClose();
-    });
-  };
   return (
     <EditorDialog
+      busy={busy}
       description={
         product
           ? 'Edite a variação, o preço e os códigos reconhecidos pelo leitor.'
@@ -701,6 +712,27 @@ function ProductEditor({
       wide
     >
       {error && <ErrorBox>{error}</ErrorBox>}
+      {product && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/30 p-3">
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-2 text-sm font-semibold">
+              Situação{' '}
+              <StatusBadge active={product.active} inactiveLabel="Inativo" />
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Desativar impede novas entradas. O estoque existente e o histórico
+              são preservados.
+            </p>
+          </div>
+          <ProductStatusAction
+            product={product}
+            csrfToken={csrfToken}
+            onChanged={onStatusChanged}
+            disabled={busy}
+            onBusyChange={setBusy}
+          />
+        </div>
+      )}
       <form
         className="grid gap-3 sm:grid-cols-2"
         onSubmit={(event) => {
@@ -932,14 +964,6 @@ function ProductEditor({
           </form>
         </section>
       )}
-      {product && (
-        <RecordStatusControl
-          active={product.active}
-          busy={busy}
-          label="produto"
-          onToggle={toggleActive}
-        />
-      )}
     </EditorDialog>
   );
 }
@@ -1063,17 +1087,20 @@ function EditorDialog({
   description,
   onClose,
   wide = false,
+  busy = false,
   children,
 }: {
   title: string;
   description: string;
   onClose: () => void;
   wide?: boolean;
+  busy?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <Dialog onOpenChange={(open) => !open && onClose()} open>
+    <Dialog onOpenChange={(open) => !open && !busy && onClose()} open>
       <DialogContent
+        showCloseButton={!busy}
         className={`flex h-dvh max-h-dvh max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:rounded-2xl sm:pb-0 sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2 ${wide ? 'sm:max-w-3xl' : 'sm:max-w-xl'}`}
       >
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
@@ -1086,6 +1113,7 @@ function EditorDialog({
         <div className="shrink-0 border-t bg-muted/30 p-3 text-right">
           <Button
             className="h-10 min-w-28"
+            disabled={busy}
             onClick={onClose}
             type="button"
             variant="outline"
@@ -1199,13 +1227,19 @@ function SearchInput({
   );
 }
 
-function StatusBadge({ active }: { active: boolean }) {
+function StatusBadge({
+  active,
+  inactiveLabel = 'Excluído',
+}: {
+  active: boolean;
+  inactiveLabel?: string;
+}) {
   return active ? (
     <Badge className="bg-success/10 text-success hover:bg-success/10">
       Ativo
     </Badge>
   ) : (
-    <Badge variant="secondary">Excluído</Badge>
+    <Badge variant="secondary">{inactiveLabel}</Badge>
   );
 }
 
