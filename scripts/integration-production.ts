@@ -2468,6 +2468,7 @@ for (const path of [
   '/api/rankings',
   '/api/overview',
   '/api/system/backup-status',
+  `/api/sales/${attributionId}/participants`,
 ])
   await call(path, { ...accessStaff, expected: 403 });
 for (const [path, method] of [
@@ -2484,6 +2485,7 @@ for (const [path, method] of [
   [`/api/sales/${attributionId}/attachments`, 'POST'],
   [`/api/sales/${attributionId}/receipt-values`, 'PATCH'],
   [`/api/sales/${attributionId}/order-status`, 'PATCH'],
+  [`/api/sales/${attributionId}/participants`, 'PATCH'],
   [`/api/sales/${attributionId}/receipt-ocr`, 'POST'],
   [`/api/products/${productId}`, 'PATCH'],
   [`/api/clients/${staffClientId}`, 'PATCH'],
@@ -3076,5 +3078,231 @@ assert.equal(fullCodesAfter.defaultPriceCents, 12345);
 assert.equal(fullCodesAfter.codes.length, 20);
 console.log(
   'Product codes persist with Save and retry; batch prices are atomic, tenant-scoped, permission-checked, conflict-safe and preserve sale history.',
+);
+// Corrections on completed sales preserve financial/stock data and change the
+// customer history and seller attribution, not the actor of the original sale.
+const participantPath = `/api/sales/${attributionId}/participants`;
+accessStaff = await loginAccessStaff();
+await call(participantPath, { ...accessStaff, expected: 403 });
+await call(participantPath, { cookie: secondShopCookie, expected: 404 });
+await call(participantPath, { expected: 401 });
+const participantChoices = (
+  await call(participantPath, { cookie: ownerCookie })
+).body;
+type TestedParticipants = {
+  customerId: string | null;
+  customerName: string;
+  sellerUserId: string;
+  sellerName: string;
+  revision: number;
+};
+const originalParticipants = participantChoices.current as TestedParticipants;
+for (const key of ['clients', 'sellers']) {
+  assert.ok(
+    (participantChoices[key] as { id: string }[]).every(
+      (row) => Object.keys(row).sort().join(',') === 'id,name',
+    ),
+  );
+}
+assert.ok(
+  !(participantChoices.sellers as { id: string }[]).some(
+    (row) => row.id === foreignActor,
+  ),
+);
+const correction = {
+  operationId: crypto.randomUUID(),
+  expected: {
+    customerId: originalParticipants.customerId,
+    sellerUserId: originalParticipants.sellerUserId,
+    revision: originalParticipants.revision,
+  },
+  customerId: clientId,
+  sellerUserId: staffActor,
+};
+const saleForCorrection = async () =>
+  (
+    (
+      await call(`/api/sales?period=all&saleId=${attributionId}`, {
+        cookie: ownerCookie,
+      })
+    ).body.items as JsonValue[]
+  )[0];
+const beforeCorrection = await saleForCorrection();
+const rankAmounts = async (dimension: string) =>
+  (
+    await call(`/api/rankings?period=all&dimension=${dimension}`, {
+      cookie: ownerCookie,
+    })
+  ).body.items as { key: string; totalCents: number; itemCount: number }[];
+const ranksBefore = {
+  customer: await rankAmounts('customer'),
+  seller: await rankAmounts('seller'),
+};
+await call(participantPath, {
+  cookie: ownerCookie,
+  method: 'PATCH',
+  ...jsonBody(correction),
+  expected: 403,
+});
+await call(participantPath, {
+  ...accessStaff,
+  method: 'PATCH',
+  body: JSON.stringify(correction),
+  expected: 403,
+});
+await call(participantPath, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({ ...correction, sellerUserId: foreignActor }),
+  expected: 409,
+});
+const changedParticipants = await call(participantPath, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify(correction),
+});
+assert.equal(
+  (changedParticipants.body.current as TestedParticipants).sellerUserId,
+  staffActor,
+);
+assert.equal(
+  (changedParticipants.body.current as TestedParticipants).customerId,
+  clientId,
+);
+assert.equal(
+  (
+    await call(participantPath, {
+      ...editingHeaders,
+      method: 'PATCH',
+      body: JSON.stringify(correction),
+    })
+  ).body.replayed,
+  true,
+);
+await call(participantPath, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({ ...correction, operationId: crypto.randomUUID() }),
+  expected: 409,
+});
+const afterCorrection = await saleForCorrection();
+assert.equal(afterCorrection.customerId, clientId);
+assert.equal(
+  afterCorrection.sellerName,
+  (changedParticipants.body.current as TestedParticipants).sellerName,
+);
+for (const key of [
+  'id',
+  'code',
+  'createdAt',
+  'status',
+  'items',
+  'payments',
+  'receipts',
+  'productsTotalCents',
+  'receivedTotalCents',
+  'reconciliation',
+])
+  assert.deepEqual(
+    afterCorrection[key],
+    beforeCorrection[key],
+    `Participant edit must preserve ${key}`,
+  );
+for (const [query, present] of [
+  [`customerId=${clientId}`, true],
+  [`customerId=${staffClientId}`, false],
+  [`sellerId=${staffActor}`, true],
+  [`sellerId=${ownerActor}`, false],
+] as const) {
+  const rows = (
+    await call(`/api/sales?period=all&${query}`, { cookie: ownerCookie })
+  ).body.items as { id: string }[];
+  assert.equal(
+    rows.some((row) => row.id === attributionId),
+    present,
+    query,
+  );
+}
+for (const [dimension, oldKey, newKey] of [
+  ['customer', staffClientId, clientId],
+  ['seller', ownerActor, staffActor],
+] as const) {
+  const ranked = await rankAmounts(dimension);
+  const cents = (rows: typeof ranked, key: string) =>
+    rows.find((row) => row.key === key)?.totalCents ?? 0;
+  assert.equal(
+    cents(ranked, newKey) - cents(ranksBefore[dimension], newKey),
+    123400,
+  );
+  assert.equal(
+    cents(ranked, oldKey) - cents(ranksBefore[dimension], oldKey),
+    -123400,
+  );
+}
+const groupSeller = (
+  await call('/api/sales?period=all&group=seller', { cookie: ownerCookie })
+).body.groups as { key: string; totalCents: number }[];
+assert.equal(
+  groupSeller.find((row) => row.key === staffActor)?.totalCents,
+  (await rankAmounts('seller')).find((row) => row.key === staffActor)
+    ?.totalCents,
+);
+const originalReplay = await call('/api/sales', {
+  cookie: accessStaff.cookie,
+  method: 'POST',
+  headers: { 'x-csrf-token': accessStaff.headers['x-csrf-token'] },
+  body: sellerForm(attributionPayload, false),
+});
+assert.equal(originalReplay.body.replayed, true);
+assert.equal(
+  (await saleForCorrection()).customerId,
+  clientId,
+  'Retry of original sale must not undo the correction',
+);
+const cancelledParticipants = (
+  await call(`/api/sales/${saleId}/participants`, { cookie: ownerCookie })
+).body.current as TestedParticipants;
+await call(`/api/sales/${saleId}/participants`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({
+    ...correction,
+    operationId: crypto.randomUUID(),
+    expected: {
+      customerId: cancelledParticipants.customerId,
+      sellerUserId: cancelledParticipants.sellerUserId,
+      revision: cancelledParticipants.revision,
+    },
+  }),
+  expected: 409,
+});
+await setStaffPermissions(
+  ['sales', 'sales.participants'],
+  defaultStaffPermissions,
+);
+accessStaff = await loginAccessStaff();
+await call(participantPath, accessStaff);
+const currentParticipants = changedParticipants.body
+  .current as TestedParticipants;
+await call(participantPath, {
+  ...accessStaff,
+  method: 'PATCH',
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    expected: {
+      customerId: currentParticipants.customerId,
+      sellerUserId: currentParticipants.sellerUserId,
+      revision: currentParticipants.revision,
+    },
+    customerId: staffClientId,
+    sellerUserId: ownerActor,
+  }),
+});
+await setStaffPermissions(defaultStaffPermissions, [
+  'sales',
+  'sales.participants',
+]);
+console.log(
+  'Completed sale participant edits: permissions/CSRF/tenant isolation, active choices, preserved financials, customer history, seller filters/rankings, conflicts, original create replay and cancellations passed.',
 );
 console.log('Production integration flow passed.');

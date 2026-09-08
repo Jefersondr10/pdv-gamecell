@@ -961,6 +961,14 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
               received_total_cents AS receivedTotalCents,
               received_difference_cents AS receivedDifferenceCents,
               status,
+              (SELECT json_extract(a.details_json, '$.before.sellerUserId') FROM audit_events a
+               WHERE a.store_id = sales.store_id AND a.entity_id = sales.id
+                 AND a.action = 'sale.participants_changed'
+               ORDER BY json_extract(a.details_json, '$.before.revision') LIMIT 1) AS initialSellerUserId,
+              (SELECT json_extract(a.details_json, '$.before.customerId') FROM audit_events a
+               WHERE a.store_id = sales.store_id AND a.entity_id = sales.id
+                 AND a.action = 'sale.participants_changed'
+               ORDER BY json_extract(a.details_json, '$.before.revision') LIMIT 1) AS initialCustomerId,
               (SELECT details_json FROM audit_events audit
                WHERE audit.store_id = sales.store_id
                  AND audit.entity_id = sales.id
@@ -979,6 +987,8 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
       receivedDifferenceCents: number;
       status: 'completed' | 'cancelled';
       operationDetailsJson: string | null;
+      initialSellerUserId: string | null;
+      initialCustomerId: string | null;
     }>();
   if (!sale) return null;
   const [items, payments, attachments] = await Promise.all([
@@ -1049,6 +1059,9 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
         url: `/api/files/${attachment.id}`,
       })),
     operationFingerprint: details.operationFingerprint,
+    originalSellerUserId:
+      details.sellerUserId ?? sale.initialSellerUserId ?? sale.sellerUserId,
+    originalCustomerId: sale.initialCustomerId ?? sale.customerId,
   };
 }
 
@@ -1112,12 +1125,12 @@ function assertSameSaleOperation(
     items !== undefined &&
     payments !== undefined &&
     canonicalSaleOperation(
-      saved.customerId ?? '',
+      saved.originalCustomerId ?? '',
       saved.items,
       saved.payments,
     ) === canonicalSaleOperation(customerId, items, payments);
   if (
-    saved.sellerUserId !== sellerUserId ||
+    saved.originalSellerUserId !== sellerUserId ||
     (saved.operationFingerprint
       ? saved.operationFingerprint !== operationFingerprint
       : !fallbackMatches)
@@ -1132,11 +1145,17 @@ function assertSameSaleOperation(
 
 function saleOperationDetails(detailsJson: string | null) {
   if (!detailsJson) {
-    return { operationFingerprint: null, receivedDifferenceCents: null };
+    return {
+      operationFingerprint: null,
+      receivedDifferenceCents: null,
+      sellerUserId: null,
+    };
   }
   try {
     const details = JSON.parse(detailsJson) as Record<string, unknown>;
     return {
+      sellerUserId:
+        typeof details.sellerUserId === 'string' ? details.sellerUserId : null,
       operationFingerprint:
         typeof details.operationFingerprint === 'string'
           ? details.operationFingerprint
@@ -1148,7 +1167,11 @@ function saleOperationDetails(detailsJson: string | null) {
           : null,
     };
   } catch {
-    return { operationFingerprint: null, receivedDifferenceCents: null };
+    return {
+      operationFingerprint: null,
+      receivedDifferenceCents: null,
+      sellerUserId: null,
+    };
   }
 }
 

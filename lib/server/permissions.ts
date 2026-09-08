@@ -80,6 +80,8 @@ export function routePermissions(request: Request): Permission[] | null {
     return ['sales.attachments'];
   if (/^\/api\/sales\/[^/]+\/cancel$/.test(path)) return ['sales.cancel'];
   if (/^\/api\/sales\/[^/]+\/order-status$/.test(path)) return ['sales.status'];
+  if (/^\/api\/sales\/[^/]+\/participants$/.test(path))
+    return ['sales.participants'];
   if (/^\/api\/sales\/[^/]+\/receipt-values$/.test(path))
     return ['sales.receipts'];
   if (/^\/api\/sales\/[^/]+\/receipt-ocr$/.test(path))

@@ -18,6 +18,10 @@ export const PERMISSION_GROUPS = [
     label: 'Vendas registradas',
     items: [
       ['sales', 'Consultar vendas e relatórios'],
+      [
+        'sales.participants',
+        'Alterar cliente e vendedor de vendas registradas',
+      ],
       ['sales.payments', 'Adicionar e corrigir pagamentos'],
       ['sales.attachments', 'Anexar fotos e comprovantes'],
       ['sales.receipts', 'Corrigir valores e reler comprovantes'],
@@ -65,6 +69,7 @@ export type PermissionSubject = {
 };
 const MANAGER_ONLY: Permission[] = [
   'sales.cancel',
+  'sales.participants',
   'clients.manage',
   'products.manage',
   'finance.manage',
@@ -80,6 +85,7 @@ export const PERMISSION_PARENTS: Partial<
   'sales.receipts': ['sales'],
   'sales.status': ['sales'],
   'sales.cancel': ['sales'],
+  'sales.participants': ['sales'],
   'clients.history': ['clients'],
   'clients.manage': ['clients'],
   'products.manage': ['products'],

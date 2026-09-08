@@ -34,6 +34,10 @@ import {
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
 import { SaleDetailsDialog } from '@/components/pdv/sale-details-dialog';
+import {
+  SaleParticipantsEditor,
+  useSaleParticipants,
+} from '@/components/pdv/sale-participants-editor';
 import { useServerReceiptJobs } from '@/components/pdv/server-receipt-runtime';
 import {
   GroupDetailsDialog,
@@ -239,6 +243,7 @@ export function SalesProductionView({
   );
   const canCancel = can(data.user, 'sales.cancel');
   const canEdit = canAny(data.user, [
+    'sales.participants',
     'sales.payments',
     'sales.attachments',
     'sales.receipts',
@@ -779,20 +784,25 @@ export function SalesProductionView({
                 value={period === 'day' ? selectedDay : selectedMonth}
               />
             )}
-            <div className="grid grid-cols-3 gap-1 rounded-2xl bg-slate-200/65 p-1 dark:bg-slate-900/70 md:ml-auto md:w-[30rem]">
+            <div
+              aria-label="Agrupar vendas"
+              className="grid grid-cols-4 gap-1 rounded-2xl bg-slate-200/65 p-1 dark:bg-slate-900/70 md:ml-auto md:w-[36rem]"
+            >
               {(
                 [
                   ['sale', 'Por venda', 'Venda', ReceiptText],
                   ['model', 'Por modelo', 'Modelo', Smartphone],
                   ['customer', 'Por cliente', 'Cliente', UsersRound],
+                  ['seller', 'Por vendedor', 'Vendedor', UserRound],
                 ] as const
               ).map(([value, label, mobileLabel, Icon]) => {
                 const selected = grouping === value;
                 return (
                   <Button
                     aria-pressed={selected}
+                    aria-label={label}
                     className={cn(
-                      'h-9 gap-1 rounded-lg px-1 text-sm font-bold tracking-[.025em] shadow-none transition-all sm:px-3',
+                      'h-9 min-w-0 gap-1 rounded-lg px-1 text-xs font-bold tracking-[.015em] shadow-none transition-all sm:px-2 sm:text-sm',
                       selected
                         ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90'
                         : 'text-muted-foreground hover:bg-background hover:text-foreground',
@@ -805,7 +815,7 @@ export function SalesProductionView({
                     size="sm"
                     variant="ghost"
                   >
-                    <Icon className="size-3.5 shrink-0" />
+                    <Icon className="hidden size-3.5 shrink-0 sm:block" />
                     <span className="sm:hidden">{mobileLabel}</span>
                     <span className="hidden sm:inline">{label}</span>
                   </Button>
@@ -1194,6 +1204,13 @@ function EditSaleDialog({
   const canPayments = can(data.user, 'sales.payments');
   const canAttachments = can(data.user, 'sales.attachments');
   const canReceipts = can(data.user, 'sales.receipts');
+  const canParticipants =
+    can(data.user, 'sales.participants') && sale?.status === 'completed';
+  const participants = useSaleParticipants(
+    sale?.id,
+    canParticipants,
+    data.csrfToken,
+  );
   const initialStatusId = sale?.orderStatus?.id ?? '';
   const [selectedStatusId, setSelectedStatusId] = useState(initialStatusId);
   const [currentStatusId, setCurrentStatusId] = useState(initialStatusId);
@@ -1472,8 +1489,8 @@ function EditSaleDialog({
               </DialogTitle>
               <DialogDescription>
                 Altere o acompanhamento, complete um pagamento pendente ou
-                acrescente anexos. Cliente, produtos e preços permanecem
-                protegidos.
+                acrescente anexos. Com permissão, também troque cliente e
+                vendedor. Produtos, SNs e preços permanecem protegidos.
               </DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 overscroll-contain sm:p-5">
@@ -1529,6 +1546,13 @@ function EditSaleDialog({
                   </p>
                 )}
               </section>
+
+              {canParticipants && (
+                <SaleParticipantsEditor
+                  editor={participants}
+                  disabled={preparing || uploadBusy}
+                />
+              )}
 
               {canPayments && sale.status === 'completed' && (
                 <section className="rounded-2xl border p-4">
@@ -2152,6 +2176,7 @@ function EditSaleDialog({
                       selectedStatusId === currentStatusId &&
                       changedSavedReceiptValues.length === 0 &&
                       !hasPaymentCorrections &&
+                      !participants.dirty &&
                       queuedPayments.length === 0 &&
                       paymentMethod === '')
                   }
@@ -2163,7 +2188,9 @@ function EditSaleDialog({
                     let paymentSaved = false;
                     let receiptValuesSaved = false;
                     let attachmentsSaved = false;
+                    let participantsSaved = false;
                     try {
+                      participantsSaved = await participants.save();
                       if (hasPaymentCorrections) {
                         const corrected = await requestJson<{
                           payments: SalePaymentRecord[];
@@ -2326,6 +2353,7 @@ function EditSaleDialog({
                       onOpenChange(false);
                     } catch (caught) {
                       const savedParts = [
+                        participantsSaved ? 'o cliente e vendedor' : '',
                         paymentSaved ? 'o pagamento' : '',
                         statusSaved ? 'o status' : '',
                         receiptValuesSaved
@@ -2497,7 +2525,8 @@ function SaleReport({
                 Relatório da venda #{String(sale.number).padStart(5, '0')}
               </DialogTitle>
               <DialogDescription>
-                PDF com diagramação própria, texto nítido e anexos identificados.
+                PDF com diagramação própria, texto nítido e anexos
+                identificados.
               </DialogDescription>
             </DialogHeader>
             <div

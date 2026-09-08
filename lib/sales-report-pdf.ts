@@ -379,7 +379,7 @@ export async function buildSalesReportPdf(
   );
   doc.setAuthor(storeName);
   doc.setCreationDate(new Date(options.generatedAt ?? Date.now()));
-  doc.setProducer('Atacado Apple · relatório vetorial');
+  doc.setProducer('Sistema PDV · relatório vetorial');
   const completed = sales.filter((sale) => sale.status === 'completed');
   const summarySales = singleSale ? sales : completed;
   const amount = summarySales.reduce(
@@ -565,7 +565,7 @@ export async function buildSalesReportPdf(
       font: regular,
       color: MUTED,
     });
-    page.drawText('Atacado Apple · Relatório de vendas', {
+    page.drawText('Relatório de vendas', {
       x: M,
       y: 23,
       size: 8,

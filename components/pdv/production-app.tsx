@@ -739,7 +739,7 @@ function CloudPdv({
         </aside>
 
         <section className="mx-auto flex h-dvh min-h-0 max-w-[1500px] flex-col overflow-hidden lg:ml-64">
-          <header className="relative z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:h-[4.5rem] lg:px-10 lg:pt-0">
+          <header className="relative z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:hidden">
             <button
               aria-controls="mobile-primary-navigation"
               aria-expanded={mobileMenuOpen}
@@ -754,12 +754,6 @@ function CloudPdv({
                 className={`size-4 shrink-0 text-muted-foreground transition-transform ${mobileMenuOpen ? 'rotate-180' : ''}`}
               />
             </button>
-            <div className="hidden lg:block">
-              <p className="text-sm font-bold">{data.store.name}</p>
-              <p className="text-xs text-muted-foreground">
-                Loja {data.store.code}
-              </p>
-            </div>
             <div className="flex shrink-0 items-center gap-1 sm:gap-2">
               <Button
                 aria-label={`Abrir perfil, ajuda e conta de ${data.user.displayName}`}
@@ -789,6 +783,16 @@ function CloudPdv({
               </output>
             </div>
           </header>
+
+          {!online && (
+            <output
+              aria-live="polite"
+              className="hidden shrink-0 border-b bg-amber-50 px-6 py-2 text-sm font-semibold text-amber-900 lg:block"
+            >
+              Sem conexão. Aguarde a confirmação do servidor antes de considerar
+              uma operação concluída.
+            </output>
+          )}
 
           <OperationRecoveryPanel
             key={`recovery-${data.store.id}-${data.user.id}`}
@@ -1604,6 +1608,13 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="Cliente e vendedor de uma venda">
+            Em Vendas › Editar, pesquise e troque o cliente ou vendedor. A
+            mudança atualiza históricos e rankings, sem alterar aparelhos ou
+            valores, e fica registrada. Libere essa ação em Ajustes › Usuários
+            quando necessário. A opção Por vendedor agora aparece junto dos
+            outros agrupamentos.
+          </GuideStep>
           <GuideStep number="Novo" title="PDF de vendas mais nítido">
             Baixar PDF agora gera páginas próprias, com texto nítido e
             selecionável, resumo por dia e vendas separadas. O completo mantém
