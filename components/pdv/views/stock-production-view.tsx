@@ -13,6 +13,8 @@ import {
   ListFilter,
   LoaderCircle,
   MessageCircle,
+  Pencil,
+  Check,
   Search,
   Smartphone,
   TrendingUp,
@@ -51,6 +53,8 @@ import type {
 } from '@/lib/pdv-types';
 import { displayCommercialCode } from '@/lib/commercial-code';
 import { downloadReportPdf } from '@/lib/download-report-pdf';
+import { can } from '@/lib/permissions';
+import { changedProductPrices, priceInput } from '@/lib/product-prices';
 
 type StockRow = ProductRecord & {
   received: number;
@@ -62,9 +66,13 @@ type StockRow = ProductRecord & {
 
 export function StockProductionView({
   data,
+  onChanged,
   onOpenSale,
 }: {
   data: BootstrapData;
+  onChanged: (
+    prices?: { productId: string; defaultPriceCents: number }[],
+  ) => Promise<void>;
   onOpenSale?: (saleId: string) => void;
 }) {
   const [query, setQuery] = useState('');
@@ -82,6 +90,62 @@ export function StockProductionView({
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState('');
   const [selectedRow, setSelectedRow] = useState<StockRow | null>(null);
+  const [editingPrices, setEditingPrices] = useState(false);
+  const [priceBaseline, setPriceBaseline] = useState<Record<string, number>>(
+    {},
+  );
+  const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
+  const [priceSaving, setPriceSaving] = useState(false);
+  const [priceError, setPriceError] = useState('');
+  const [priceNotice, setPriceNotice] = useState('');
+  const priceChanges = useMemo(() => {
+    try {
+      return {
+        rows: changedProductPrices(priceBaseline, priceDraft),
+        error: '',
+      };
+    } catch (error) {
+      return { rows: [], error: messageOf(error) };
+    }
+  }, [priceBaseline, priceDraft]);
+  const startPriceEditing = () => {
+    setPriceBaseline(
+      Object.fromEntries(data.products.map((p) => [p.id, p.defaultPriceCents])),
+    );
+    setPriceDraft({});
+    setPriceError('');
+    setPriceNotice('');
+    setEditingPrices(true);
+  };
+  const savePrices = async () => {
+    if (priceSaving || !priceChanges.rows.length || priceChanges.error) return;
+    setPriceSaving(true);
+    setPriceError('');
+    try {
+      await requestJson('/api/products/prices', {
+        method: 'PATCH',
+        headers: {
+          'content-type': 'application/json',
+          'x-csrf-token': data.csrfToken,
+        },
+        body: JSON.stringify({ prices: priceChanges.rows }),
+      });
+      setPriceNotice(`${priceChanges.rows.length} preço(s) salvo(s).`);
+      setEditingPrices(false);
+      setPriceDraft({});
+      try {
+        await onChanged(priceChanges.rows);
+      } catch {
+        setPriceError(
+          'Os preços foram salvos e já aparecem aqui. Não foi possível atualizar os demais dados da loja agora.',
+        );
+      }
+    } catch (error) {
+      setPriceError(messageOf(error));
+    } finally {
+      setPriceSaving(false);
+    }
+  };
 
   const loadSummary = useCallback(async () => {
     setSummaryLoading(true);
@@ -149,9 +213,25 @@ export function StockProductionView({
       <Heading
         action={
           <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            {can(data.user, 'products.manage') && !editingPrices && (
+              <Button
+                className="h-10 rounded-xl px-3"
+                variant="secondary"
+                onClick={startPriceEditing}
+                disabled={
+                  summaryLoading ||
+                  Boolean(summaryError) ||
+                  !rows.length ||
+                  priceSaving
+                }
+              >
+                <Pencil /> Editar preços
+              </Button>
+            )}
             <Button
               className="h-10 rounded-xl px-3"
               onClick={() => setWhatsappOpen(true)}
+              disabled={editingPrices || priceSaving}
               variant="outline"
             >
               <MessageCircle className="text-success" />
@@ -160,7 +240,12 @@ export function StockProductionView({
             <Button
               aria-label="Relatório de estoque em PDF"
               className="h-10 rounded-xl"
-              disabled={summaryLoading || Boolean(summaryError)}
+              disabled={
+                summaryLoading ||
+                Boolean(summaryError) ||
+                editingPrices ||
+                priceSaving
+              }
               onClick={() => {
                 setReportGeneratedAt(Date.now());
                 setReportOpen(true);
@@ -175,7 +260,9 @@ export function StockProductionView({
         eyebrow="Inventário"
         title="Estoque"
       />
-      <div className="mb-3 grid shrink-0 grid-cols-3 gap-2 sm:gap-3">
+      <div
+        className={`${editingPrices ? 'hidden' : 'grid'} mb-3 shrink-0 grid-cols-3 gap-2 sm:gap-3`}
+      >
         <Metric
           icon={Warehouse}
           label="Disponíveis"
@@ -188,13 +275,30 @@ export function StockProductionView({
         />
         <Metric icon={TrendingUp} label="Vendidos" value={String(soldToday)} />
       </div>
+      {priceNotice && (
+        <output className="mb-2 shrink-0 text-sm font-semibold text-success">
+          {priceNotice}
+        </output>
+      )}
+      {priceError && (
+        <p
+          role="alert"
+          className="mb-2 shrink-0 rounded-xl bg-destructive/10 p-2 text-sm text-destructive"
+        >
+          {priceError}
+        </p>
+      )}
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader className="shrink-0 border-b p-3 sm:p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="hidden sm:block">
-              <CardTitle className="text-base">Estoque disponível</CardTitle>
+              <CardTitle className="text-base">
+                {editingPrices ? 'Editar preços padrão' : 'Estoque disponível'}
+              </CardTitle>
               <CardDescription>
-                A lista mostra somente a quantidade disponível de cada variação.
+                {editingPrices
+                  ? 'Válidos nas próximas vendas e na lista do WhatsApp.'
+                  : 'A lista mostra somente a quantidade disponível de cada variação.'}
               </CardDescription>
             </div>
             <div className="flex w-full gap-2 sm:w-auto">
@@ -276,65 +380,148 @@ export function StockProductionView({
           ) : (
             <div className="divide-y">
               {filtered.map((row) => (
-                <button
-                  aria-label={`Abrir estoque de ${row.model}, ${row.color}, ${row.memory}`}
-                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-5"
+                <div
                   key={row.id}
-                  onClick={() => setSelectedRow(row)}
-                  type="button"
+                  className="flex flex-col sm:flex-row sm:items-center"
                 >
-                  <span className="grid size-10 place-items-center rounded-xl bg-secondary">
-                    <ProductColorSwatch
-                      className="size-6"
-                      color={row.color}
-                      model={row.model}
-                    />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate font-bold">{row.model}</p>
-                    <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                      <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
-                        <ProductColorSwatch
-                          color={row.color}
-                          model={row.model}
-                        />
-                        <span className="truncate">{row.color}</span>
-                      </span>
+                  <button
+                    aria-label={`Abrir estoque de ${row.model}, ${row.color}, ${row.memory}`}
+                    className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-5"
+                    disabled={editingPrices}
+                    onClick={() => setSelectedRow(row)}
+                    type="button"
+                  >
+                    <span className="grid size-10 place-items-center rounded-xl bg-secondary">
+                      <ProductColorSwatch
+                        className="size-6"
+                        color={row.color}
+                        model={row.model}
+                      />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-bold">{row.model}</p>
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                        <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
+                          <ProductColorSwatch
+                            color={row.color}
+                            model={row.model}
+                          />
+                          <span className="truncate">{row.color}</span>
+                        </span>
+                        <Badge
+                          className="shrink-0 font-extrabold"
+                          variant="secondary"
+                        >
+                          {row.memory}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 hidden truncate font-mono text-xs text-muted-foreground sm:block">
+                        {row.codes
+                          .map((code) =>
+                            displayCommercialCode(code.code, code.kind),
+                          )
+                          .join(' · ')}
+                      </p>
+                    </div>
+                    <div className="text-right sm:text-center">
+                      <p className="text-xs font-bold uppercase text-muted-foreground">
+                        Disponíveis
+                      </p>
                       <Badge
-                        className="shrink-0 font-extrabold"
-                        variant="secondary"
+                        className={
+                          row.available <= 2
+                            ? 'bg-amber-500/10 text-amber-900 hover:bg-amber-500/10'
+                            : 'bg-success/10 text-success hover:bg-success/10'
+                        }
                       >
-                        {row.memory}
+                        {row.available}
                       </Badge>
                     </div>
-                    <p className="mt-1 hidden truncate font-mono text-xs text-muted-foreground sm:block">
-                      {row.codes
-                        .map((code) =>
-                          displayCommercialCode(code.code, code.kind),
-                        )
-                        .join(' · ')}
-                    </p>
+                    <ChevronRight className="size-5 text-muted-foreground" />
+                  </button>
+                  <div className="px-4 pb-3 sm:w-44 sm:shrink-0 sm:py-3 sm:pl-0 sm:pr-5">
+                    {editingPrices ? (
+                      <label
+                        htmlFor={`stock-price-${row.id}`}
+                        className="block text-xs font-semibold text-muted-foreground"
+                      >
+                        Preço padrão · R$
+                        <Input
+                          id={`stock-price-${row.id}`}
+                          aria-label={`Preço padrão de ${row.model}, ${row.color}, ${row.memory}`}
+                          className="mt-1 h-11 bg-background text-right text-base font-bold text-foreground"
+                          inputMode="decimal"
+                          disabled={priceSaving}
+                          value={
+                            priceDraft[row.id] ??
+                            priceInput(
+                              priceBaseline[row.id] ?? row.defaultPriceCents,
+                            )
+                          }
+                          onChange={(event) =>
+                            setPriceDraft((current) => ({
+                              ...current,
+                              [row.id]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    ) : (
+                      <p className="text-right text-sm font-bold">
+                        <span className="mr-2 text-xs font-medium text-muted-foreground sm:mr-0 sm:block">
+                          Preço padrão
+                        </span>
+                        R$ {priceInput(row.defaultPriceCents)}
+                      </p>
+                    )}
                   </div>
-                  <div className="text-right sm:text-center">
-                    <p className="text-xs font-bold uppercase text-muted-foreground">
-                      Disponíveis
-                    </p>
-                    <Badge
-                      className={
-                        row.available <= 2
-                          ? 'bg-amber-500/10 text-amber-900 hover:bg-amber-500/10'
-                          : 'bg-success/10 text-success hover:bg-success/10'
-                      }
-                    >
-                      {row.available}
-                    </Badge>
-                  </div>
-                  <ChevronRight className="size-5 text-muted-foreground" />
-                </button>
+                </div>
               ))}
             </div>
           )}
         </CardContent>
+        {editingPrices && (
+          <div className="shrink-0 space-y-2 border-t bg-muted/30 p-3">
+            <p
+              role={priceChanges.error ? 'alert' : 'status'}
+              className={`text-sm ${priceChanges.error ? 'text-destructive' : 'text-muted-foreground'}`}
+            >
+              {priceChanges.error ||
+                `${priceChanges.rows.length} preço(s) alterado(s), incluindo os ocultos pela pesquisa. Vendas anteriores não mudam.`}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                disabled={priceSaving}
+                onClick={() => {
+                  setEditingPrices(false);
+                  setPriceDraft({});
+                  setPriceError('');
+                  void onChanged().catch((error) =>
+                    setPriceError(messageOf(error)),
+                  );
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button
+                disabled={
+                  priceSaving ||
+                  !priceChanges.rows.length ||
+                  Boolean(priceChanges.error)
+                }
+                onClick={() => void savePrices()}
+              >
+                {priceSaving ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Check />
+                )}
+                {priceSaving ? 'Salvando…' : 'Salvar alterações'}
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
       <StockReport
         detailsCursor={detailsCursor}

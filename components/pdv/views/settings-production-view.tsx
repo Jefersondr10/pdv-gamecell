@@ -72,6 +72,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { messageOf, requestJson } from '@/lib/client-api';
 import { displayCommercialCode } from '@/lib/commercial-code';
+import { ProductEditor } from './catalog-production-view';
 import { parseMoneyInput } from '@/lib/money';
 import {
   type BootstrapData,
@@ -302,6 +303,7 @@ function ProductsDialog({
     price: '',
   });
   const [selectedId, setSelectedId] = useState('');
+  const [editingDetails, setEditingDetails] = useState(false);
   const selected = data.products.find((product) => product.id === selectedId);
   const [price, setPrice] = useState(
     selected ? moneyInput(selected.defaultPriceCents) : '',
@@ -314,6 +316,16 @@ function ProductsDialog({
     await onChanged();
     setShowNew(false);
   };
+  if (open && editingDetails && selected)
+    return (
+      <ProductEditor
+        product={selected}
+        csrfToken={data.csrfToken}
+        onChanged={onStatusChanged}
+        onStatusChanged={onStatusChanged}
+        onClose={() => setEditingDetails(false)}
+      />
+    );
   return (
     <Dialog onOpenChange={(next) => !busy && onOpenChange(next)} open={open}>
       <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-[90dvh] sm:max-w-2xl sm:rounded-2xl">
@@ -541,6 +553,14 @@ function ProductsDialog({
                       .join(' · ')}
                   </p>
                   <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+                    <Button
+                      className="col-span-2"
+                      variant="outline"
+                      onClick={() => setEditingDetails(true)}
+                      disabled={busy}
+                    >
+                      <ScanBarcode /> Editar produto e códigos
+                    </Button>
                     <MoneyInput onChange={setPrice} value={price} />
                     <Button
                       disabled={busy}

@@ -146,6 +146,26 @@
     overscroll-behavior: none;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Controls behave like an app, but entered data and identifiers stay copyable. */
+  input,
+  textarea,
+  [contenteditable='true'],
+  [data-copyable],
+  code,
+  pre,
+  .font-mono,
+  .select-text {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .select-all {
+    -webkit-user-select: all;
+    user-select: all;
   }
 
   button,

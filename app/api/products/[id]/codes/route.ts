@@ -124,7 +124,10 @@ export async function POST(
         'PRODUCT_CODE_CONFLICT',
       );
     }
-    return json({ ok: true, id: codeId }, { status: 201 });
+    return json(
+      { ok: true, id: codeId, code: { id: codeId, code, kind, market } },
+      { status: 201 },
+    );
   } catch (error) {
     return apiError(error);
   }

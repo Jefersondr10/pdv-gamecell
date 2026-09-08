@@ -25,6 +25,7 @@
     "test:receipt-migration": "node scripts/verify-receipt-migration.mjs",
     "test:scanner": "node --experimental-strip-types scripts/verify-scanner.ts",
     "test:catalog": "node --experimental-strip-types scripts/verify-system-catalog.ts",
+    "test:product-editing": "node --experimental-transform-types scripts/verify-product-editing.ts",
     "test:sales-filters": "node --experimental-transform-types scripts/verify-sales-filters.ts",
     "test:rankings": "node --experimental-transform-types scripts/verify-rankings.ts",
     "test:overview": "node --experimental-transform-types scripts/verify-overview.ts",

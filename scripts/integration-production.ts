@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { defaultPermissions, type Permission } from '../lib/permissions.ts';
 import { prepareUploadForm } from '../lib/client-upload.ts';
+import { productEditorPayload } from '../lib/product-editor.ts';
 import {
   SYSTEM_CATALOG_PRODUCTS,
   SYSTEM_CATALOG_VERSION,
@@ -2643,5 +2644,306 @@ assert.equal(
 );
 console.log(
   'First entry in a new shop: two materialized photos save once; retry keeps the same operation and photos.',
+);
+// Product editor: the same Save action persists metadata AND the typed code.
+const editingHeaders = { cookie: ownerCookie, headers: accessOwnerHeaders };
+type EditableProduct = {
+  id: string;
+  model: string;
+  color: string;
+  memory: string;
+  defaultPriceCents: number;
+  codes: { id: string; code: string; market: string | null }[];
+};
+const fetchProducts = async () =>
+  (await call('/api/bootstrap', { cookie: ownerCookie })).body
+    .products as EditableProduct[];
+let editedProduct = (await fetchProducts()).find(
+  (row) => row.id === productId,
+)!;
+const saveProductBody = productEditorPayload(
+  { ...editedProduct, price: '5.012,34' },
+  '5901234123457',
+  'Brasil',
+);
+await call(`/api/products/${productId}`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify(saveProductBody),
+});
+editedProduct = (await fetchProducts()).find((row) => row.id === productId)!;
+assert.equal(editedProduct.defaultPriceCents, 501234);
+assert.equal(
+  editedProduct.codes.filter((row) => row.code === '05901234123457').length,
+  1,
+);
+assert.equal(
+  editedProduct.codes.find((row) => row.code === '05901234123457')?.market,
+  'Brasil',
+);
+await call(`/api/products/${productId}`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify(saveProductBody),
+});
+assert.equal(
+  (await fetchProducts())
+    .find((row) => row.id === productId)!
+    .codes.filter((row) => row.code === '05901234123457').length,
+  1,
+);
+await Promise.all(
+  [0, 1].map(() =>
+    call(`/api/products/${productId}`, {
+      ...editingHeaders,
+      method: 'PATCH',
+      body: JSON.stringify({
+        addCode: { code: '9780201379624', market: 'Teste concorrência' },
+      }),
+    }),
+  ),
+);
+assert.equal(
+  (await fetchProducts())
+    .find((row) => row.id === productId)!
+    .codes.filter((row) => row.code === '09780201379624').length,
+  1,
+);
+const badCodeSave = await call(`/api/products/${productId}`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  expected: 400,
+  body: JSON.stringify({
+    defaultPriceCents: 999,
+    addCode: { code: '1234567890123' },
+  }),
+});
+assert.equal(badCodeSave.body.code, 'INVALID_CODE');
+assert.equal(
+  (await fetchProducts()).find((row) => row.id === productId)!
+    .defaultPriceCents,
+  501234,
+);
+const batchProduct = await call('/api/products', {
+  ...editingHeaders,
+  method: 'POST',
+  expected: 201,
+  body: JSON.stringify({
+    model: 'Produto preços',
+    color: 'Azul',
+    memory: '128 GB',
+    defaultPriceCents: 300000,
+    codes: ['4006381333931'],
+  }),
+});
+const batchProductId = String(batchProduct.body.id);
+await call(`/api/products/${productId}`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  expected: 409,
+  body: JSON.stringify({
+    defaultPriceCents: 999,
+    addCode: { code: '4006381333931' },
+  }),
+});
+assert.equal(
+  (await fetchProducts()).find((row) => row.id === productId)!
+    .defaultPriceCents,
+  501234,
+);
+// No price write is accepted without permission or valid CSRF.
+await call('/api/products/prices', {
+  method: 'PATCH',
+  ...jsonBody({ prices: [] }),
+  expected: 401,
+});
+await call('/api/products/prices', {
+  cookie: ownerCookie,
+  method: 'PATCH',
+  ...jsonBody({ prices: [] }),
+  expected: 403,
+});
+accessStaff = await loginAccessStaff();
+await call('/api/products/prices', {
+  ...accessStaff,
+  method: 'PATCH',
+  body: '{}',
+  expected: 403,
+});
+for (const prices of [
+  [],
+  null,
+  [{ productId, defaultPriceCents: -1, expectedPriceCents: 0 }],
+])
+  await call('/api/products/prices', {
+    ...editingHeaders,
+    method: 'PATCH',
+    expected: 400,
+    body: JSON.stringify({ prices }),
+  });
+const changes = [
+  { productId, expectedPriceCents: 501234, defaultPriceCents: 510000 },
+  {
+    productId: batchProductId,
+    expectedPriceCents: 300000,
+    defaultPriceCents: 320000,
+  },
+];
+await call('/api/products/prices', {
+  ...editingHeaders,
+  method: 'PATCH',
+  expected: 400,
+  body: JSON.stringify({ prices: [changes[0], changes[0]] }),
+});
+const saleBeforePrices = (
+  await call(`/api/sales?period=all&saleId=${saleId}`, { cookie: ownerCookie })
+).body.items;
+await call('/api/products/prices', {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({ prices: changes }),
+});
+await call('/api/products/prices', {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({ prices: changes }),
+});
+let pricesAfter = await fetchProducts();
+assert.equal(
+  pricesAfter.find((row) => row.id === productId)!.defaultPriceCents,
+  510000,
+);
+assert.equal(
+  pricesAfter.find((row) => row.id === batchProductId)!.defaultPriceCents,
+  320000,
+);
+assert.deepEqual(
+  (
+    await call(`/api/sales?period=all&saleId=${saleId}`, {
+      cookie: ownerCookie,
+    })
+  ).body.items,
+  saleBeforePrices,
+);
+// Mixed batch: one stale price or foreign product must prevent EVERY write.
+await call('/api/products/prices', {
+  ...editingHeaders,
+  method: 'PATCH',
+  expected: 409,
+  body: JSON.stringify({
+    prices: [
+      { productId, expectedPriceCents: 510000, defaultPriceCents: 520000 },
+      {
+        productId: batchProductId,
+        expectedPriceCents: 1,
+        defaultPriceCents: 330000,
+      },
+    ],
+  }),
+});
+await call('/api/products/prices', {
+  ...editingHeaders,
+  method: 'PATCH',
+  expected: 404,
+  body: JSON.stringify({
+    prices: [
+      { productId, expectedPriceCents: 510000, defaultPriceCents: 520000 },
+      {
+        productId: otherProducts[0].id,
+        expectedPriceCents: 0,
+        defaultPriceCents: 330000,
+      },
+    ],
+  }),
+});
+pricesAfter = await fetchProducts();
+assert.equal(
+  pricesAfter.find((row) => row.id === productId)!.defaultPriceCents,
+  510000,
+);
+assert.equal(
+  pricesAfter.find((row) => row.id === batchProductId)!.defaultPriceCents,
+  320000,
+);
+// Concurrent price batches: exactly one may win from the same previous price.
+const competingPrices = await Promise.all(
+  [530000, 540000].map((defaultPriceCents) =>
+    call('/api/products/prices', {
+      ...editingHeaders,
+      method: 'PATCH',
+      expected: [200, 409],
+      body: JSON.stringify({
+        prices: [{ productId, expectedPriceCents: 510000, defaultPriceCents }],
+      }),
+    }),
+  ),
+);
+assert.deepEqual(
+  competingPrices.map((result) => result.response.status).sort((a, b) => a - b),
+  [200, 409],
+);
+const finalProductPrice = (await fetchProducts()).find(
+  (row) => row.id === productId,
+)!.defaultPriceCents;
+const whatsappAfterPrices = (
+  await call('/api/inventory?view=whatsapp', { cookie: ownerCookie })
+).body.rows as {
+  model: string;
+  color: string;
+  memory: string;
+  defaultPriceCents: number;
+}[];
+const offerAfterPrices = whatsappAfterPrices.find(
+  (row) =>
+    row.model === editedProduct.model &&
+    row.color === editedProduct.color &&
+    row.memory === editedProduct.memory,
+);
+assert.ok(offerAfterPrices, 'The changed product still has available stock');
+assert.equal(offerAfterPrices.defaultPriceCents, finalProductPrice);
+// The 20-code limit must not permit a partial metadata save.
+const syntheticGtin = (index: number) => {
+  const body = `9527654${String(index).padStart(5, '0')}`;
+  const sum = body
+    .split('')
+    .reverse()
+    .reduce(
+      (total, digit, i) => total + Number(digit) * (i % 2 === 0 ? 3 : 1),
+      0,
+    );
+  return `${body}${(10 - (sum % 10)) % 10}`;
+};
+const fullCodesProduct = await call('/api/products', {
+  ...editingHeaders,
+  method: 'POST',
+  expected: 201,
+  body: JSON.stringify({
+    model: 'Teste limite códigos',
+    color: 'Preto',
+    memory: '128 GB',
+    defaultPriceCents: 12345,
+    codes: Array.from({ length: 20 }, (_, i) => syntheticGtin(i)),
+  }),
+});
+const codeLimit = await call(
+  `/api/products/${String(fullCodesProduct.body.id)}`,
+  {
+    ...editingHeaders,
+    method: 'PATCH',
+    expected: 409,
+    body: JSON.stringify({
+      defaultPriceCents: 98765,
+      addCode: { code: syntheticGtin(20), market: 'Brasil' },
+    }),
+  },
+);
+assert.equal(codeLimit.body.code, 'PRODUCT_CODE_LIMIT');
+const fullCodesAfter = (await fetchProducts()).find(
+  (row) => row.id === String(fullCodesProduct.body.id),
+)!;
+assert.equal(fullCodesAfter.defaultPriceCents, 12345);
+assert.equal(fullCodesAfter.codes.length, 20);
+console.log(
+  'Product codes persist with Save and retry; batch prices are atomic, tenant-scoped, permission-checked, conflict-safe and preserve sale history.',
 );
 console.log('Production integration flow passed.');

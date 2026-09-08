@@ -838,6 +838,32 @@ function CloudPdv({
             {displayedView === 'stock' && (
               <StockProductionView
                 data={data}
+                onChanged={async (prices) => {
+                  if (prices?.length) {
+                    const saved = new Map(
+                      prices.map((price) => [
+                        price.productId,
+                        price.defaultPriceCents,
+                      ]),
+                    );
+                    setData((current) =>
+                      current
+                        ? {
+                            ...current,
+                            products: current.products.map((product) =>
+                              saved.has(product.id)
+                                ? {
+                                    ...product,
+                                    defaultPriceCents: saved.get(product.id)!,
+                                  }
+                                : product,
+                            ),
+                          }
+                        : current,
+                    );
+                  }
+                  await reload(true, true);
+                }}
                 key={`stock-${run}`}
                 onOpenSale={
                   can(data.user, 'sales')
@@ -862,7 +888,7 @@ function CloudPdv({
               <CatalogProductionView
                 data={data}
                 key={`catalog-${run}`}
-                onChanged={() => reload(true)}
+                onChanged={() => reload(true, true)}
                 onStatusChanged={() => reload(true, true)}
                 onOpenSale={
                   can(data.user, 'sales')
@@ -1578,6 +1604,21 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="Editar vários preços no estoque">
+            Em Estoque, toque em Editar preços, altere os valores e use Salvar
+            alterações. A pesquisa não descarta preços já digitados. Cancelar
+            descarta a edição. Os novos preços valem para próximas vendas e para
+            a lista do WhatsApp; vendas anteriores não mudam. É necessário ter
+            permissão para gerenciar produtos.
+          </GuideStep>
+          <GuideStep number="Novo" title="Salvar códigos de outros mercados">
+            Em Cadastros › Produtos › Editar, Salvar alterações grava também o
+            novo código digitado. Salvar código grava apenas esse código e o
+            mostra imediatamente. Em Ajustes › Produtos, use Editar produto e
+            códigos para abrir o mesmo editor. O catálogo regional inclui apenas
+            códigos com referência verificada; não é uma lista completa de todos
+            os mercados. O país de compra não comprova o país de fabricação.
+          </GuideStep>
           <GuideStep number="Novo" title="Vendedor da venda">
             Na revisão final, seu usuário já vem selecionado como vendedor. Você
             pode escolher outro usuário ativo da mesma loja. A venda e o ranking
@@ -1636,10 +1677,10 @@ function GuideDialog({
             Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
             UPCs, EANs, JANs e contas Pix. O catálogo padrão do sistema já traz
             o iPhone 15 base, o iPhone 16 (exceto o Pro Max) e toda a linha
-            iPhone 17, com códigos verificados dos Estados Unidos e do Japão.
-            Códigos de outros mercados podem ser acrescentados sem substituir
-            seus preços. Em Ajustes, o proprietário gerencia os usuários da
-            loja.
+            iPhone 17, com códigos verificados dos Estados Unidos, Japão e
+            referências regionais adicionais. Códigos de outros mercados podem
+            ser acrescentados sem substituir seus preços. Em Ajustes, o
+            proprietário gerencia os usuários da loja.
           </GuideStep>
           <GuideStep number="2" title="Dê entrada">
             Abra Entrada. Bipe o UPC/EAN, confirme o produto, bipe somente os

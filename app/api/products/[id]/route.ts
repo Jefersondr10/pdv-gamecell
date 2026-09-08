@@ -12,6 +12,15 @@ import {
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import { canonicalProductVariationKey } from '@/lib/server/system-catalog-sync';
+import { classifyCommercialCode, normalizeCommercialCode } from '@/lib/gtin';
+
+type SavedProductCode = {
+  id: string;
+  code: string;
+  kind: string;
+  market: string | null;
+  productId: string;
+};
 
 export async function PATCH(
   request: Request,
@@ -43,6 +52,45 @@ export async function PATCH(
     const updates: string[] = [];
     const bindings: unknown[] = [];
     const changed: Record<string, unknown> = {};
+    let addedCode: {
+      id: string;
+      code: string;
+      kind: string;
+      market: string | null;
+    } | null = null;
+    if (body.addCode !== undefined) {
+      if (
+        !body.addCode ||
+        typeof body.addCode !== 'object' ||
+        Array.isArray(body.addCode)
+      ) {
+        throw new HttpError(
+          400,
+          'Informe o código do produto.',
+          'INVALID_CODE',
+        );
+      }
+      const input = body.addCode as Record<string, unknown>;
+      const raw = stringField(input.code, 'Código', { min: 8, max: 30 });
+      const code = normalizeCommercialCode(raw);
+      if (!code)
+        throw new HttpError(
+          400,
+          'UPC, EAN ou JAN inválido. Confira todos os números.',
+          'INVALID_CODE',
+        );
+      // Insert-or-ignore plus the guarded update below also handles simultaneous
+      // retries. A code belonging to another variation can never be moved here.
+      addedCode = {
+        id: crypto.randomUUID(),
+        code,
+        kind: classifyCommercialCode(raw, code),
+        market: input.market
+          ? stringField(input.market, 'Mercado', { max: 60 })
+          : null,
+      };
+      changed.code = { code };
+    }
     if (body.model !== undefined) {
       const value = stringField(body.model, 'Modelo', { max: 100 });
       updates.push('model = ?');
@@ -75,7 +123,7 @@ export async function PATCH(
       bindings.push(body.active ? 1 : 0);
       changed.active = body.active;
     }
-    if (updates.length === 0) {
+    if (updates.length === 0 && body.addCode === undefined) {
       throw new HttpError(
         400,
         'Nenhuma alteração foi informada.',
@@ -116,19 +164,50 @@ export async function PATCH(
     }
     updates.push('updated_at = ?');
     bindings.push(now, id, session.storeId);
+    let savedCode: {
+      id: string;
+      code: string;
+      kind: string;
+      market: string | null;
+      productId: string;
+    } | null = null;
     try {
       const results = await db.batch([
+        ...(addedCode
+          ? [
+              db
+                .prepare(
+                  `INSERT INTO product_codes (id, store_id, product_id, code, kind, market, created_at)
+           SELECT ?, p.store_id, p.id, ?, ?, ?, ? FROM products p
+           WHERE p.id = ? AND p.store_id = ? AND
+             (SELECT COUNT(*) FROM product_codes pc WHERE pc.product_id = p.id AND pc.store_id = p.store_id) < 20
+           ON CONFLICT(store_id, code) DO NOTHING`,
+                )
+                .bind(
+                  addedCode.id,
+                  addedCode.code,
+                  addedCode.kind,
+                  addedCode.market,
+                  now,
+                  id,
+                  session.storeId,
+                ),
+            ]
+          : []),
         db
           .prepare(
             `UPDATE products SET ${updates.join(', ')}
-             WHERE id = ? AND store_id = ?`,
+             WHERE id = ? AND store_id = ?${addedCode ? ' AND EXISTS (SELECT 1 FROM product_codes WHERE code = ? AND product_id = ? AND store_id = ?)' : ''}`,
           )
-          .bind(...bindings),
+          .bind(
+            ...bindings,
+            ...(addedCode ? [addedCode.code, id, session.storeId] : []),
+          ),
         db
           .prepare(
             `INSERT INTO audit_events
              (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
-             VALUES (?, ?, ?, 'product.updated', 'product', ?, ?, ?)`,
+             SELECT ?, ?, ?, 'product.updated', 'product', ?, ?, ? WHERE changes() = 1`,
           )
           .bind(
             crypto.randomUUID(),
@@ -138,11 +217,49 @@ export async function PATCH(
             JSON.stringify(changed),
             now,
           ),
+        ...(addedCode
+          ? [
+              db
+                .prepare(
+                  'SELECT id, code, kind, market, product_id AS productId FROM product_codes WHERE store_id = ? AND code = ? LIMIT 1',
+                )
+                .bind(session.storeId, addedCode.code),
+            ]
+          : []),
       ]);
-      if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
+      if (addedCode) {
+        savedCode =
+          (results[3]?.results?.[0] as SavedProductCode | undefined) ?? null;
+        if (Number(results[1]?.meta?.changes ?? 0) !== 1) {
+          if (savedCode && savedCode.productId !== id)
+            throw new HttpError(
+              409,
+              'Este código já está vinculado a outro produto. Nenhuma alteração foi salva.',
+              'CODE_EXISTS',
+            );
+          throw new HttpError(
+            409,
+            'Este produto atingiu o limite de 20 códigos. Nenhuma alteração foi salva.',
+            'PRODUCT_CODE_LIMIT',
+          );
+        }
+      }
+      if (Number(results[addedCode ? 1 : 0]?.meta?.changes ?? 0) !== 1) {
         throw new HttpError(404, 'Produto não encontrado.', 'NOT_FOUND');
       }
     } catch (error) {
+      if (
+        error instanceof Error &&
+        /UNIQUE constraint failed:.*product_codes\.(?:store_id|code)/i.test(
+          error.message,
+        )
+      ) {
+        throw new HttpError(
+          409,
+          'Este código já foi cadastrado. Confira o produto e tente salvar novamente.',
+          'CODE_EXISTS',
+        );
+      }
       if (
         error instanceof Error &&
         /UNIQUE constraint failed:.*products.*store_id/i.test(error.message)
@@ -155,7 +272,17 @@ export async function PATCH(
       }
       throw error;
     }
-    return json({ ok: true });
+    return json({
+      ok: true,
+      code: savedCode
+        ? {
+            id: savedCode.id,
+            code: savedCode.code,
+            kind: savedCode.kind,
+            market: savedCode.market,
+          }
+        : null,
+    });
   } catch (error) {
     return apiError(error);
   }

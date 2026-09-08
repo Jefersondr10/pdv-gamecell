@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { normalizeCommercialCode } from '../lib/gtin.ts';
 import { hasValidGtinCheckDigit } from '../lib/scanner.ts';
 import { SYSTEM_CATALOG_PRODUCTS } from '../lib/system-catalog.ts';
+import { REGIONAL_CATALOG_CODES } from '../lib/system-catalog-regional.ts';
 
 const expectedByModel = new Map([
   ['iPhone 15', 15],
@@ -49,22 +50,21 @@ for (const product of SYSTEM_CATALOG_PRODUCTS) {
   );
   productKeys.add(product.key);
   assert.equal(
-    product.codes.length,
+    product.codes.filter((code) =>
+      ['Estados Unidos', 'Japão'].includes(code.market),
+    ).length,
     product.model === 'iPhone 15' && product.memory !== '512 GB' ? 3 : 2,
     `Códigos de ${product.key}`,
   );
   const usa = product.codes[0];
-  const japan = product.codes.at(-1)!;
+  const japan = product.codes.find((code) => code.market === 'Japão')!;
   assert.equal(usa.market, 'Estados Unidos');
   assert.equal(japan.market, 'Japão');
   assert.match(usa.value, /^\d{12}$/);
   assert.match(japan.value, /^\d{13}$/);
 
   for (const code of product.codes) {
-    assert.match(
-      code.value,
-      code.market === 'Estados Unidos' ? /^\d{12}$/ : /^\d{13}$/,
-    );
+    assert.match(code.value, /^(?:\d{8}|\d{12,14})$/);
     assert.equal(
       hasValidGtinCheckDigit(code.value),
       true,
@@ -77,7 +77,9 @@ for (const product of SYSTEM_CATALOG_PRODUCTS) {
       `Código repetido: ${code.value}`,
     );
     normalizedCodes.add(normalized);
+    assert.ok(code.market.length <= 60);
   }
+  assert.ok(product.codes.length <= 20);
 }
 
 for (const [model, expected] of expectedByModel) {
@@ -87,6 +89,23 @@ for (const [model, expected] of expectedByModel) {
     model,
   );
 }
-assert.equal(normalizedCodes.size, 242);
+assert.equal(REGIONAL_CATALOG_CODES.length, 108);
+for (const code of REGIONAL_CATALOG_CODES) {
+  const product = SYSTEM_CATALOG_PRODUCTS.find(
+    (product) =>
+      product.model === code.model &&
+      product.color === code.color &&
+      product.memory === code.memory,
+  );
+  assert.ok(product, `Variante regional não encontrada: ${code.partNumber}`);
+  assert.ok(product.codes.some((saved) => saved.value === code.value));
+  assert.ok(code.partNumber.length > 0);
+  assert.ok(code.sources.length > 0);
+  for (const source of code.sources)
+    assert.equal(new URL(source).protocol, 'https:');
+}
+assert.equal(normalizedCodes.size, 350);
 
-console.log('System catalog checks passed: 116 variants and 242 unique GTINs.');
+console.log(
+  'System catalog checks passed: 116 variants and 350 unique GTINs (108 regional additions).',
+);

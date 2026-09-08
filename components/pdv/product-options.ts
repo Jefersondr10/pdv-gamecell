@@ -54,8 +54,10 @@ export const PRODUCT_MARKET_OPTIONS = [
   'Europa — Portugal/Espanha',
   'Europa — Países Baixos',
   'Hong Kong',
+  'Índia',
   'Japão',
   'México',
+  'Paraguai — mercado de compra',
   'Reino Unido',
   'Internacional',
 ] as const;

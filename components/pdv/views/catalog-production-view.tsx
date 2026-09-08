@@ -42,7 +42,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { messageOf, requestJson } from '@/lib/client-api';
 import { displayCommercialCode } from '@/lib/commercial-code';
-import { parseMoneyInput } from '@/lib/money';
+import { productEditorPayload } from '@/lib/product-editor';
 import type {
   BootstrapData,
   ClientRecord,
@@ -688,7 +688,7 @@ function ClientEditor({
   );
 }
 
-function ProductEditor({
+export function ProductEditor({
   product,
   csrfToken,
   onChanged,
@@ -710,6 +710,14 @@ function ProductEditor({
   });
   const [newCode, setNewCode] = useState('');
   const [newCodeMarket, setNewCodeMarket] = useState('');
+  const [codeSaved, setCodeSaved] = useState('');
+  const [savedCodes, setSavedCodes] = useState<ProductRecord['codes']>([]);
+  const [removedCodes, setRemovedCodes] = useState<string[]>([]);
+  const displayedCodes = [
+    ...new Map(
+      [...(product?.codes ?? []), ...savedCodes].map((code) => [code.id, code]),
+    ).values(),
+  ].filter((code) => !removedCodes.includes(code.id));
   const [removeCodeId, setRemoveCodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -754,26 +762,35 @@ function ProductEditor({
         onSubmit={(event) => {
           event.preventDefault();
           void runAction(setBusy, setError, async () => {
-            const payload = {
-              model: values.model,
-              color: values.color,
-              memory: values.memory,
-              defaultPriceCents: parseMoneyInput(values.price),
-            };
+            const payload = productEditorPayload(
+              values,
+              newCode,
+              newCodeMarket,
+            );
             if (product) {
-              await patchJson(
+              const result = (await patchJson(
                 `/api/products/${product.id}`,
                 csrfToken,
                 payload,
-              );
+              )) as { code?: ProductRecord['codes'][number] };
+              if (result.code)
+                setSavedCodes((current) => [...current, result.code!]);
+              setNewCode('');
+              setNewCodeMarket('');
             } else {
               await postJson('/api/products', csrfToken, {
                 ...payload,
                 codes: splitCodes(values.codes),
               });
             }
-            await onChanged();
-            onClose();
+            try {
+              await onChanged();
+              onClose();
+            } catch {
+              setError(
+                'O produto foi salvo, mas a lista não atualizou. Reabra Cadastros para ver os dados atuais.',
+              );
+            }
           });
         }}
       >
@@ -844,142 +861,180 @@ function ProductEditor({
             </p>
           </div>
         )}
+        {product && (
+          <section className="mt-2 rounded-2xl border p-3 sm:col-span-2 sm:p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-bold">Códigos UPC, EAN e JAN</p>
+                <p className="text-xs text-muted-foreground">
+                  A leitura aceita o UPC de 12 números e o zero técnico do
+                  leitor.
+                </p>
+              </div>
+              <Badge variant="secondary">{displayedCodes.length}/20</Badge>
+            </div>
+            <div className="mt-3 space-y-2">
+              {displayedCodes.map((code) => (
+                <div
+                  className="flex items-center gap-2 rounded-xl bg-muted/50 p-2"
+                  key={code.id}
+                >
+                  <Barcode className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate font-mono text-sm font-bold">
+                    {displayCommercialCode(code.code, code.kind)}
+                  </span>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    <Badge variant="outline">{code.kind}</Badge>
+                    {code.market && (
+                      <Badge variant="secondary">{code.market}</Badge>
+                    )}
+                  </div>
+                  <Button
+                    aria-label={`Excluir código ${displayCommercialCode(code.code, code.kind)}`}
+                    disabled={busy || displayedCodes.length <= 1}
+                    onClick={() => setRemoveCodeId(code.id)}
+                    size="icon-sm"
+                    type="button"
+                    variant="destructive"
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            {removeCodeId && (
+              <div className="mt-3 rounded-xl border border-destructive/25 bg-destructive/5 p-3">
+                <p className="text-sm font-bold">Excluir este código?</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Ele deixará de identificar o produto nas próximas entradas.
+                </p>
+                <div className="mt-2 flex justify-end gap-2">
+                  <Button
+                    onClick={() => setRemoveCodeId(null)}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void runAction(setBusy, setError, async () => {
+                        await deleteJson(
+                          `/api/products/${product.id}/codes/${removeCodeId}`,
+                          csrfToken,
+                        );
+                        setRemovedCodes((current) => [
+                          ...current,
+                          removeCodeId,
+                        ]);
+                        setRemoveCodeId(null);
+                        try {
+                          await onChanged();
+                        } catch {
+                          setError(
+                            'Código excluído. A lista não atualizou; reabra Cadastros para conferir.',
+                          );
+                        }
+                      })
+                    }
+                    size="sm"
+                    type="button"
+                    variant="destructive"
+                  >
+                    Excluir código
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem_auto]">
+              <Input
+                aria-label="Novo código UPC ou EAN"
+                className="h-11 font-mono"
+                inputMode="numeric"
+                onChange={(event) => {
+                  setNewCode(event.target.value);
+                  setCodeSaved('');
+                }}
+                placeholder="Adicionar UPC ou EAN"
+                disabled={busy}
+                value={newCode}
+              />
+              <NativeSelect
+                aria-label="Mercado do código"
+                className="h-11 w-full [&_select]:h-11"
+                onChange={(event) => setNewCodeMarket(event.target.value)}
+                value={newCodeMarket}
+              >
+                <NativeSelectOption value="">
+                  Mercado (opcional)
+                </NativeSelectOption>
+                {PRODUCT_MARKET_OPTIONS.map((market) => (
+                  <NativeSelectOption key={market} value={market}>
+                    {market}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <Button
+                className="h-11 rounded-xl"
+                disabled={
+                  busy || !newCode.trim() || displayedCodes.length >= 20
+                }
+                type="button"
+                onClick={() => {
+                  void runAction(setBusy, setError, async () => {
+                    const result = (await patchJson(
+                      `/api/products/${product.id}`,
+                      csrfToken,
+                      {
+                        addCode: {
+                          code: newCode,
+                          market: newCodeMarket || null,
+                        },
+                      },
+                    )) as { code: ProductRecord['codes'][number] };
+                    setSavedCodes((current) => [...current, result.code]);
+                    setNewCode('');
+                    setNewCodeMarket('');
+                    setCodeSaved(
+                      'Código salvo. Já está disponível para leitura.',
+                    );
+                    try {
+                      await onChanged();
+                    } catch {
+                      setError(
+                        'Código salvo. A lista não atualizou; reabra Cadastros para conferir.',
+                      );
+                    }
+                  });
+                }}
+              >
+                <Plus /> Salvar código
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Salvar alterações também grava o código digitado acima.
+            </p>
+            {codeSaved && (
+              <output className="mt-2 text-sm font-semibold text-success">
+                {codeSaved}
+              </output>
+            )}
+          </section>
+        )}
         <Button
           className="h-12 rounded-xl sm:col-span-2"
           disabled={busy}
           type="submit"
         >
-          Salvar produto
+          {busy
+            ? 'Salvando…'
+            : product
+              ? 'Salvar alterações'
+              : 'Salvar produto'}
         </Button>
       </form>
-
-      {product && (
-        <section className="mt-5 rounded-2xl border p-3 sm:p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="font-bold">Códigos UPC e EAN</p>
-              <p className="text-xs text-muted-foreground">
-                A leitura aceita o UPC de 12 números e o zero técnico do leitor.
-              </p>
-            </div>
-            <Badge variant="secondary">{product.codes.length}/20</Badge>
-          </div>
-          <div className="mt-3 space-y-2">
-            {product.codes.map((code) => (
-              <div
-                className="flex items-center gap-2 rounded-xl bg-muted/50 p-2"
-                key={code.id}
-              >
-                <Barcode className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate font-mono text-sm font-bold">
-                  {displayCommercialCode(code.code, code.kind)}
-                </span>
-                <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                  <Badge variant="outline">{code.kind}</Badge>
-                  {code.market && (
-                    <Badge variant="secondary">{code.market}</Badge>
-                  )}
-                </div>
-                <Button
-                  aria-label={`Excluir código ${displayCommercialCode(code.code, code.kind)}`}
-                  disabled={busy || product.codes.length <= 1}
-                  onClick={() => setRemoveCodeId(code.id)}
-                  size="icon-sm"
-                  type="button"
-                  variant="destructive"
-                >
-                  <Trash2 />
-                </Button>
-              </div>
-            ))}
-          </div>
-          {removeCodeId && (
-            <div className="mt-3 rounded-xl border border-destructive/25 bg-destructive/5 p-3">
-              <p className="text-sm font-bold">Excluir este código?</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Ele deixará de identificar o produto nas próximas entradas.
-              </p>
-              <div className="mt-2 flex justify-end gap-2">
-                <Button
-                  onClick={() => setRemoveCodeId(null)}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  Cancelar
-                </Button>
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    void runAction(setBusy, setError, async () => {
-                      await deleteJson(
-                        `/api/products/${product.id}/codes/${removeCodeId}`,
-                        csrfToken,
-                      );
-                      setRemoveCodeId(null);
-                      await onChanged();
-                    })
-                  }
-                  size="sm"
-                  type="button"
-                  variant="destructive"
-                >
-                  Excluir código
-                </Button>
-              </div>
-            </div>
-          )}
-          <form
-            className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void runAction(setBusy, setError, async () => {
-                await postJson(`/api/products/${product.id}/codes`, csrfToken, {
-                  code: newCode,
-                  market: newCodeMarket || null,
-                });
-                setNewCode('');
-                setNewCodeMarket('');
-                await onChanged();
-              });
-            }}
-          >
-            <Input
-              aria-label="Novo código UPC ou EAN"
-              className="h-11 font-mono"
-              inputMode="numeric"
-              onChange={(event) => setNewCode(event.target.value)}
-              placeholder="Adicionar UPC ou EAN"
-              required
-              value={newCode}
-            />
-            <NativeSelect
-              aria-label="Mercado do código"
-              className="h-11 w-full [&_select]:h-11"
-              onChange={(event) => setNewCodeMarket(event.target.value)}
-              value={newCodeMarket}
-            >
-              <NativeSelectOption value="">
-                Mercado (opcional)
-              </NativeSelectOption>
-              {PRODUCT_MARKET_OPTIONS.map((market) => (
-                <NativeSelectOption key={market} value={market}>
-                  {market}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <Button
-              aria-label="Adicionar código"
-              className="size-11 rounded-xl"
-              disabled={busy || product.codes.length >= 20}
-              size="icon"
-              type="submit"
-            >
-              <Plus />
-            </Button>
-          </form>
-        </section>
-      )}
     </EditorDialog>
   );
 }
