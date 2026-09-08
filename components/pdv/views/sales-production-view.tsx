@@ -79,7 +79,6 @@ import {
   enqueueReceiptOcrJobs,
   type ReceiptOcrAttachment,
 } from '@/lib/client-receipt-background';
-import { downloadReportPdf } from '@/lib/download-report-pdf';
 import { parseMoneyInput } from '@/lib/money';
 import {
   deriveReceiptReconciliation,
@@ -2498,7 +2497,7 @@ function SaleReport({
                 Relatório da venda #{String(sale.number).padStart(5, '0')}
               </DialogTitle>
               <DialogDescription>
-                O conteúdo permanece separado desta venda.
+                PDF com diagramação própria, texto nítido e anexos identificados.
               </DialogDescription>
             </DialogHeader>
             <div
@@ -2857,20 +2856,16 @@ function SaleReport({
                   setPdfBusy(true);
                   setPdfError('');
                   try {
-                    await downloadReportPdf({
-                      element: reportRef.current,
+                    const { downloadSalesReportPdf } =
+                      await import('@/lib/sales-report-pdf');
+                    await downloadSalesReportPdf({
+                      storeName,
+                      sales: [sale],
+                      level,
+                      singleSale: true,
+                      includePhotos,
+                      includeReceipts,
                       fileName: `venda-${String(sale.number).padStart(5, '0')}-${dateKey(sale.createdAt)}`,
-                      pdfAttachments: includeReceipts
-                        ? sale.receipts
-                            .filter(
-                              (receipt) =>
-                                receipt.mimeType === 'application/pdf',
-                            )
-                            .map((receipt) => ({
-                              name: receipt.name,
-                              url: receipt.url,
-                            }))
-                        : [],
                     });
                   } catch (error) {
                     setPdfError(messageOf(error));
@@ -3008,7 +3003,7 @@ function SalesPeriodReport({
         >
           <DialogTitle>Relatório de vendas</DialogTitle>
           <DialogDescription>
-            Reúne todas as vendas do filtro selecionado, separadas por venda.
+            PDF com resumo por dia, vendas separadas e anexos identificados.
           </DialogDescription>
         </DialogHeader>
         <div
@@ -3503,23 +3498,15 @@ function SalesPeriodReport({
               setPdfBusy(true);
               setPdfError('');
               try {
-                await downloadReportPdf({
-                  element: reportRef.current,
+                const { downloadSalesReportPdf } =
+                  await import('@/lib/sales-report-pdf');
+                await downloadSalesReportPdf({
+                  storeName,
+                  sales,
+                  level,
+                  filterSummary,
+                  generatedAt,
                   fileName: `relatorio-vendas-${dateKey(Date.now())}-${reportName(level)}`,
-                  pdfAttachments:
-                    level === 'complete'
-                      ? completedSales.flatMap((sale) =>
-                          sale.receipts
-                            .filter(
-                              (receipt) =>
-                                receipt.mimeType === 'application/pdf',
-                            )
-                            .map((receipt) => ({
-                              name: `venda-${String(sale.number).padStart(5, '0')}-${receipt.name}`,
-                              url: receipt.url,
-                            })),
-                        )
-                      : [],
                 });
               } catch (error) {
                 setPdfError(messageOf(error));

@@ -1604,6 +1604,14 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="PDF de vendas mais nítido">
+            Baixar PDF agora gera páginas próprias, com texto nítido e
+            selecionável, resumo por dia e vendas separadas. O completo mantém
+            fotos e comprovantes junto da venda correspondente, sem recortar as
+            imagens. Vendas longas continuam com identificação na página
+            seguinte. Arquivos baixados anteriormente não mudam: gere o
+            relatório novamente.
+          </GuideStep>
           <GuideStep number="Novo" title="Vendas e estoque mais diretos">
             Toque em uma venda para ver produtos, SNs, pagamentos e
             comprovantes. Use o filtro Vendedor junto do período. Conciliado

@@ -15,6 +15,7 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "test:money": "node --experimental-strip-types scripts/verify-money.ts",
+    "test:sales-pdf": "node --experimental-transform-types scripts/verify-sales-pdf.ts",
     "test:permissions": "node --experimental-strip-types scripts/verify-permissions.ts",
     "test:operations": "node --experimental-transform-types scripts/verify-operation-recovery.mjs",
     "test:uploads": "node --experimental-transform-types scripts/verify-client-upload.mjs",

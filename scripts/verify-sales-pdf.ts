@@ -1,0 +1,252 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
+import {
+  buildSalesReportPdf,
+  jpegNeedsOrientation,
+} from '../lib/sales-report-pdf.ts';
+import type { SaleRecord, AttachmentRecord } from '../lib/pdv-types.ts';
+
+const out = new URL('../outputs/pdf-review/', import.meta.url);
+for (let orientation = 1; orientation <= 8; orientation++) {
+  const bytes = new Uint8Array(38);
+  bytes.set([0xff, 0xd8, 0xff, 0xe1, 0, 32, 69, 120, 105, 102, 0, 0]);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(12, 0x4949);
+  view.setUint32(16, 8, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 0x0112, true);
+  view.setUint16(24, 3, true);
+  view.setUint32(26, 1, true);
+  view.setUint16(30, orientation, true);
+  bytes.set([0xff, 0xd9], 36);
+  assert.equal(jpegNeedsOrientation(bytes), orientation !== 1);
+}
+assert.equal(
+  jpegNeedsOrientation(new Uint8Array([0xff, 0xd8, 0xff, 0xe1])),
+  false,
+);
+await mkdir(out, { recursive: true });
+const asset = (id: string, mimeType = 'application/pdf'): AttachmentRecord => ({
+  id,
+  name: `${id}.pdf`,
+  url: `https://example.invalid/${id}`,
+  mimeType,
+  sizeBytes: 1000,
+});
+const sale = (n: number, count = 1): SaleRecord => ({
+  id: `sale-${n}`,
+  number: n,
+  customerId: `customer-${n}`,
+  customerName: `Cliente Demonstração ${n}`,
+  sellerName: 'Vendedor de teste',
+  orderStatus: null,
+  createdAt: Date.parse('2026-09-08T12:00:00-03:00') + n * 60_000,
+  status: 'completed',
+  productsTotalCents: count * 360000,
+  receivedTotalCents: count * 360000,
+  receivedDifferenceCents: 0,
+  referenceTotalCents: count * 360000,
+  priceDifferenceCents: 0,
+  cancelledAt: null,
+  cancelledByName: null,
+  cancellationReason: null,
+  items: Array.from({ length: count }, (_, i) => ({
+    id: `item-${n}-${i}`,
+    productId: 'product',
+    productName: 'iPhone 15',
+    productDetail: 'Azul · 128 GB',
+    serial: `TESTE${n}SN${String(i).padStart(4, '0')}`,
+    referencePriceCents: 360000,
+    soldPriceCents: 360000,
+    photos: [],
+  })),
+  payments: [
+    {
+      id: `payment-${n}`,
+      method: 'pix',
+      amountCents: count * 360000,
+      accountName: 'Conta de demonstração',
+      pixAccountId: 'account',
+    },
+  ],
+  receipts: [],
+  reconciliation: {
+    status: 'pending',
+    confirmedTotalCents: 0,
+    differenceCents: null,
+    pendingReceiptCount: 0,
+  },
+});
+const first = sale(1, 2);
+first.receipts = [
+  {
+    ...asset('comprovante-original'),
+    receiptAmountCents: 720000,
+    receiptAmountSource: 'manual',
+    receiptAmountConfirmedAt: first.createdAt,
+  },
+];
+first.reconciliation = {
+  status: 'reconciled',
+  confirmedTotalCents: 720000,
+  differenceCents: 0,
+  pendingReceiptCount: 0,
+};
+const second = sale(2);
+second.createdAt -= 86400000;
+second.receivedTotalCents = 100000;
+second.payments[0].amountCents = 100000;
+second.receivedDifferenceCents = -260000;
+const cancelled = sale(3);
+cancelled.status = 'cancelled';
+cancelled.cancellationReason =
+  'Cancelamento de demonstração, não contabilizar.';
+cancelled.receipts = [
+  {
+    ...asset('cancelled-should-not-load'),
+    receiptAmountCents: null,
+    receiptAmountSource: null,
+    receiptAmountConfirmedAt: null,
+  },
+];
+const source = await PDFDocument.create();
+const font = await source.embedFont(StandardFonts.Helvetica);
+for (const angle of [0, 90, 180, 270]) {
+  const page = source.addPage([300, 440]);
+  page.setRotation(degrees(angle));
+  page.drawText(`COMPROVANTE ORIGINAL ${angle}`, {
+    x: 18,
+    y: 410,
+    size: 14,
+    font,
+  });
+  page.drawText('R$ 7.200,00', { x: 18, y: 350, size: 24, font });
+  page.drawText('FIM DO COMPROVANTE', { x: 18, y: 20, size: 14, font });
+}
+const sourceBytes = await source.save();
+await writeFile(
+  new URL('novo-cancelada.pdf', out),
+  await buildSalesReportPdf(
+    {
+      storeName: 'Loja Demonstração',
+      sales: [cancelled],
+      level: 'complete',
+      singleSale: true,
+    },
+    async () => sourceBytes,
+  ),
+);
+const loaded: string[] = [];
+const loader = async (attachment: AttachmentRecord) => {
+  loaded.push(attachment.id);
+  assert.notEqual(attachment.id, 'cancelled-should-not-load');
+  return sourceBytes;
+};
+for (const level of ['simple', 'detailed', 'complete'] as const) {
+  loaded.length = 0;
+  const bytes = await buildSalesReportPdf(
+    {
+      storeName: 'Loja Demonstração',
+      sales: [first, second, cancelled],
+      level,
+      filterSummary: '07/09/2026 a 08/09/2026 · Todos os vendedores',
+      generatedAt: first.createdAt,
+    },
+    loader,
+  );
+  const result = await PDFDocument.load(bytes);
+  assert.ok(result.getPageCount() >= 2);
+  assert.equal(loaded.length, level === 'complete' ? 1 : 0);
+  assert.ok(
+    bytes.byteLength < 100000,
+    'Text reports must not become giant screenshots',
+  );
+  await writeFile(new URL(`novo-${level}.pdf`, out), bytes);
+}
+const long = sale(99, 64);
+long.customerName =
+  'Cliente com nome muito longo São João e Comércio de Aparelhos e Acessórios '.repeat(
+    3,
+  );
+long.payments = Array.from({ length: 28 }, (_, n) => ({
+  ...long.payments[0],
+  id: `p-${n}`,
+  amountCents: 10000,
+  accountName: 'Conta com nome longo '.repeat(7),
+}));
+long.receivedTotalCents = 280000;
+const longBytes = await buildSalesReportPdf(
+  { storeName: 'Loja de teste', sales: [long], level: 'detailed' },
+  loader,
+);
+assert.ok((await PDFDocument.load(longBytes)).getPageCount() > 5);
+await writeFile(new URL('novo-stress.pdf', out), longBytes);
+await assert.rejects(
+  () => buildSalesReportPdf({ storeName: 'Teste', sales: [], level: 'simple' }),
+  /Não há vendas/,
+);
+await assert.rejects(
+  () =>
+    buildSalesReportPdf({
+      storeName: 'Teste',
+      sales: Array(251).fill(first),
+      level: 'simple',
+    }),
+  /250/,
+);
+await assert.rejects(
+  () =>
+    buildSalesReportPdf(
+      { storeName: 'Teste', sales: [first], level: 'complete' },
+      async () => {
+        throw new Error('Teste falha');
+      },
+    ),
+  /Nenhum PDF incompleto/,
+);
+const tooMany = { ...first, receipts: Array(41).fill(first.receipts[0]) };
+await assert.rejects(
+  () =>
+    buildSalesReportPdf(
+      { storeName: 'Teste', sales: [tooMany], level: 'complete' },
+      loader,
+    ),
+  /40 arquivos/,
+);
+// Optional visual fixtures are generated by the PDF QA renderer, not required in CI.
+try {
+  const landscape = await readFile(new URL('foto-horizontal.png', out));
+  const portrait = await readFile(new URL('comprovante-vertical.png', out));
+  const withImages = structuredClone(first);
+  withImages.items[0].photos = [
+    { ...asset('foto-horizontal', 'image/png'), name: 'foto-horizontal.png' },
+  ];
+  withImages.receipts.push({
+    ...asset('comprovante-vertical', 'image/png'),
+    name: 'comprovante-vertical.png',
+    receiptAmountCents: null,
+    receiptAmountSource: null,
+    receiptAmountConfirmedAt: null,
+  });
+  const result = await buildSalesReportPdf(
+    {
+      storeName: 'Loja Demonstração',
+      sales: [withImages],
+      level: 'complete',
+      singleSale: true,
+    },
+    async (item) =>
+      item.id === 'foto-horizontal'
+        ? landscape
+        : item.id === 'comprovante-vertical'
+          ? portrait
+          : sourceBytes,
+  );
+  await writeFile(new URL('novo-imagens.pdf', out), result);
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+}
+console.log(
+  'PASS: vector sales PDFs, levels, cancellation totals, linked attachments, rotation, long sales, limits and download errors.',
+);
