@@ -2282,7 +2282,7 @@ const setStaffPermissions = async (
     body: JSON.stringify({ permissions, expectedPermissions }),
   });
 const loginAccessStaff = async () => {
-  const login = await call('/api/auth/login', {
+  const loginOptions = {
     method: 'POST',
     ...jsonBody({
       mode: 'staff',
@@ -2290,7 +2290,23 @@ const loginAccessStaff = async () => {
       username: `operador-${runId}`,
       password: 'Pessoal67890',
     }),
+  };
+  let login = await call('/api/auth/login', {
+    ...loginOptions,
+    expected: [200, 429],
   });
+  if (login.response.status === 429) {
+    assert.equal(login.body.code, 'LOGIN_RATE_LIMIT');
+    console.log(
+      'Access tests: respecting the login rate-limit window before retrying.',
+    );
+    const retryAt = Date.now() + (60_000 - (Date.now() % 60_000)) + 1_000;
+    while (Date.now() < retryAt)
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(30_000, retryAt - Date.now())),
+      );
+    login = await call('/api/auth/login', loginOptions);
+  }
   const cookie = sessionCookie(login.response);
   const state = await call('/api/auth/session', { cookie });
   return {
