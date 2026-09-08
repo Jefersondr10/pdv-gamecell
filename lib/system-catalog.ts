@@ -13,13 +13,66 @@ export type SystemCatalogProduct = {
 
 // Increment this whenever a verified variation or commercial code changes.
 // Stores receive each version once, without changing their prices or active state.
-export const SYSTEM_CATALOG_VERSION = 1;
+export const SYSTEM_CATALOG_VERSION = 2;
 
 type CatalogColor = {
   color: string;
-  usa: readonly string[];
+  usa: readonly (string | readonly string[])[];
   japan: readonly string[];
 };
+
+// Source-to-variant evidence: docs/catalog-iphone-15.md. No Plus/Pro models.
+const IPHONE_15 = family(
+  'iPhone 15',
+  ['128 GB', '256 GB', '512 GB'],
+  [
+    {
+      color: 'Preto',
+      usa: [
+        ['195949035005', '195949038600'],
+        ['195949035050', '195949038655'],
+        '195949035104',
+      ],
+      japan: ['4549995430394', '4549995430493', '4549995430592'],
+    },
+    {
+      color: 'Azul',
+      usa: [
+        ['195949035036', '195949038631'],
+        ['195949035081', '195949038686'],
+        '195949035135',
+      ],
+      japan: ['4549995430455', '4549995430554', '4549995430653'],
+    },
+    {
+      color: 'Verde',
+      usa: [
+        ['195949035043', '195949038648'],
+        ['195949035098', '195949038693'],
+        '195949035142',
+      ],
+      japan: ['4549995430479', '4549995430578', '4549995430677'],
+    },
+    {
+      color: 'Amarelo',
+      usa: [
+        ['195949035029', '195949038624'],
+        ['195949035074', '195949038679'],
+        '195949035128',
+      ],
+      japan: ['4549995430431', '4549995430530', '4549995430639'],
+    },
+    {
+      color: 'Rosa',
+      usa: [
+        ['195949035012', '195949038617'],
+        ['195949035067', '195949038662'],
+        '195949035111',
+      ],
+      japan: ['4549995430417', '4549995430516', '4549995430615'],
+    },
+  ],
+);
 
 const IPHONE_16 = family(
   'iPhone 16',
@@ -290,6 +343,7 @@ const IPHONE_17E = family(
 );
 
 export const SYSTEM_CATALOG_PRODUCTS: readonly SystemCatalogProduct[] = [
+  ...IPHONE_15,
   ...IPHONE_16,
   ...IPHONE_16_PLUS,
   ...IPHONE_16_PRO,
@@ -313,7 +367,9 @@ function family(
       color,
       memory,
       codes: [
-        { value: usa[index] ?? '', market: 'Estados Unidos' },
+        ...[usa[index] ?? '']
+          .flat()
+          .map((value) => ({ value, market: 'Estados Unidos' })),
         { value: japan[index] ?? '', market: 'Japão' },
       ],
     })),

@@ -598,12 +598,19 @@ function ProductConfirmation({
           <div className="mt-5 w-full max-w-md rounded-2xl border bg-background p-4 text-left">
             <div className="flex items-center gap-3">
               <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
-                <ProductColorSwatch className="size-7" color={product.color} />
+                <ProductColorSwatch
+                  className="size-7"
+                  color={product.color}
+                  model={product.name}
+                />
               </span>
               <div className="min-w-0">
                 <p className="truncate font-bold">{product.name}</p>
                 <p className="flex items-center gap-2 truncate text-sm text-muted-foreground">
-                  <ProductColorSwatch color={product.color} />
+                  <ProductColorSwatch
+                    color={product.color}
+                    model={product.name}
+                  />
                   <span className="truncate">{product.color}</span>
                   <Badge variant="secondary">{product.memory}</Badge>
                 </p>
@@ -688,7 +695,8 @@ function SerialStage({
         <CardHeader className="hidden shrink-0 border-b p-4 lg:flex">
           <div>
             <p className="eyebrow flex items-center gap-2">
-              <ProductColorSwatch color={product.color} /> {product.name}
+              <ProductColorSwatch color={product.color} model={product.name} />{' '}
+              {product.name}
             </p>
             <CardTitle className="mt-1 text-base">SNs registrados</CardTitle>
           </div>
@@ -824,7 +832,8 @@ function PhotoStage({
       <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden p-3 text-center sm:p-6">
         <div className="mb-4 flex flex-wrap justify-center gap-2">
           <Badge className="gap-1.5" variant="secondary">
-            <ProductColorSwatch color={product.color} /> {product.name}
+            <ProductColorSwatch color={product.color} model={product.name} />{' '}
+            {product.name}
           </Badge>
           <Badge variant="outline">{product.memory}</Badge>
           <Badge variant="outline">
@@ -934,12 +943,19 @@ function EntryReview({
             <p className="eyebrow">Produto</p>
             <div className="mt-3 flex items-center gap-3">
               <span className="hidden size-12 shrink-0 place-items-center rounded-xl bg-secondary text-primary sm:grid">
-                <ProductColorSwatch className="size-7" color={product.color} />
+                <ProductColorSwatch
+                  className="size-7"
+                  color={product.color}
+                  model={product.name}
+                />
               </span>
               <div className="min-w-0">
                 <p className="truncate font-bold">{product.name}</p>
                 <p className="flex items-center gap-2 truncate text-sm text-muted-foreground">
-                  <ProductColorSwatch color={product.color} />
+                  <ProductColorSwatch
+                    color={product.color}
+                    model={product.name}
+                  />
                   <span className="truncate">{product.color}</span>
                   <Badge variant="secondary">{product.memory}</Badge>
                 </p>

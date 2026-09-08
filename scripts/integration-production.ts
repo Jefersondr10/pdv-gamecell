@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import {
+  SYSTEM_CATALOG_PRODUCTS,
+  SYSTEM_CATALOG_VERSION,
+} from '../lib/system-catalog.ts';
 
 const baseUrl = process.env.PDV_TEST_ORIGIN ?? 'http://127.0.0.1:3004';
 const targetHost = new URL(baseUrl).hostname;
@@ -1787,4 +1791,112 @@ assert.equal(privacy.status, 200);
 const terms = await fetch(`${baseUrl}/termos`);
 assert.equal(terms.status, 200);
 
+// Default catalog applies per store, reuses existing variants and never creates stock.
+const iphone15 = SYSTEM_CATALOG_PRODUCTS.find(
+  (row) => row.model === 'iPhone 15',
+)!;
+assert.ok(iphone15);
+const catalogHeaders = {
+  'x-csrf-token': String(finalSession.body.csrfToken),
+  'content-type': 'application/json',
+};
+const existing15 = await call('/api/products', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 201,
+  headers: catalogHeaders,
+  body: JSON.stringify({
+    ...iphone15,
+    defaultPriceCents: 345678,
+    codes: [iphone15.codes[0].value],
+  }),
+});
+await call(`/api/products/${String(existing15.body.id)}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: catalogHeaders,
+  body: JSON.stringify({
+    model: iphone15.model,
+    color: iphone15.color,
+    memory: iphone15.memory,
+    defaultPriceCents: 345678,
+    active: false,
+  }),
+});
+const stockBeforeCatalog = await call('/api/inventory?view=summary', {
+  cookie: ownerCookie,
+});
+const sync = await call('/api/system-catalog/sync', {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: catalogHeaders,
+});
+assert.equal(sync.body.version, SYSTEM_CATALOG_VERSION);
+const afterCatalog = await call('/api/bootstrap', { cookie: ownerCookie });
+type CatalogTestProduct = {
+  id: string;
+  model: string;
+  color: string;
+  memory: string;
+  active: boolean;
+  defaultPriceCents: number;
+  codes: { code: string; market: string }[];
+};
+const productsAfterCatalog = afterCatalog.body.products as CatalogTestProduct[];
+const existingAfter = productsAfterCatalog.find(
+  (row) => row.id === existing15.body.id,
+)!;
+assert.equal(existingAfter.defaultPriceCents, 345678);
+assert.equal(existingAfter.active, false);
+assert.equal(existingAfter.codes.length, iphone15.codes.length);
+assert.equal(
+  productsAfterCatalog.filter((row) => row.model === 'iPhone 15').length,
+  15,
+);
+assert.equal(
+  productsAfterCatalog.some((row) => /^iPhone 15 (Plus|Pro)/.test(row.model)),
+  false,
+);
+assert.deepEqual(
+  (await call('/api/inventory?view=summary', { cookie: ownerCookie })).body,
+  stockBeforeCatalog.body,
+);
+const repeatCatalog = await call('/api/system-catalog/sync', {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: catalogHeaders,
+});
+assert.equal(repeatCatalog.body.alreadyCurrent, true);
+assert.deepEqual(
+  (await call('/api/bootstrap', { cookie: ownerCookie })).body.products,
+  productsAfterCatalog,
+);
+const secondCatalogSession = await call('/api/auth/session', {
+  cookie: secondShopCookie,
+});
+await call('/api/system-catalog/sync', {
+  method: 'POST',
+  cookie: secondShopCookie,
+  headers: { 'x-csrf-token': String(secondCatalogSession.body.csrfToken) },
+});
+const otherProducts = (
+  await call('/api/bootstrap', { cookie: secondShopCookie })
+).body.products as CatalogTestProduct[];
+assert.equal(otherProducts.length, SYSTEM_CATALOG_PRODUCTS.length);
+assert.ok(
+  otherProducts.every((row) => row.defaultPriceCents === 0 && row.active),
+);
+assert.ok(
+  otherProducts.every(
+    (row) => !productsAfterCatalog.some((first) => first.id === row.id),
+  ),
+);
+assert.deepEqual(
+  (await call('/api/inventory?view=summary', { cookie: secondShopCookie })).body
+    .rows,
+  [],
+);
+console.log(
+  'Default catalog: iPhone 15 base, all variants, preserved prices/active state, no stock, idempotency and tenant isolation passed.',
+);
 console.log('Production integration flow passed.');

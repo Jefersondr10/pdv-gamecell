@@ -1292,6 +1292,7 @@ function SaleSerialStage({
             <ProductDetailVisual
               className="mt-1 justify-center"
               detail={product.detail}
+              model={product.product}
             />
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -1447,7 +1448,10 @@ function PriceStage({
             </span>
             <div className="min-w-0">
               <p className="truncate font-bold">{product.product}</p>
-              <ProductDetailVisual detail={product.detail} />
+              <ProductDetailVisual
+                detail={product.detail}
+                model={product.product}
+              />
               <p className="truncate text-sm text-muted-foreground">
                 SN {candidate.normalizedValue}
               </p>
@@ -1558,7 +1562,10 @@ function SaleItemsStage({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold">{item.product}</p>
-                  <ProductDetailVisual detail={item.detail} />
+                  <ProductDetailVisual
+                    detail={item.detail}
+                    model={item.product}
+                  />
                   <p className="truncate font-mono text-xs text-muted-foreground">
                     SN {item.serial.normalizedValue}
                   </p>
@@ -2181,7 +2188,10 @@ function SaleReview({
                   <Smartphone className="size-5 shrink-0 text-primary" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{item.product}</p>
-                    <ProductDetailVisual detail={item.detail} />
+                    <ProductDetailVisual
+                      detail={item.detail}
+                      model={item.product}
+                    />
                     <p className="truncate font-mono text-xs text-muted-foreground">
                       SN {item.serial.normalizedValue} · {item.photos.length}{' '}
                       {item.photos.length === 1 ? 'foto' : 'fotos'}
@@ -2318,9 +2328,11 @@ function SummaryTile({
 
 function ProductDetailVisual({
   detail,
+  model,
   className = '',
 }: {
   detail: string;
+  model: string;
   className?: string;
 }) {
   const [colorPart, ...memoryParts] = detail.split('·');
@@ -2330,7 +2342,7 @@ function ProductDetailVisual({
     <span
       className={`flow-stage-support flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground ${className}`}
     >
-      <ProductColorSwatch color={color} />
+      <ProductColorSwatch color={color} model={model} />
       <span className="truncate">{color}</span>
       {memory && (
         <Badge

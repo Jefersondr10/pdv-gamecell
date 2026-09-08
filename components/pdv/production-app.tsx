@@ -1507,10 +1507,18 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
-          <GuideStep number="Novo" title="Lista de preços para WhatsApp">
+          <GuideStep number="Novo" title="iPhone 15 e cores revisadas">
+            O catálogo padrão inclui agora o iPhone 15 base, com cinco cores e
+            opções de 128, 256 e 512 GB. Não inclui 15 Plus, Pro ou Pro Max.
+            Seus preços e estoque permanecem preservados. As identificações
+            visuais de cores foram revisadas, incluindo o rosa do iPhone 16,
+            lavanda, verde-azulado e prateado. Os tons são ilustrativos; confira
+            sempre o nome da cor.
+          </GuideStep>
+          <GuideStep number="Dica" title="Lista de preços para WhatsApp">
             Em Estoque, toque em WhatsApp para gerar a lista de todos os
-            produtos disponíveis, agrupados por modelo, memória e preço,
-            com emojis nas cores. Quantidades, SNs e fotos não são incluídos.
+            produtos disponíveis, agrupados por modelo, memória e preço, com
+            emojis nas cores. Quantidades, SNs e fotos não são incluídos.
             Confira a prévia, edite seus avisos e contatos, depois copie ou
             compartilhe. Produtos sem preço ficam como “Preço sob consulta”. A
             lista é uma consulta do momento, não uma reserva de estoque.
@@ -1518,10 +1526,11 @@ function GuideDialog({
           <GuideStep number="1" title="Cadastre a base">
             Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
             UPCs, EANs, JANs e contas Pix. O catálogo padrão do sistema já traz
-            o iPhone 16 (exceto o Pro Max) e toda a linha iPhone 17, com códigos
-            verificados dos Estados Unidos e do Japão. Códigos de outros
-            mercados podem ser acrescentados sem substituir seus preços. Em
-            Ajustes, o proprietário gerencia os usuários da loja.
+            o iPhone 15 base, o iPhone 16 (exceto o Pro Max) e toda a linha
+            iPhone 17, com códigos verificados dos Estados Unidos e do Japão.
+            Códigos de outros mercados podem ser acrescentados sem substituir
+            seus preços. Em Ajustes, o proprietário gerencia os usuários da
+            loja.
           </GuideStep>
           <GuideStep number="2" title="Dê entrada">
             Abra Entrada. Bipe o UPC/EAN, confirme o produto, bipe somente os

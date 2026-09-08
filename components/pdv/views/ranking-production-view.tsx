@@ -346,7 +346,9 @@ function RankingRow({
         </div>
         {dimension === 'product' && (row.color || row.memory) && (
           <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            {row.color && <ProductColorSwatch color={row.color} />}
+            {row.color && (
+              <ProductColorSwatch color={row.color} model={row.label} />
+            )}
             {row.color}
             {row.memory && <Badge variant="secondary">{row.memory}</Badge>}
           </p>

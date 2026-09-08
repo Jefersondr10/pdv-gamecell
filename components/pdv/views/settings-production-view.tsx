@@ -347,6 +347,7 @@ function ProductsDialog({
                   <ProductColorSwatch
                     className="absolute left-3 top-1/2 z-10 size-5 -translate-y-1/2"
                     color={values.color || 'Sem cor'}
+                    model={values.model}
                   />
                   <Input
                     className="pl-11"
@@ -432,7 +433,10 @@ function ProductsDialog({
                     <div>
                       <p className="font-bold">{selected.model}</p>
                       <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        <ProductColorSwatch color={selected.color} />
+                        <ProductColorSwatch
+                          color={selected.color}
+                          model={selected.model}
+                        />
                         <span>
                           {selected.color} · {selected.memory}
                         </span>

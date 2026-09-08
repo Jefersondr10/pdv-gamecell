@@ -358,7 +358,11 @@ function ProductsManager({
         >
           <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
             <span className="grid size-11 place-items-center rounded-2xl bg-secondary">
-              <ProductColorSwatch className="size-6" color={product.color} />
+              <ProductColorSwatch
+                className="size-6"
+                color={product.color}
+                model={product.model}
+              />
             </span>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -366,7 +370,10 @@ function ProductsManager({
                 <StatusBadge active={product.active} />
               </div>
               <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-                <ProductColorSwatch color={product.color} />
+                <ProductColorSwatch
+                  color={product.color}
+                  model={product.model}
+                />
                 {product.detail} · {formatMoney(product.defaultPriceCents)}
               </p>
             </div>
@@ -735,6 +742,7 @@ function ProductEditor({
             <ProductColorSwatch
               className="absolute left-3 top-1/2 z-10 size-5 -translate-y-1/2"
               color={values.color || 'Sem cor'}
+              model={values.model}
             />
             <Input
               className="h-11 pl-11"

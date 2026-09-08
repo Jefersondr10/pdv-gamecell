@@ -284,13 +284,20 @@ export function StockProductionView({
                   type="button"
                 >
                   <span className="grid size-10 place-items-center rounded-xl bg-secondary">
-                    <ProductColorSwatch className="size-6" color={row.color} />
+                    <ProductColorSwatch
+                      className="size-6"
+                      color={row.color}
+                      model={row.model}
+                    />
                   </span>
                   <div className="min-w-0">
                     <p className="truncate font-bold">{row.model}</p>
                     <div className="mt-1 flex min-w-0 items-center gap-1.5">
                       <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
-                        <ProductColorSwatch color={row.color} />
+                        <ProductColorSwatch
+                          color={row.color}
+                          model={row.model}
+                        />
                         <span className="truncate">{row.color}</span>
                       </span>
                       <Badge
@@ -503,12 +510,16 @@ function StockProductDetails({
               </Button>
             )}
             <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-secondary">
-              <ProductColorSwatch className="size-7" color={row.color} />
+              <ProductColorSwatch
+                className="size-7"
+                color={row.color}
+                model={row.model}
+              />
             </span>
             <div className="min-w-0">
               <DialogTitle className="truncate">{row.model}</DialogTitle>
               <DialogDescription className="mt-1 flex items-center gap-2">
-                <ProductColorSwatch color={row.color} />
+                <ProductColorSwatch color={row.color} model={row.model} />
                 <span className="truncate">{row.color}</span>
                 <Badge className="font-extrabold" variant="secondary">
                   {row.memory}
@@ -919,7 +930,10 @@ function StockReport({
                     <div>
                       <h3 className="font-bold">{row.model}</h3>
                       <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-600">
-                        <ProductColorSwatch color={row.color} />
+                        <ProductColorSwatch
+                          color={row.color}
+                          model={row.model}
+                        />
                         <span>{row.color}</span>
                         <span aria-hidden>·</span>
                         <strong className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-900">
