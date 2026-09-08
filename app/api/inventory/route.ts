@@ -9,6 +9,11 @@ import type {
 } from '@/lib/pdv-types';
 import { runtime } from '@/lib/server/runtime';
 import { consumeStoreReadBudget } from '@/lib/server/rate-limit';
+import {
+  isValidAppleSerial,
+  normalizeAppleSerial,
+  serialAliases,
+} from '@/lib/server/security';
 import type { StockOfferResponse, StockOfferRow } from '@/lib/stock-whatsapp';
 
 type DetailRow = Omit<InventoryDetailRecord, 'photos'>;
@@ -31,6 +36,23 @@ export async function GET(request: Request) {
       storeId,
       summaryView || offerView ? 8 : includePhotos ? 10 : 5,
     );
+
+    if (url.searchParams.get('view') === 'serial-search') {
+      const term = normalizeAppleSerial(
+        (url.searchParams.get('q') ?? '').slice(0, 48),
+      );
+      if (!/^[A-Z0-9]{3,18}$/.test(term)) return json({ productIds: [] });
+      const aliases = isValidAppleSerial(term) ? serialAliases(term) : [term];
+      const matches = await db
+        .prepare(`SELECT DISTINCT iu.product_id AS productId FROM inventory_units iu
+        JOIN products p ON p.id = iu.product_id AND p.store_id = iu.store_id
+        WHERE iu.store_id = ? AND (iu.serial LIKE ? OR iu.serial IN (${aliases.map(() => '?').join(',')})) LIMIT 1000`)
+        .bind(storeId, `${term}%`, ...aliases)
+        .all<{ productId: string }>();
+      return json({
+        productIds: matches.results.map((match) => match.productId),
+      });
+    }
 
     if (offerView) {
       // One consistent, complete statement; no per-unit download or paginated partial list.

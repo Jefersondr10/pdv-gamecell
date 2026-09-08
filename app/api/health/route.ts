@@ -11,6 +11,8 @@ export async function GET() {
       .first<{ count: number }>();
     if (Number(schema?.count) !== 6)
       return json({ ok: false }, { status: 503 });
+    // Do not advertise a healthy release when its required additive migration is missing.
+    await runtime().DB.prepare('SELECT name_key FROM clients LIMIT 0').all();
     return json({ ok: true });
   } catch {
     return json({ ok: false }, { status: 503 });

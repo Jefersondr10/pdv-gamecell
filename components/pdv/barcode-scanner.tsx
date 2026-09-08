@@ -14,6 +14,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
+import {
   ScannerService,
   normalizeCandidate,
   type ScanCandidate,
@@ -77,6 +81,10 @@ export function BarcodeScanner({
   const [error, setError] = useState('');
   const [manualValue, setManualValue] = useState('');
   const [showManual, setShowManual] = useState(false);
+  const [cameras, setCameras] = useState<Array<{ id: string; label: string }>>(
+    [],
+  );
+  const [cameraId, setCameraId] = useState('');
 
   useEffect(() => {
     onAcceptedRef.current = onAccepted;
@@ -99,23 +107,31 @@ export function BarcodeScanner({
       .catch(() => playScannerFeedback('error'));
   }, []);
 
-  const start = useCallback(async () => {
-    unlockScannerAudio();
-    const video = videoRef.current;
-    const service = serviceRef.current;
-    if (!video || !service) return;
-    setError('');
-    await service.start(
-      video,
-      mode,
-      {
-        onAccepted: deliverCandidate,
-        onStateChange: setState,
-        onError: setError,
-      },
-      scanFrameRef.current,
-    );
-  }, [deliverCandidate, mode]);
+  const start = useCallback(
+    async (selectedCamera = cameraId) => {
+      unlockScannerAudio();
+      const video = videoRef.current;
+      const service = serviceRef.current;
+      if (!video || !service) return;
+      setError('');
+      await service.start(
+        video,
+        mode,
+        {
+          onAccepted: deliverCandidate,
+          onStateChange: setState,
+          onError: setError,
+          onCameras: (options, selected) => {
+            setCameras(options);
+            setCameraId(selected);
+          },
+        },
+        scanFrameRef.current,
+        selectedCamera || undefined,
+      );
+    },
+    [cameraId, deliverCandidate, mode],
+  );
 
   useEffect(() => {
     if (!autoStart || autoStartAttemptedRef.current) return;
@@ -181,7 +197,7 @@ export function BarcodeScanner({
         >
           <video
             aria-label="Imagem ao vivo da câmera"
-            className={`absolute inset-0 size-full object-cover transition-opacity ${scanning ? 'opacity-75' : 'opacity-0'}`}
+            className={`absolute inset-0 size-full object-cover transition-opacity ${scanning ? 'opacity-100' : 'opacity-0'}`}
             muted
             playsInline
             ref={videoRef}
@@ -265,6 +281,31 @@ export function BarcodeScanner({
           )}
         </div>
 
+        {cameras.length > 1 && (
+          <label className="flex shrink-0 items-center gap-2 text-sm">
+            <span className="shrink-0">Câmera</span>
+            <NativeSelect
+              aria-label="Selecionar câmera para leitura"
+              className="h-9 min-w-0 flex-1 border-white/20 bg-ink text-white"
+              disabled={requestingPermission}
+              value={cameraId}
+              onChange={(event) => {
+                setCameraId(event.target.value);
+                void start(event.target.value);
+              }}
+            >
+              {cameras.map((camera) => (
+                <NativeSelectOption value={camera.id} key={camera.id}>
+                  {camera.label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+        )}
+        <p className="scanner-distance-tip shrink-0 text-center text-xs text-white/65">
+          Mantenha a caixa a cerca de 15–30 cm. Afaste um pouco se a imagem
+          estiver sem foco.
+        </p>
         <div
           className={`grid shrink-0 gap-2 ${onBack ? 'grid-cols-[auto_1fr_auto]' : 'grid-cols-[1fr_auto]'}`}
         >
@@ -281,7 +322,7 @@ export function BarcodeScanner({
           <Button
             className="h-11 rounded-xl bg-sky px-4 text-sm font-bold text-ink hover:bg-sky/90 sm:h-12 sm:text-base"
             disabled={requestingPermission}
-            onClick={scanning ? stop : start}
+            onClick={() => (scanning ? stop() : void start())}
           >
             {scanning ? (
               <Pause className="size-5" />

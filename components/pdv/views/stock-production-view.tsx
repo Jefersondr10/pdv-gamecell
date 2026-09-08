@@ -1,5 +1,7 @@
 'use client';
 
+import { matchesProductSearch } from '@/lib/product-search';
+import { chunkReportItems } from '@/lib/report-pagination';
 /* oxlint-disable next/no-img-element -- authenticated attachment URLs must load directly with the session cookie */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -10,15 +12,12 @@ import {
   ChevronRight,
   Download,
   FileText,
-  ListFilter,
   LoaderCircle,
   MessageCircle,
   Pencil,
   Check,
   Search,
   Smartphone,
-  TrendingUp,
-  Warehouse,
 } from 'lucide-react';
 
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
@@ -54,6 +53,7 @@ import type {
 import { displayCommercialCode } from '@/lib/commercial-code';
 import { downloadReportPdf } from '@/lib/download-report-pdf';
 import { can } from '@/lib/permissions';
+import { cn } from '@/lib/utils';
 import { changedProductPrices, priceInput } from '@/lib/product-prices';
 
 type StockRow = ProductRecord & {
@@ -76,7 +76,49 @@ export function StockProductionView({
   onOpenSale?: (saleId: string) => void;
 }) {
   const [query, setQuery] = useState('');
-  const [onlyAvailable, setOnlyAvailable] = useState(true);
+  const [serialSearch, setSerialSearch] = useState<{
+    query: string;
+    ids: string[];
+  }>({ query: '', ids: [] });
+  const [serialSearchError, setSerialSearchError] = useState('');
+  const [serialSearching, setSerialSearching] = useState(false);
+  useEffect(() => {
+    const term = query.trim();
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSerialSearchError('');
+      if (!/^[a-z0-9]{6,18}$/i.test(term) || !/[0-9]/.test(term)) {
+        setSerialSearching(false);
+        return;
+      }
+      setSerialSearching(true);
+      try {
+        const result = await requestJson<{ productIds: string[] }>(
+          `/api/inventory?view=serial-search&q=${encodeURIComponent(term)}`,
+          { signal: controller.signal },
+        );
+        if (!controller.signal.aborted)
+          setSerialSearch({ query: term, ids: result.productIds });
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setSerialSearchError(
+            `Busca por SN indisponível: ${messageOf(error)}`,
+          );
+      } finally {
+        if (!controller.signal.aborted) setSerialSearching(false);
+      }
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+  const serialProductIds = new Set(
+    serialSearch.query === query.trim() ? serialSearch.ids : [],
+  );
+  const [stockFilter, setStockFilter] = useState<'available' | 'empty' | 'all'>(
+    'available',
+  );
   const [reportOpen, setReportOpen] = useState(false);
   const [whatsappOpen, setWhatsappOpen] = useState(false);
   const [reportGeneratedAt, setReportGeneratedAt] = useState(() => Date.now());
@@ -197,22 +239,23 @@ export function StockProductionView({
     [data, details, summary],
   );
   const rowsWithStock = rows.filter((row) => row.available > 0);
-  const normalized = query.trim().toLocaleLowerCase('pt-BR');
+  const normalized = query.trim();
   const filtered = rows.filter(
     (row) =>
-      (!onlyAvailable || row.available > 0) &&
-      `${row.model} ${row.color} ${row.memory} ${row.codes.map((code) => code.code).join(' ')}`
-        .toLocaleLowerCase('pt-BR')
-        .includes(normalized),
+      (stockFilter === 'all' ||
+        (stockFilter === 'available'
+          ? row.available > 0
+          : row.available === 0) ||
+        serialProductIds.has(row.id)) &&
+      (serialProductIds.has(row.id) || matchesProductSearch(row, query)),
   );
   const available = rows.reduce((sum, row) => sum + row.available, 0);
-  const soldToday = data.metrics.soldTodayItems;
 
   return (
     <Page>
       <Heading
         action={
-          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <div className="flex shrink-0 items-center justify-end gap-1">
             {can(data.user, 'products.manage') && !editingPrices && (
               <Button
                 className="h-10 rounded-xl px-3"
@@ -225,7 +268,7 @@ export function StockProductionView({
                   priceSaving
                 }
               >
-                <Pencil /> Editar preços
+                <Pencil /> <span>Preços</span>
               </Button>
             )}
             <Button
@@ -260,25 +303,26 @@ export function StockProductionView({
         eyebrow="Inventário"
         title="Estoque"
       />
-      <div
-        className={`${editingPrices ? 'hidden' : 'grid'} mb-3 shrink-0 grid-cols-3 gap-2 sm:gap-3`}
-      >
-        <Metric
-          icon={Warehouse}
-          label="Disponíveis"
-          value={String(available)}
-        />
-        <Metric
-          icon={Smartphone}
-          label="Variações"
-          value={String(rowsWithStock.length)}
-        />
-        <Metric icon={TrendingUp} label="Vendidos" value={String(soldToday)} />
-      </div>
+      {!editingPrices && (
+        <p className="mb-2 text-sm text-muted-foreground">
+          <strong className="text-foreground">{available}</strong> aparelhos
+          disponíveis · {rowsWithStock.length} variações com estoque
+        </p>
+      )}
       {priceNotice && (
         <output className="mb-2 shrink-0 text-sm font-semibold text-success">
           {priceNotice}
         </output>
+      )}
+      {serialSearching && (
+        <output className="mb-1 text-xs text-muted-foreground">
+          Procurando SN…
+        </output>
+      )}
+      {serialSearchError && (
+        <p role="alert" className="mb-1 text-sm text-destructive">
+          {serialSearchError}
+        </p>
       )}
       {priceError && (
         <p
@@ -289,9 +333,9 @@ export function StockProductionView({
         </p>
       )}
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 border-b p-3 sm:p-4">
+        <CardHeader className="shrink-0 border-b p-2">
           <div className="flex items-center justify-between gap-3">
-            <div className="hidden sm:block">
+            <div className="sr-only">
               <CardTitle className="text-base">
                 {editingPrices ? 'Editar preços padrão' : 'Estoque disponível'}
               </CardTitle>
@@ -301,27 +345,39 @@ export function StockProductionView({
                   : 'A lista mostra somente a quantidade disponível de cada variação.'}
               </CardDescription>
             </div>
-            <div className="flex w-full gap-2 sm:w-auto">
-              <div className="relative min-w-0 flex-1 sm:w-80">
+            <div className="flex w-full flex-wrap gap-2">
+              <div className="relative min-w-0 flex-1 basis-full sm:w-80 sm:basis-auto">
                 <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   aria-label="Pesquisar no estoque"
                   className="h-11 rounded-xl pl-9"
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Modelo, cor, memória ou código"
+                  placeholder="Modelo, cor, memória, código ou SN"
                   value={query}
                 />
               </div>
-              <Button
-                aria-label="Mostrar somente produtos com estoque disponível"
-                aria-pressed={onlyAvailable}
-                className="h-11 shrink-0 rounded-xl px-3"
-                onClick={() => setOnlyAvailable((value) => !value)}
-                variant={onlyAvailable ? 'secondary' : 'outline'}
+              <div
+                className="flex shrink-0 gap-1 rounded-xl bg-muted/60 p-1"
+                aria-label="Disponibilidade do estoque"
               >
-                <ListFilter />
-                <span className="hidden sm:inline">Somente com estoque</span>
-              </Button>
+                {(
+                  [
+                    ['available', 'Com estoque'],
+                    ['empty', 'Sem estoque'],
+                    ['all', 'Todos'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    aria-pressed={stockFilter === value}
+                    onClick={() => setStockFilter(value)}
+                    variant={stockFilter === value ? 'secondary' : 'ghost'}
+                    className="h-9 rounded-lg px-2 text-xs font-bold"
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -382,26 +438,40 @@ export function StockProductionView({
               {filtered.map((row) => (
                 <div
                   key={row.id}
-                  className="flex flex-col sm:flex-row sm:items-center"
+                  className={cn(
+                    'grid grid-cols-[minmax(0,1fr)_7rem] items-center border-l-4 border-transparent transition-colors focus-within:border-primary focus-within:bg-primary/10 sm:grid-cols-[minmax(0,1fr)_9rem]',
+                    editingPrices &&
+                      priceDraft[row.id] !== undefined &&
+                      (priceChanges.rows.some(
+                        (price) => price.productId === row.id,
+                      ) ||
+                        Boolean(priceChanges.error)) &&
+                      'border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/20',
+                  )}
                 >
                   <button
                     aria-label={`Abrir estoque de ${row.model}, ${row.color}, ${row.memory}`}
-                    className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-5"
+                    className="grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-3"
                     disabled={editingPrices}
                     onClick={() => setSelectedRow(row)}
                     type="button"
                   >
-                    <span className="grid size-10 place-items-center rounded-xl bg-secondary">
+                    <span className="grid size-7 place-items-center rounded-lg bg-secondary">
                       <ProductColorSwatch
-                        className="size-6"
+                        className="size-5"
                         color={row.color}
                         model={row.model}
                       />
                     </span>
                     <div className="min-w-0">
                       <p className="truncate font-bold">{row.model}</p>
+                      {serialProductIds.has(row.id) && (
+                        <p className="text-xs font-semibold text-primary">
+                          SN localizado no histórico
+                        </p>
+                      )}
                       <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                        <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground">
+                        <span className="flex min-w-0 items-center gap-1.5 truncate text-sm text-muted-foreground">
                           <ProductColorSwatch
                             color={row.color}
                             model={row.model}
@@ -415,7 +485,7 @@ export function StockProductionView({
                           {row.memory}
                         </Badge>
                       </div>
-                      <p className="mt-1 hidden truncate font-mono text-xs text-muted-foreground sm:block">
+                      <p className="sr-only">
                         {row.codes
                           .map((code) =>
                             displayCommercialCode(code.code, code.kind),
@@ -437,15 +507,14 @@ export function StockProductionView({
                         {row.available}
                       </Badge>
                     </div>
-                    <ChevronRight className="size-5 text-muted-foreground" />
                   </button>
-                  <div className="px-4 pb-3 sm:w-44 sm:shrink-0 sm:py-3 sm:pl-0 sm:pr-5">
+                  <div className="py-2 pl-1 pr-2 sm:pr-3">
                     {editingPrices ? (
                       <label
                         htmlFor={`stock-price-${row.id}`}
                         className="block text-xs font-semibold text-muted-foreground"
                       >
-                        Preço padrão · R$
+                        Preço · R$
                         <Input
                           id={`stock-price-${row.id}`}
                           aria-label={`Preço padrão de ${row.model}, ${row.color}, ${row.memory}`}
@@ -465,11 +534,23 @@ export function StockProductionView({
                             }))
                           }
                         />
+                        {priceDraft[row.id] !== undefined &&
+                          priceDraft[row.id] !==
+                            priceInput(
+                              priceBaseline[row.id] ?? row.defaultPriceCents,
+                            ) && (
+                            <span className="mt-1 block text-xs text-amber-800 dark:text-amber-200">
+                              Antes:{' '}
+                              {priceInput(
+                                priceBaseline[row.id] ?? row.defaultPriceCents,
+                              )}
+                            </span>
+                          )}
                       </label>
                     ) : (
                       <p className="text-right text-sm font-bold">
                         <span className="mr-2 text-xs font-medium text-muted-foreground sm:mr-0 sm:block">
-                          Preço padrão
+                          Preço
                         </span>
                         R$ {priceInput(row.defaultPriceCents)}
                       </p>
@@ -736,7 +817,7 @@ function StockProductDetails({
               <p className="font-mono text-sm font-bold">
                 SN {selectedUnit.serial}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-1 text-sm text-muted-foreground">
                 Foto da entrada de {formatDateTime(selectedUnit.createdAt)}
               </p>
               <img
@@ -870,7 +951,7 @@ function StockProductDetails({
                     value={queryDraft}
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   {items.length}
                   {total === null ? '' : ` de ${total}`}{' '}
                   {status === 'available' ? 'disponíveis' : 'vendidos'}
@@ -888,7 +969,7 @@ function StockProductDetails({
                       <p className="truncate font-mono text-sm font-bold">
                         {item.serial}
                       </p>
-                      <p className="truncate text-xs text-muted-foreground">
+                      <p className="truncate text-sm text-muted-foreground">
                         {item.status === 'sold' && item.saleNumber
                           ? `Venda #${String(item.saleNumber).padStart(5, '0')} · toque para abrir`
                           : `Entrada ${formatDateTime(item.createdAt)} · toque para ver a foto`}
@@ -1108,73 +1189,97 @@ function StockReport({
               </div>
             </section>
             <section className="report-section mt-5 space-y-3">
-              {rows.map((row) => (
-                <div
-                  className="report-row rounded-xl border border-slate-200 p-3"
-                  key={row.id}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="font-bold">{row.model}</h3>
-                      <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-600">
-                        <ProductColorSwatch
-                          color={row.color}
-                          model={row.model}
-                        />
-                        <span>{row.color}</span>
-                        <span aria-hidden>·</span>
-                        <strong className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-900">
-                          {row.memory}
-                        </strong>
-                      </p>
-                    </div>
-                    <strong>{row.available} disponíveis</strong>
-                  </div>
-                  {level === 'serials' && (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {row.serials.map((serial) => (
-                        <code
-                          className="rounded bg-slate-100 px-2 py-1 text-xs"
-                          key={serial}
-                        >
-                          {serial}
-                        </code>
-                      ))}
-                      {row.serials.length === 0 && (
-                        <span className="text-sm text-slate-500">
-                          Sem SN disponível.
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {includePhotos && row.photos.length > 0 && (
-                    <div className="mt-3 border-t border-slate-200 pt-3">
-                      <p className="text-xs font-bold uppercase text-slate-500">
-                        Fotos das entradas
-                      </p>
-                      <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
-                        {row.photos.map((photo) => (
-                          <a
-                            className="report-row block overflow-hidden rounded-lg border border-slate-200"
-                            href={photo.url}
-                            key={photo.id}
-                            rel="noreferrer"
-                            target="_blank"
-                          >
-                            <img
-                              alt={`Entrada de ${row.model}`}
-                              className="aspect-square w-full object-cover"
-                              decoding="async"
-                              loading="lazy"
-                              src={photo.url}
-                            />
-                          </a>
-                        ))}
+              {rows.flatMap((row) => {
+                const serialChunks =
+                  level === 'serials' ? chunkReportItems(row.serials, 12) : [];
+                const photoChunks = includePhotos
+                  ? chunkReportItems(row.photos, 3)
+                  : [];
+                const parts = [
+                  ...(serialChunks.length ? serialChunks : [[]]).map(
+                    (serials) => ({ serials, photos: [] as typeof row.photos }),
+                  ),
+                  ...photoChunks.map((photos) => ({
+                    serials: [] as string[],
+                    photos,
+                  })),
+                ];
+                return parts.map((part, partIndex) => (
+                  <div
+                    className="report-row rounded-xl border border-slate-200 p-3"
+                    key={`${row.id}-${partIndex}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-bold">{row.model}</h3>
+                        {partIndex > 0 && (
+                          <p className="text-xs text-slate-500">
+                            Continuação ·{' '}
+                            {part.photos.length
+                              ? 'Fotos das entradas'
+                              : 'Números de série'}
+                          </p>
+                        )}
+                        <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-600">
+                          <ProductColorSwatch
+                            color={row.color}
+                            model={row.model}
+                          />
+                          <span>{row.color}</span>
+                          <span aria-hidden>·</span>
+                          <strong className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-900">
+                            {row.memory}
+                          </strong>
+                        </p>
                       </div>
+                      <strong>{row.available} disponíveis</strong>
                     </div>
-                  )}
-                </div>
-              ))}
+                    {level === 'serials' && !part.photos.length && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {part.serials.map((serial) => (
+                          <code
+                            className="rounded bg-slate-100 px-2 py-1 text-xs"
+                            key={serial}
+                          >
+                            {serial}
+                          </code>
+                        ))}
+                        {row.serials.length === 0 && (
+                          <span className="text-sm text-slate-500">
+                            Sem SN disponível.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {part.photos.length > 0 && (
+                      <div className="mt-3 border-t border-slate-200 pt-3">
+                        <p className="text-xs font-bold uppercase text-slate-500">
+                          Fotos das entradas
+                        </p>
+                        <div className="mt-2 grid grid-cols-3 gap-2">
+                          {part.photos.map((photo) => (
+                            <a
+                              className="block overflow-hidden rounded-lg border border-slate-200"
+                              href={photo.url}
+                              key={photo.id}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              <img
+                                alt={`Entrada de ${row.model}`}
+                                className="aspect-square w-full object-cover"
+                                decoding="async"
+                                loading="lazy"
+                                src={photo.url}
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ));
+              })}
             </section>
           </article>
         </div>
@@ -1251,7 +1356,7 @@ function buildRows(
 
 function Page({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-3 py-3 sm:px-6 sm:py-5 lg:px-10">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden px-2 py-2 sm:px-4 sm:py-3 lg:px-6">
       {children}
     </div>
   );
@@ -1268,43 +1373,16 @@ function Heading({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="mb-3 flex shrink-0 items-end justify-between gap-3">
+    <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
       <div className="min-w-0">
-        <p className="eyebrow">{eyebrow}</p>
-        <h1 className="mt-0.5 text-2xl font-bold tracking-[-.04em] sm:text-3xl">
+        <p className="sr-only">{eyebrow}</p>
+        <h1 className="text-xl font-bold tracking-[-.04em] sm:text-2xl">
           {title}
         </h1>
-        <p className="mt-1 hidden truncate text-sm text-muted-foreground sm:block">
-          {description}
-        </p>
+        <p className="sr-only">{description}</p>
       </div>
       {action}
     </div>
-  );
-}
-function Metric({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof Warehouse;
-  label: string;
-  value: string;
-}) {
-  return (
-    <Card size="sm">
-      <CardContent className="flex items-center gap-2 p-2.5 sm:p-4">
-        <span className="hidden size-9 place-items-center rounded-xl bg-secondary text-primary sm:grid">
-          <Icon className="size-4" />
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-xs font-bold uppercase text-muted-foreground">
-            {label}
-          </p>
-          <p className="font-extrabold">{value}</p>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 function ReportMetric({ label, value }: { label: string; value: string }) {

@@ -1,5 +1,7 @@
 'use client';
 
+import { createOperationId } from '@/lib/client-operation-id';
+
 import { useState } from 'react';
 import { AccountsManager } from './catalog-production-view';
 import { can, defaultPermissions } from '@/lib/permissions';
@@ -615,6 +617,7 @@ function ClientsDialog({
   onOpenChange,
   onChanged,
 }: CommonDialogProps) {
+  const [operationId, setOperationId] = useState(createOperationId);
   const [values, setValues] = useState({
     name: '',
     phone: '',
@@ -623,8 +626,10 @@ function ClientsDialog({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const set = (key: keyof typeof values, value: string) =>
+  const set = (key: keyof typeof values, value: string) => {
+    setOperationId(createOperationId());
     setValues((current) => ({ ...current, [key]: value }));
+  };
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="flex max-h-[92dvh] max-w-xl flex-col overflow-hidden">
@@ -643,8 +648,12 @@ function ClientsDialog({
               setBusy(true);
               setError('');
               try {
-                await postJson('/api/clients', data.csrfToken, values);
+                await postJson('/api/clients', data.csrfToken, {
+                  ...values,
+                  operationId,
+                });
                 setValues({ name: '', phone: '', email: '', notes: '' });
+                setOperationId(createOperationId());
                 await onChanged();
               } catch (caught) {
                 setError(messageOf(caught));

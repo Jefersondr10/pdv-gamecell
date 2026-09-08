@@ -91,11 +91,37 @@ assert.equal(
   db.prepare('SELECT value FROM fixture_preservation').get().value,
   'synthetic-record',
 );
+db.close();
+const migrateClientIdentity = () =>
+  execFileSync(
+    process.execPath,
+    [resolve('scripts/hostinger/apply-client-identity-migration.mjs'), path],
+    { stdio: 'pipe' },
+  );
+migrateClientIdentity();
+migrateClientIdentity();
+db = new DatabaseSync(path);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM pdv_release_migrations').get().n,
+  4,
+);
+assert.deepEqual(
+  db
+    .prepare("PRAGMA index_info('uq_clients_store_name_key')")
+    .all()
+    .map((row) => row.name),
+  ['store_id', 'name_key'],
+);
+assert.equal(
+  db.prepare('SELECT value FROM fixture_preservation').get().value,
+  'synthetic-record',
+);
 db.prepare('UPDATE pdv_release_migrations SET checksum=?').run('changed');
 db.close();
 assert.throws(migrate, /Migration checksum mismatch/);
 assert.throws(migrateAlerts, /Migration checksum mismatch/);
 assert.throws(migratePermissions, /Migration checksum mismatch/);
+assert.throws(migrateClientIdentity, /Migration checksum mismatch/);
 console.log(
   'Additive migration, preservation, backups, repeat and checksum rejection passed.',
 );

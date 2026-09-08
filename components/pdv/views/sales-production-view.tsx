@@ -32,6 +32,8 @@ import {
 } from 'lucide-react';
 
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
+import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
+import { SaleDetailsDialog } from '@/components/pdv/sale-details-dialog';
 import { useServerReceiptJobs } from '@/components/pdv/server-receipt-runtime';
 import {
   GroupDetailsDialog,
@@ -190,6 +192,23 @@ export function SalesProductionView({
   const [alertOnly, setAlertOnly] = useState(false);
   const [issueFilter, setIssueFilter] = useState<IssueFilter>('all');
   const [orderStatusFilter, setOrderStatusFilter] = useState('all');
+  const [sellerFilter, setSellerFilter] = useState('all');
+  const [sellerOptions, setSellerOptions] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [sellerOptionsError, setSellerOptionsError] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    void requestJson<{ sellers: Array<{ id: string; name: string }> }>(
+      '/api/sales?view=seller-options',
+      { signal: controller.signal },
+    )
+      .then((result) => setSellerOptions(result.sellers))
+      .catch((error) => {
+        if (!controller.signal.aborted) setSellerOptionsError(messageOf(error));
+      });
+    return () => controller.abort();
+  }, [data.store.id]);
   const [sellerRanking, setSellerRanking] = useState<SellerRanking>('items');
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [periodReportOpen, setPeriodReportOpen] = useState(false);
@@ -197,6 +216,7 @@ export function SalesProductionView({
     null,
   );
   const [reportSale, setReportSale] = useState<SaleRecord | null>(null);
+  const [detailSale, setDetailSale] = useState<SaleRecord | null>(null);
   const [editSale, setEditSale] = useState<SaleRecord | null>(null);
   const [cancelSale, setCancelSale] = useState<SaleRecord | null>(null);
   const [page, setPage] = useState<SalesPage>(() => emptySalesPage());
@@ -226,16 +246,23 @@ export function SalesProductionView({
     'sales.status',
   ]);
   const filterParams = useMemo(() => {
+    if (openSaleId)
+      return new URLSearchParams({
+        period: 'all',
+        saleId: openSaleId,
+      }).toString();
     const params = new URLSearchParams({ period });
     if (period === 'day') params.set('day', selectedDay);
     if (period === 'month') params.set('month', selectedMonth);
     if (query) params.set('q', query);
     if (alertOnly) params.set('alert', '1');
     if (issueFilter !== 'all') params.set('issue', issueFilter);
+    if (sellerFilter !== 'all') params.set('sellerId', sellerFilter);
     if (orderStatusFilter !== 'all') {
-      params.set('orderStatus', orderStatusFilter);
+      if (orderStatusFilter.startsWith('auto_'))
+        params.set('saleStatus', orderStatusFilter.slice(5));
+      else params.set('orderStatus', orderStatusFilter);
     }
-    if (openSaleId) params.set('saleId', openSaleId);
     return params.toString();
   }, [
     alertOnly,
@@ -246,6 +273,7 @@ export function SalesProductionView({
     query,
     selectedDay,
     selectedMonth,
+    sellerFilter,
   ]);
   const filterKey = filterParams;
 
@@ -378,7 +406,7 @@ export function SalesProductionView({
       if (target) {
         openedTargetRef.current = openSaleId;
         setTargetNotice('');
-        setReportSale(target);
+        setDetailSale(target);
       } else {
         setTargetNotice(
           'A venda vinculada a este SN não foi encontrada. Todas as vendas foram exibidas.',
@@ -429,10 +457,22 @@ export function SalesProductionView({
   const reportFilterSummary = useMemo(() => {
     const pieces = [periodDescription(period, selectedDay, selectedMonth)];
     if (query) pieces.push(`Busca: ${query}`);
+    if (sellerFilter !== 'all')
+      pieces.push(
+        `Vendedor: ${sellerOptions.find((seller) => seller.id === sellerFilter)?.name ?? 'selecionado'}`,
+      );
     if (alertOnly) pieces.push('Somente vendas com avisos');
     if (issueFilter === 'missing_receipt') pieces.push('Sem comprovante');
     if (issueFilter === 'pending_payment') pieces.push('Pagamento pendente');
-    if (orderStatusFilter === 'none') pieces.push('Sem status de pedido');
+    if (orderStatusFilter.startsWith('auto_'))
+      pieces.push(
+        orderStatusFilter === 'auto_reconciled'
+          ? 'Conciliado'
+          : orderStatusFilter === 'auto_cancelled'
+            ? 'Cancelado'
+            : 'Aguardando conciliação',
+      );
+    else if (orderStatusFilter === 'none') pieces.push('Sem status de pedido');
     else if (orderStatusFilter !== 'all') {
       const status = data.orderStatuses.find(
         (candidate) => candidate.id === orderStatusFilter,
@@ -443,6 +483,8 @@ export function SalesProductionView({
   }, [
     alertOnly,
     data.orderStatuses,
+    sellerFilter,
+    sellerOptions,
     issueFilter,
     orderStatusFilter,
     period,
@@ -455,7 +497,9 @@ export function SalesProductionView({
   const activeTotal =
     grouping === 'sale' ? page.total : (analytics?.total ?? 0);
   const additionalFilterCount =
-    Number(issueFilter !== 'all') + Number(orderStatusFilter !== 'all');
+    Number(issueFilter !== 'all') +
+    Number(orderStatusFilter !== 'all') +
+    Number(sellerFilter !== 'all');
 
   const reloadActive = async () => {
     if (grouping === 'sale') await loadSales(null, false, true);
@@ -463,14 +507,14 @@ export function SalesProductionView({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-2 py-2 sm:px-6 sm:py-5 lg:px-10">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden px-2 py-2 sm:px-4 sm:py-3 lg:px-6">
       <div className="mb-2 flex shrink-0 items-end justify-between gap-3 sm:mb-3">
         <div className="min-w-0">
-          <p className="eyebrow hidden sm:block">Comercial</p>
-          <h1 className="text-xl font-black tracking-[-.04em] sm:mt-0.5 sm:text-3xl">
+          <p className="sr-only">Comercial</p>
+          <h1 className="text-xl font-black tracking-[-.04em] sm:text-2xl">
             Vendas
           </h1>
-          <p className="mt-1 hidden text-sm text-muted-foreground sm:block">
+          <p className="sr-only">
             Filtre o período, veja por venda, modelo, cliente ou vendedor e abra
             os SNs de cada grupo.
           </p>
@@ -485,7 +529,7 @@ export function SalesProductionView({
           <span className="hidden sm:inline">Relatório de vendas</span>
         </Button>
       </div>
-      <div className="mb-2 grid shrink-0 grid-cols-4 gap-1 sm:mb-3 sm:grid-cols-2 sm:gap-2 lg:grid-cols-4">
+      <div className="mb-2 grid shrink-0 grid-cols-4 gap-1 sm:mb-2 sm:gap-2">
         <Metric
           active={grouping === 'sale' && !alertOnly}
           comparison={
@@ -585,17 +629,17 @@ export function SalesProductionView({
         />
       </div>
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 space-y-2 border-b bg-muted/20 p-2 sm:p-4">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_13rem_14rem_14rem]">
+        <CardHeader className="shrink-0 space-y-1.5 border-b bg-muted/20 p-2 sm:p-2.5">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 md:grid-cols-3 xl:grid-cols-[minmax(12rem,1fr)_10rem_11rem_12rem_11rem]">
             <label className="col-span-2 min-w-0 md:col-span-1">
-              <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+              <span className="sr-only mb-1 items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
                 <Search className="size-3 text-muted-foreground" /> Pesquisar
                 vendas
               </span>
               <span className="relative block">
                 <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  className="h-11 rounded-xl bg-background pl-9 font-bold tracking-[-.01em] shadow-sm placeholder:font-medium"
+                  className="h-10 rounded-xl bg-background pl-9 font-bold tracking-[-.01em] shadow-sm placeholder:font-medium"
                   onChange={(event) => setQueryDraft(event.target.value)}
                   placeholder="Cliente, vendedor, modelo, venda ou SN"
                   value={queryDraft}
@@ -617,7 +661,7 @@ export function SalesProductionView({
             <Button
               aria-expanded={mobileFiltersOpen}
               className={cn(
-                'mt-[1.05rem] h-11 rounded-xl bg-background px-3 font-extrabold shadow-sm md:hidden',
+                'h-10 rounded-xl bg-background px-3 font-extrabold shadow-sm md:hidden',
                 mobileFiltersOpen &&
                   'border-primary/40 bg-primary/10 text-primary hover:bg-primary/15',
               )}
@@ -637,7 +681,7 @@ export function SalesProductionView({
               )}
             >
               <div className="min-w-0">
-                <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                <span className="sr-only mb-1 items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
                   <CircleAlert className="size-3 text-muted-foreground" />
                   Pendência
                 </span>
@@ -659,7 +703,7 @@ export function SalesProductionView({
                   <ListFilter className="size-3 text-muted-foreground" /> Status
                 </span>
                 <SalesFilterSelect
-                  aria-label="Status do pedido"
+                  aria-label="Status da venda ou acompanhamento"
                   onValueChange={setOrderStatusFilter}
                   options={[
                     {
@@ -672,6 +716,21 @@ export function SalesProductionView({
                       label: 'Sem status',
                       value: 'none',
                     },
+                    {
+                      label: 'Conciliado',
+                      detail: 'Comprovantes conferidos com o valor da venda',
+                      value: 'auto_reconciled',
+                    },
+                    {
+                      label: 'Cancelado',
+                      detail: 'Vendas canceladas',
+                      value: 'auto_cancelled',
+                    },
+                    {
+                      label: 'Aguardando conciliação',
+                      detail: 'Sem comprovante, em leitura ou com divergência',
+                      value: 'auto_pending',
+                    },
                     ...data.orderStatuses.map((status) => ({
                       detail: status.active
                         ? 'Status cadastrado pela loja'
@@ -682,6 +741,26 @@ export function SalesProductionView({
                   ]}
                   value={orderStatusFilter}
                 />
+              </div>
+              <div className="col-span-2 min-w-0 md:col-span-1">
+                <SalesFilterSelect
+                  aria-label="Vendedor das vendas"
+                  onValueChange={setSellerFilter}
+                  options={[
+                    { label: 'Todos os vendedores', value: 'all' },
+                    ...sellerOptions.map((seller) => ({
+                      label: seller.name,
+                      value: seller.id,
+                    })),
+                  ]}
+                  value={sellerFilter}
+                />
+                {sellerOptionsError && (
+                  <p className="mt-1 text-xs text-destructive" role="alert">
+                    Não foi possível carregar os vendedores.{' '}
+                    {sellerOptionsError}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -714,7 +793,7 @@ export function SalesProductionView({
                   <Button
                     aria-pressed={selected}
                     className={cn(
-                      'h-10 gap-1 rounded-xl px-1 text-xs font-black uppercase tracking-[.025em] shadow-none transition-all sm:px-3',
+                      'h-9 gap-1 rounded-lg px-1 text-sm font-bold tracking-[.025em] shadow-none transition-all sm:px-3',
                       selected
                         ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90'
                         : 'text-muted-foreground hover:bg-background hover:text-foreground',
@@ -806,20 +885,14 @@ export function SalesProductionView({
                 alertOnly ||
                 issueFilter !== 'all' ||
                 orderStatusFilter !== 'all' ||
+                sellerFilter !== 'all' ||
                 Boolean(openSaleId) ||
                 activeTotal > 0
               }
             />
           ) : grouping === 'sale' ? (
             <>
-              <SaleList
-                canCancel={canCancel}
-                canEdit={canEdit}
-                onCancel={setCancelSale}
-                onEdit={setEditSale}
-                onReport={setReportSale}
-                sales={page.items}
-              />
+              <SaleList onDetails={setDetailSale} sales={page.items} />
               {listError && (
                 <div
                   className="border-t bg-destructive/5 p-3 text-center"
@@ -870,6 +943,20 @@ export function SalesProductionView({
           )}
         </CardContent>
       </Card>
+      <SaleDetailsDialog
+        sale={
+          detailSale
+            ? (page.items.find((sale) => sale.id === detailSale.id) ??
+              detailSale)
+            : null
+        }
+        onClose={() => setDetailSale(null)}
+        onReport={setReportSale}
+        onEdit={setEditSale}
+        onCancel={setCancelSale}
+        canEdit={canEdit}
+        canCancel={canCancel}
+      />
       <SaleReport
         onOpenChange={(open) => {
           if (!open) setReportSale(null);
@@ -927,153 +1014,76 @@ export function SalesProductionView({
 
 function SaleList({
   sales,
-  canCancel,
-  canEdit,
-  onEdit,
-  onReport,
-  onCancel,
+  onDetails,
 }: {
   sales: SaleRecord[];
-  canCancel: boolean;
-  canEdit: boolean;
-  onEdit: (sale: SaleRecord) => void;
-  onReport: (sale: SaleRecord) => void;
-  onCancel: (sale: SaleRecord) => void;
+  onDetails: (sale: SaleRecord) => void;
 }) {
   return (
-    <div className="grid gap-2 bg-muted/30 p-2 sm:block sm:divide-y sm:bg-transparent sm:p-0">
+    <div className="grid gap-1.5 bg-muted/20 p-1.5 sm:gap-2 sm:p-2">
       {sales.map((sale) => (
-        <article
-          className={cn(
-            'rounded-xl border bg-card px-3 py-2.5 shadow-sm sm:rounded-none sm:border-0 sm:bg-transparent sm:px-5 sm:py-3 sm:shadow-none',
-            sale.status === 'cancelled' && 'bg-muted/50 opacity-75',
-          )}
+        <button
           key={sale.id}
+          type="button"
+          aria-label={`Abrir detalhes da venda ${sale.number}, ${sale.customerName}`}
+          onClick={() => onDetails(sale)}
+          className={cn(
+            'w-full rounded-xl border bg-card px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+            sale.status === 'cancelled' && 'bg-muted/40 text-muted-foreground',
+          )}
         >
-          <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center sm:gap-3">
-            <div className="flex items-center gap-2 sm:block">
-              <Badge
-                variant={
-                  sale.status === 'cancelled' ? 'destructive' : 'secondary'
-                }
-              >
-                #{String(sale.number).padStart(5, '0')}
-              </Badge>
-              <span className="text-xs text-muted-foreground">
-                {formatDateTime(sale.createdAt)}
-              </span>
-              {canCancel && sale.status === 'completed' && (
-                <Button
-                  aria-label={`Cancelar venda ${sale.number}`}
-                  className="ml-auto size-10 sm:hidden"
-                  onClick={() => onCancel(sale)}
-                  size="icon"
-                  variant="ghost"
-                >
-                  <XCircle />
-                </Button>
-              )}
-            </div>
-            <div className="min-w-0">
-              <p className="truncate font-bold">{sale.customerName}</p>
-              <p className="truncate text-xs text-muted-foreground">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-base font-bold">
+                {sale.customerName}
+              </p>
+              <p className="mt-0.5 truncate text-sm text-muted-foreground">
                 {sale.items.length}{' '}
                 {sale.items.length === 1 ? 'aparelho' : 'aparelhos'} ·{' '}
-                {sale.sellerName} · {paymentLabel(sale)}
+                {sale.items[0]?.productName ?? 'Produto'}
+                {sale.items.length > 1 ? ` +${sale.items.length - 1}` : ''}
               </p>
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {sale.status === 'completed' && sale.orderStatus && (
-                  <OrderStatusBadge status={sale.orderStatus} />
-                )}
-                {sale.status === 'completed' &&
-                  sale.receivedDifferenceCents !== 0 && (
-                    <WarningBadge
-                      text={paymentDifferenceText(sale)!}
-                      tone={
-                        sale.receivedDifferenceCents < 0
-                          ? 'payment'
-                          : 'overpayment'
-                      }
-                    />
-                  )}
-                {sale.status === 'completed' && sale.receipts.length === 0 && (
-                  <WarningBadge text="Sem comprovante" tone="receipt" />
-                )}
-                {sale.status === 'completed' &&
-                  sale.receipts.length > 0 &&
-                  sale.reconciliation.status === 'reconciled' && (
-                    <SuccessBadge text="Conciliado" />
-                  )}
-                {sale.status === 'completed' &&
-                  sale.receipts.length > 0 &&
-                  sale.reconciliation.status === 'pending' && (
-                    <WarningBadge
-                      text={
-                        sale.productsTotalCents <= 0
-                          ? 'Venda sem valor definido'
-                          : 'Conferir comprovante'
-                      }
-                      tone={
-                        sale.productsTotalCents <= 0
-                          ? 'information'
-                          : 'processing'
-                      }
-                    />
-                  )}
-                {sale.status === 'completed' &&
-                  sale.reconciliation.status === 'divergent' && (
-                    <WarningBadge
-                      text={receiptDifferenceText(sale)!}
-                      tone="reconciliation"
-                    />
-                  )}
-                {sale.status === 'cancelled' && sale.cancellationReason && (
-                  <span className="text-xs font-semibold text-destructive">
-                    Motivo: {sale.cancellationReason}
-                  </span>
-                )}
-              </div>
             </div>
-            <div className="flex min-w-0 items-center gap-1 border-t border-border/60 pt-2 sm:border-0 sm:pt-0">
-              <SalePaymentComparison sale={sale} />
-              <div className="ml-auto flex shrink-0 items-center gap-1">
-                <Button
-                  aria-label={`Abrir PDF da venda ${sale.number}`}
-                  className="size-10 px-0 font-bold sm:h-8 sm:w-auto sm:px-2"
-                  onClick={() => onReport(sale)}
-                  size="sm"
-                  variant="outline"
-                >
-                  <FileText className="text-primary" />
-                  <span className="hidden sm:inline">PDF</span>
-                </Button>
-                {canEdit && sale.status === 'completed' && (
-                  <Button
-                    aria-label={`Editar venda ${sale.number}`}
-                    className="size-10 px-0 sm:h-8 sm:w-auto sm:px-2"
-                    onClick={() => onEdit(sale)}
-                    size="sm"
-                    variant="outline"
-                  >
-                    <Pencil />
-                    <span className="hidden sm:inline">Editar</span>
-                  </Button>
+            <div className="shrink-0 text-right">
+              <p
+                className={cn(
+                  'text-base font-extrabold tabular-nums',
+                  sale.status === 'completed' &&
+                    sale.receivedDifferenceCents === 0 &&
+                    sale.productsTotalCents > 0 &&
+                    'text-success',
                 )}
-                {canCancel && sale.status === 'completed' && (
-                  <Button
-                    aria-label={`Cancelar venda ${sale.number}`}
-                    className="hidden size-8 sm:inline-flex"
-                    onClick={() => onCancel(sale)}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <XCircle />
-                  </Button>
-                )}
-              </div>
+              >
+                {formatMoney(sale.productsTotalCents)}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {sale.status === 'cancelled'
+                  ? 'Venda cancelada'
+                  : sale.productsTotalCents <= 0
+                    ? 'Valor não definido'
+                    : sale.receivedDifferenceCents === 0
+                      ? 'Venda / pago'
+                      : `Pago ${formatMoney(sale.receivedTotalCents)}`}
+              </p>
             </div>
           </div>
-        </article>
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <p className="text-xs text-muted-foreground">
+              #{String(sale.number).padStart(5, '0')} ·{' '}
+              {formatDateTime(sale.createdAt)} · {sale.sellerName}
+            </p>
+            <SaleStatusBadge sale={sale} />
+          </div>
+          {sale.status === 'completed' &&
+            (sale.receivedDifferenceCents !== 0 || !sale.receipts.length) && (
+              <p className="mt-1 truncate text-xs font-semibold text-amber-800 dark:text-amber-200">
+                {paymentDifferenceText(sale) ?? 'Sem comprovante'}
+                {sale.receivedDifferenceCents !== 0 && !sale.receipts.length
+                  ? ' · sem comprovante'
+                  : ''}
+              </p>
+            )}
+        </button>
       ))}
     </div>
   );
@@ -3681,86 +3691,6 @@ function getPaymentComparison(sale: SaleRecord): PaymentComparison {
   return 'equal';
 }
 
-function SalePaymentComparison({ sale }: { sale: SaleRecord }) {
-  const comparison = getPaymentComparison(sale);
-  const stateLabel =
-    comparison === 'equal'
-      ? 'Quitado'
-      : comparison === 'under'
-        ? 'Pendente'
-        : comparison === 'over'
-          ? 'Excedente'
-          : comparison === 'cancelled'
-            ? 'Cancelada'
-            : 'Sem valor';
-
-  return (
-    <div
-      className={cn(
-        'min-w-0 flex-1 rounded-lg border px-2 py-1.5 sm:flex-none sm:px-2.5 sm:py-2 sm:min-w-[12rem]',
-        comparison === 'equal' &&
-          'border-emerald-300 bg-emerald-50/90 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-50',
-        comparison === 'under' &&
-          'border-rose-200 bg-rose-50/65 dark:border-rose-900 dark:bg-rose-950/25',
-        comparison === 'over' &&
-          'border-amber-200 bg-amber-50/65 dark:border-amber-900 dark:bg-amber-950/25',
-        (comparison === 'unset' || comparison === 'cancelled') &&
-          'border-slate-200 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-900/50',
-      )}
-    >
-      {comparison === 'equal' ? (
-        <>
-          <p className="text-xs font-bold uppercase leading-none text-emerald-700 dark:text-emerald-300">
-            Quitado
-          </p>
-          <p className="mt-1 whitespace-nowrap text-sm font-extrabold tracking-tight text-emerald-950 tabular-nums dark:text-emerald-50">
-            {formatMoney(sale.productsTotalCents)}
-          </p>
-        </>
-      ) : comparison === 'under' || comparison === 'over' ? (
-        <>
-          <div className="flex items-center justify-between gap-2 whitespace-nowrap text-xs font-bold uppercase leading-none">
-            <span className="text-muted-foreground">Venda / Pago</span>
-            <span
-              className={cn(
-                comparison === 'under'
-                  ? 'text-rose-700 dark:text-rose-300'
-                  : 'text-amber-700 dark:text-amber-300',
-              )}
-            >
-              {stateLabel}
-            </span>
-          </div>
-          <p
-            className={cn(
-              'mt-1 whitespace-nowrap text-xs font-extrabold tracking-tight tabular-nums sm:text-sm',
-              comparison === 'under'
-                ? 'text-rose-800 dark:text-rose-100'
-                : 'text-amber-900 dark:text-amber-100',
-            )}
-          >
-            {formatMoney(sale.productsTotalCents)} /{' '}
-            {formatMoney(sale.receivedTotalCents)}
-          </p>
-        </>
-      ) : (
-        <>
-          <p className="text-xs font-bold uppercase leading-none text-slate-600 dark:text-slate-300">
-            {comparison === 'cancelled'
-              ? 'Venda cancelada'
-              : 'Sem valor de venda'}
-          </p>
-          <p className="mt-1 whitespace-nowrap text-sm font-extrabold tracking-tight tabular-nums">
-            {comparison === 'cancelled'
-              ? formatMoney(sale.productsTotalCents)
-              : `Pago: ${formatMoney(sale.receivedTotalCents)}`}
-          </p>
-        </>
-      )}
-    </div>
-  );
-}
-
 function PaymentComparisonLabel({
   comparison,
   className,
@@ -3812,55 +3742,6 @@ function PaymentComparisonLabel({
   );
 }
 
-type WarningTone =
-  | 'information'
-  | 'overpayment'
-  | 'payment'
-  | 'processing'
-  | 'receipt'
-  | 'reconciliation';
-
-function WarningBadge({ text, tone }: { text: string; tone: WarningTone }) {
-  const Icon =
-    tone === 'payment' || tone === 'overpayment'
-      ? WalletCards
-      : tone === 'receipt'
-        ? Paperclip
-        : tone === 'processing'
-          ? ReceiptText
-          : CircleAlert;
-
-  return (
-    <span
-      className={cn(
-        'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold leading-4',
-        tone === 'payment' &&
-          'border-rose-200/80 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200',
-        tone === 'overpayment' &&
-          'border-amber-200/80 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200',
-        tone === 'receipt' &&
-          'border-amber-200/80 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200',
-        tone === 'processing' &&
-          'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200',
-        tone === 'reconciliation' &&
-          'border-rose-200/80 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200',
-        tone === 'information' &&
-          'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200',
-      )}
-    >
-      <Icon className="size-3" />
-      {text}
-    </span>
-  );
-}
-function SuccessBadge({ text }: { text: string }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200/80 bg-emerald-50 px-2 py-0.5 text-xs font-semibold leading-4 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
-      <FileCheck2 className="size-3" />
-      {text}
-    </span>
-  );
-}
 function Metric({
   label,
   mobileLabel,
@@ -3908,19 +3789,19 @@ function Metric({
   const content = (
     <Card
       className={cn(
-        'gap-0 overflow-hidden rounded-lg border-border/80 bg-card py-0 transition-all sm:h-full sm:rounded-xl sm:py-3',
+        'gap-0 overflow-hidden rounded-lg border-border/80 bg-card py-0 transition-all sm:h-full sm:rounded-xl',
         onClick && 'hover:border-primary/45 hover:bg-secondary/35',
         active && 'border-primary ring-2 ring-primary/25',
       )}
       size="sm"
     >
-      <CardContent className="p-1.5 sm:p-3.5">
+      <CardContent className="p-1.5 sm:p-2">
         <p className="truncate text-xs font-black uppercase tracking-[-.02em] text-muted-foreground sm:tracking-[.08em]">
           <span className="sm:hidden">{mobileLabel ?? label}</span>
           <span className="hidden sm:inline">{label}</span>
         </p>
         <p
-          className="mt-0.5 truncate text-sm font-black tracking-[-.045em] sm:mt-1 sm:text-xl sm:tracking-[-.035em]"
+          className="mt-0.5 truncate text-sm font-black tracking-[-.045em] sm:mt-0.5 sm:text-lg sm:tracking-[-.035em]"
           title={value}
         >
           <span className="sm:hidden">{mobileValue ?? value}</span>
@@ -4018,7 +3899,7 @@ function SalesFilterSelect<T extends string>({
     >
       <SelectTrigger
         aria-label={ariaLabel}
-        className="h-11 w-full rounded-xl bg-background px-3 text-left font-extrabold tracking-[-.01em] shadow-sm focus-visible:ring-2"
+        className="h-10 w-full rounded-xl bg-background px-3 text-left font-extrabold tracking-[-.01em] shadow-sm focus-visible:ring-2"
         size="lg"
       >
         <SelectValue>{selected?.label ?? 'Selecionar'}</SelectValue>
@@ -4166,27 +4047,6 @@ function paymentDifferenceText(sale: SaleRecord) {
   return null;
 }
 
-function receiptDifferenceText(sale: SaleRecord) {
-  const difference = sale.reconciliation.differenceCents ?? 0;
-  if (difference < 0) {
-    return `Comprovantes abaixo da venda · diferença ${formatMoney(-difference)}`;
-  }
-  if (difference > 0) {
-    return `Comprovantes acima da venda · diferença ${formatMoney(difference)}`;
-  }
-  return null;
-}
-
-function paymentLabel(sale: SaleRecord) {
-  if (sale.payments.length === 0) return 'Pagamento não informado';
-  return sale.payments
-    .map((payment) =>
-      payment.method === 'pix'
-        ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-        : 'Dinheiro',
-    )
-    .join(' + ');
-}
 function reportName(level: ReportLevel) {
   return level === 'simple'
     ? 'simplificado'

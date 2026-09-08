@@ -110,6 +110,20 @@ export async function GET(request: Request) {
     const session = await requireSession(request);
     const storeId = session.storeId!;
     const url = new URL(request.url);
+    if (url.searchParams.get('view') === 'seller-options') {
+      assertPermission(session, 'sales');
+      const db = runtime().DB;
+      await consumeStoreReadBudget(db, Date.now(), storeId, 2);
+      const sellers = await db
+        .prepare(`SELECT s.seller_user_id AS id,
+        COALESCE(MAX(u.display_name), MAX(s.seller_name), 'Sem nome') AS name
+        FROM sales s LEFT JOIN users u ON u.id = s.seller_user_id AND u.store_id = s.store_id
+        WHERE s.store_id = ? AND s.seller_user_id IS NOT NULL
+        GROUP BY s.seller_user_id ORDER BY name COLLATE NOCASE LIMIT 1000`)
+        .bind(storeId)
+        .all();
+      return json({ sellers: sellers.results });
+    }
     const grouping = url.searchParams.get('group');
     const group =
       grouping === 'model' ||

@@ -211,6 +211,7 @@ export const clients = sqliteTable(
       .notNull()
       .references(() => stores.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
+    nameKey: text('name_key'),
     phone: text('phone'),
     email: text('email'),
     notes: text('notes'),
@@ -220,7 +221,10 @@ export const clients = sqliteTable(
       .references(() => users.id),
     ...timestamps,
   },
-  (table) => [index('idx_clients_store_name').on(table.storeId, table.name)],
+  (table) => [
+    index('idx_clients_store_name').on(table.storeId, table.name),
+    uniqueIndex('uq_clients_store_name_key').on(table.storeId, table.nameKey),
+  ],
 );
 
 export const pixAccounts = sqliteTable(

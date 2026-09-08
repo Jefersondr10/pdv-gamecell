@@ -275,11 +275,57 @@ const client = await call('/api/clients', {
   body: JSON.stringify({ name: 'Cliente Integração' }),
 });
 const clientId = String(client.body.id);
+const normalizedDuplicate = await call('/api/clients', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: '  CLIENTE   INTEGRACAO  ' }),
+});
+assert.equal(normalizedDuplicate.body.code, 'CLIENT_ALREADY_EXISTS');
+const concurrentClients = await Promise.all(
+  ['Conect teste', '  CONÉCT   TESTE  '].map((name) =>
+    call('/api/clients', {
+      method: 'POST',
+      cookie: ownerCookie,
+      expected: [201, 409],
+      headers: {
+        'x-csrf-token': ownerCsrf,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ operationId: crypto.randomUUID(), name }),
+    }),
+  ),
+);
+assert.deepEqual(
+  concurrentClients
+    .map((result) => result.response.status)
+    .sort((a, b) => a - b),
+  [201, 409],
+);
+const secondClientId = String(
+  concurrentClients.find((result) => result.response.status === 201)!.body.id,
+);
+const renameCollision = await call(`/api/clients/${secondClientId}`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'cliente integração' }),
+});
+assert.equal(renameCollision.body.code, 'CLIENT_ALREADY_EXISTS');
 await call(`/api/clients/${clientId}`, {
   method: 'PATCH',
   cookie: ownerCookie,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
   body: JSON.stringify({ phone: '(11) 99999-0000', active: false }),
+});
+await call('/api/clients', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 409,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'cliente integração' }),
 });
 await call(`/api/clients/${clientId}`, {
   method: 'PATCH',
@@ -449,6 +495,14 @@ assert.equal(
 const availableStock = await call('/api/inventory?view=summary', {
   cookie: ownerCookie,
 });
+for (const serial of ['HC9P06R095', 'SHC9P06R095', 'hc9p06r096']) {
+  const search = await call(`/api/inventory?view=serial-search&q=${serial}`, {
+    cookie: ownerCookie,
+  });
+  assert.deepEqual(search.body.productIds, [productId]);
+  assert.equal('items' in search.body, false);
+  assert.equal('photos' in search.body, false);
+}
 assert.equal(
   (availableStock.body.rows as Array<{ available: number }>)[0].available,
   2,
@@ -1907,6 +1961,16 @@ assert.equal(isolatedLookup.body.found, false);
 const isolatedOcr = await call(`/api/sales/${activeSaleId}/receipt-ocr`, {
   cookie: secondShopCookie,
 });
+const foreignSnSearch = await call(
+  '/api/inventory?view=serial-search&q=HC9P06R095',
+  { cookie: secondShopCookie },
+);
+assert.deepEqual(foreignSnSearch.body.productIds, []);
+const soldSnSearch = await call(
+  '/api/inventory?view=serial-search&q=HC9P06R095',
+  { cookie: ownerCookie },
+);
+assert.deepEqual(soldSnSearch.body.productIds, [productId]);
 const isolatedOverview = await call('/api/overview?period=all', {
   cookie: secondShopCookie,
 });
@@ -1947,7 +2011,36 @@ for (const amountCents of [500_000, 499_999]) {
   assert.equal(refreshedTotals.receivedCents, 500_000);
   assert.equal(refreshedTotals.pendingCount, 0);
   assert.equal(refreshedTotals.divergentCount, amountCents === 500_000 ? 0 : 1);
+  const reconciledFilter = await call(
+    '/api/sales?group=sale&period=all&saleStatus=reconciled',
+    { cookie: ownerCookie },
+  );
+  assert.equal(
+    (reconciledFilter.body.items as { id: string }[]).some(
+      (item) => item.id === activeSaleId,
+    ),
+    amountCents === 500_000,
+  );
+  const pendingFilter = await call(
+    '/api/sales?group=sale&period=all&saleStatus=pending',
+    { cookie: ownerCookie },
+  );
+  assert.equal(
+    (pendingFilter.body.items as { id: string }[]).some(
+      (item) => item.id === activeSaleId,
+    ),
+    amountCents !== 500_000,
+  );
 }
+const cancelledFilter = await call(
+  '/api/sales?group=sale&period=all&saleStatus=cancelled',
+  { cookie: ownerCookie },
+);
+assert.ok(
+  (cancelledFilter.body.items as { id: string }[]).some(
+    (item) => item.id === saleId,
+  ),
+);
 console.log(
   'Overview refresh: receipt edits immediately update totals and one-cent differences; tenant files remain protected.',
 );
@@ -2251,6 +2344,44 @@ const creditedSale = await call(
   `/api/sales?period=all&saleId=${attributionId}`,
   { cookie: ownerCookie },
 );
+const sellerOptionsResult = await call('/api/sales?view=seller-options', {
+  cookie: ownerCookie,
+});
+assert.ok(
+  (sellerOptionsResult.body.sellers as { id: string }[]).some(
+    (seller) => seller.id === ownerActor,
+  ),
+);
+assert.equal(
+  (sellerOptionsResult.body.sellers as { id: string }[]).some(
+    (seller) => seller.id === foreignActor,
+  ),
+  false,
+);
+const ownerSalesFilter = await call(
+  `/api/sales?period=all&sellerId=${ownerActor}`,
+  { cookie: ownerCookie },
+);
+assert.ok(
+  (ownerSalesFilter.body.items as { id: string }[]).some(
+    (sale) => sale.id === attributionId,
+  ),
+);
+const operatorSalesFilter = await call(
+  `/api/sales?period=all&sellerId=${staffActor}`,
+  { cookie: ownerCookie },
+);
+assert.equal(
+  (operatorSalesFilter.body.items as { id: string }[]).some(
+    (sale) => sale.id === attributionId,
+  ),
+  false,
+);
+const foreignSalesFilter = await call(
+  `/api/sales?period=all&sellerId=${foreignActor}`,
+  { cookie: ownerCookie },
+);
+assert.deepEqual(foreignSalesFilter.body.items, []);
 assert.equal(
   (creditedSale.body.items as { sellerName: string }[])[0].sellerName,
   'Proprietário Integração',

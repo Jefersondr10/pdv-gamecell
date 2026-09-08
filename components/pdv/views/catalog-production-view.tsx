@@ -1,5 +1,7 @@
 'use client';
 
+import { createOperationId } from '@/lib/client-operation-id';
+
 import { useMemo, useState } from 'react';
 import { can } from '@/lib/permissions';
 import {
@@ -592,6 +594,7 @@ function ClientEditor({
   onChanged: () => Promise<void>;
   onClose: () => void;
 }) {
+  const [operationId, setOperationId] = useState(createOperationId);
   const [values, setValues] = useState({
     name: client?.name ?? '',
     phone: client?.phone ?? '',
@@ -600,8 +603,10 @@ function ClientEditor({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const set = (key: keyof typeof values, value: string) =>
+  const set = (key: keyof typeof values, value: string) => {
+    setOperationId(createOperationId());
     setValues((current) => ({ ...current, [key]: value }));
+  };
   const toggleActive = async (active: boolean) => {
     if (!client) return;
     await runAction(setBusy, setError, async () => {
@@ -629,7 +634,10 @@ function ClientEditor({
             if (client) {
               await patchJson(`/api/clients/${client.id}`, csrfToken, values);
             } else {
-              await postJson('/api/clients', csrfToken, values);
+              await postJson('/api/clients', csrfToken, {
+                ...values,
+                operationId,
+              });
             }
             await onChanged();
             onClose();

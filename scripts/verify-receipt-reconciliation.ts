@@ -1,6 +1,25 @@
 import assert from 'node:assert/strict';
 
 import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
+import { saleDisplayStatus } from '../lib/sale-display-status.ts';
+
+const reconciledSale = {
+  status: 'completed' as const,
+  orderStatus: null,
+  reconciliation: deriveReceiptReconciliation([{ amountCents: 100 }], 100),
+};
+assert.equal(saleDisplayStatus(reconciledSale).label, 'Conciliado');
+assert.equal(
+  saleDisplayStatus({ ...reconciledSale, status: 'cancelled' }).label,
+  'Cancelado',
+);
+assert.equal(
+  saleDisplayStatus({
+    ...reconciledSale,
+    reconciliation: deriveReceiptReconciliation([], 100),
+  }).key,
+  'pending',
+);
 
 assert.deepEqual(deriveReceiptReconciliation([], 620_000), {
   status: 'pending',

@@ -1,5 +1,7 @@
 'use client';
 
+import { chooseReportSliceHeight } from './report-pagination';
+
 type DownloadReportPdfOptions = {
   element: HTMLElement;
   fileName: string;
@@ -12,6 +14,7 @@ export async function downloadReportPdf({
   pdfAttachments = [],
 }: DownloadReportPdfOptions) {
   await waitForImages(element);
+  await document.fonts.ready;
   const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
     import('html2canvas-pro'),
     import('jspdf'),
@@ -36,6 +39,7 @@ export async function downloadReportPdf({
       'Este relatório ficou grande demais. Gere novamente sem as fotos.',
     );
   }
+  const breakRanges = reportBreakRanges(element, scale);
   const canvas = await html2canvas(element, {
     backgroundColor: '#ffffff',
     height: contentHeight,
@@ -65,7 +69,6 @@ export async function downloadReportPdf({
     1,
     Math.floor((printableHeight * canvas.width) / printableWidth),
   );
-  const breakRanges = reportBreakRanges(element, canvas.height / contentHeight);
   const pageCanvas = document.createElement('canvas');
   const context = pageCanvas.getContext('2d', { alpha: false });
   if (!context) throw new Error('Não foi possível preparar o PDF.');
@@ -74,10 +77,11 @@ export async function downloadReportPdf({
   let pageIndex = 0;
   while (sourceY < canvas.height) {
     const maximumSliceHeight = Math.min(pixelsPerPage, canvas.height - sourceY);
-    const sliceHeight = chooseSliceHeight(
+    const sliceHeight = chooseReportSliceHeight(
       sourceY,
       maximumSliceHeight,
       breakRanges,
+      pixelsPerPage,
     );
     pageCanvas.width = canvas.width;
     pageCanvas.height = sliceHeight;
@@ -136,25 +140,6 @@ function reportBreakRanges(element: HTMLElement, scaleY: number) {
     })
     .filter((range) => range.bottom > range.top)
     .sort((left, right) => left.top - right.top);
-}
-
-function chooseSliceHeight(
-  sourceY: number,
-  maximumSliceHeight: number,
-  ranges: Array<{ top: number; bottom: number }>,
-) {
-  const idealEnd = sourceY + maximumSliceHeight;
-  const minimumUsefulEnd = sourceY + maximumSliceHeight * 0.25;
-  const breakBefore = ranges
-    .filter(
-      (range) =>
-        range.top >= minimumUsefulEnd &&
-        range.top < idealEnd &&
-        range.bottom > idealEnd &&
-        range.bottom - range.top < maximumSliceHeight * 0.92,
-    )
-    .at(-1)?.top;
-  return Math.max(1, Math.floor((breakBefore ?? idealEnd) - sourceY));
 }
 
 async function appendPdfAttachments(

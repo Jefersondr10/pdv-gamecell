@@ -26,6 +26,10 @@ type ScannerCallbacks = {
   onAccepted: (candidate: ScanCandidate) => void;
   onStateChange?: (state: ScannerState) => void;
   onError?: (message: string) => void;
+  onCameras?: (
+    cameras: Array<{ id: string; label: string }>,
+    selected: string,
+  ) => void;
 };
 
 export type ScanBoundingBox = {
@@ -61,6 +65,45 @@ type PreparedDetector = {
 };
 
 type TimedSample = ScanCandidate & { at: number };
+
+export function recentScanSamples<T extends { at: number }>(
+  samples: T[],
+  now: number,
+) {
+  return samples.filter((sample) => now - sample.at <= SAMPLE_WINDOW_MS);
+}
+
+export async function openScannerCamera(
+  media: Pick<MediaDevices, 'getUserMedia'>,
+  deviceId?: string,
+) {
+  const video: MediaTrackConstraints = {
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+    frameRate: { ideal: 24, max: 30 },
+  };
+  try {
+    return await media.getUserMedia({
+      audio: false,
+      video: {
+        ...video,
+        ...(deviceId
+          ? { deviceId: { exact: deviceId } }
+          : { facingMode: { exact: 'environment' } }),
+      },
+    });
+  } catch (error) {
+    if (
+      !(error instanceof DOMException) ||
+      !['OverconstrainedError', 'NotFoundError'].includes(error.name)
+    )
+      throw error;
+    return await media.getUserMedia({
+      audio: false,
+      video: { ...video, facingMode: { ideal: 'environment' } },
+    });
+  }
+}
 
 const PRODUCT_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e'] as const;
 const SERIAL_FORMATS = ['code_128'] as const;
@@ -108,6 +151,7 @@ export class ScannerService {
     mode: ScannerMode,
     callbacks: ScannerCallbacks,
     scanRegion?: HTMLElement | null,
+    deviceId?: string,
   ) {
     await this.stop(false);
     const generation = ++this.generation;
@@ -123,14 +167,7 @@ export class ScannerService {
         (detector) => ({ detector, error: null }),
         (error: unknown) => ({ detector: null, error }),
       );
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      });
+      const stream = await openScannerCamera(navigator.mediaDevices, deviceId);
 
       if (!this.isCurrent(generation)) {
         stream.getTracks().forEach((track) => track.stop());
@@ -138,6 +175,39 @@ export class ScannerService {
       }
 
       this.stream = stream;
+      const track = stream.getVideoTracks()[0];
+      try {
+        const capabilities = track?.getCapabilities?.() as
+          | (MediaTrackCapabilities & { focusMode?: string[] })
+          | undefined;
+        if (capabilities?.focusMode?.includes('continuous'))
+          await track.applyConstraints({
+            advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+          });
+      } catch {
+        /* Focus controls are optional on Safari. */
+      }
+      if (!this.isCurrent(generation)) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      void navigator.mediaDevices
+        .enumerateDevices()
+        .then((devices) => {
+          if (!this.isCurrent(generation)) return;
+          callbacks.onCameras?.(
+            devices
+              .filter((device) => device.kind === 'videoinput')
+              .map((device, index) => ({
+                id: device.deviceId,
+                label: device.label || `Câmera ${index + 1}`,
+              })),
+            track?.getSettings().deviceId ?? '',
+          );
+        })
+        .catch(() => {
+          /* The current camera remains usable without a device list. */
+        });
       video.srcObject = stream;
       video.autoplay = true;
       video.muted = true;
@@ -194,6 +264,7 @@ export class ScannerService {
     this.emptyFrames = 0;
     this.lastAttemptAt = 0;
     this.detector = null;
+    this.detectionInFlight = false;
     this.usingNativeDetector = false;
     this.nativeFallbackAttempted = false;
     if (updateState) this.callbacks?.onStateChange?.('stopped');
@@ -229,8 +300,11 @@ export class ScannerService {
     ) {
       this.lastAttemptAt = now;
       this.detectionInFlight = true;
+      const generation = this.generation;
       void this.detectCurrentFrame().finally(() => {
+        if (generation !== this.generation) return;
         this.detectionInFlight = false;
+        this.lastAttemptAt = performance.now();
       });
     }
     this.queueNextFrame();
@@ -266,8 +340,8 @@ export class ScannerService {
       Math.round((sourceHeight / sourceWidth) * targetWidth),
     );
 
-    this.canvas.width = targetWidth;
-    this.canvas.height = targetHeight;
+    if (this.canvas.width !== targetWidth) this.canvas.width = targetWidth;
+    if (this.canvas.height !== targetHeight) this.canvas.height = targetHeight;
     context.drawImage(
       video,
       sourceX,
@@ -357,7 +431,7 @@ export class ScannerService {
   }
 
   private handleEmptyFrame() {
-    this.samples = [];
+    this.samples = recentScanSamples(this.samples, performance.now());
     if (!this.lockedKey) return;
     this.emptyFrames += 1;
     if (this.emptyFrames >= EMPTY_FRAMES_TO_REARM) {

@@ -4,6 +4,41 @@ import { parseSalesFilters } from '../lib/server/sales-filters.ts';
 
 const storeId = '11111111-1111-4111-8111-111111111111';
 const now = new Date('2026-09-05T12:00:00-03:00').getTime();
+const sellerId = '22222222-2222-4222-8222-222222222222';
+const sellerFilter = parseSalesFilters(
+  new URL(`https://example.test/api/sales?period=today&sellerId=${sellerId}`),
+  storeId,
+  now,
+);
+assert.ok(sellerFilter.where.includes('s.seller_user_id = ?'));
+assert.deepEqual(sellerFilter.bindings.slice(0, 2), [storeId, sellerId]);
+assert.deepEqual(sellerFilter.comparison?.bindings.slice(0, 2), [
+  storeId,
+  sellerId,
+]);
+assert.throws(() =>
+  parseSalesFilters(
+    new URL('https://example.test/api/sales?sellerId=invalid'),
+    storeId,
+  ),
+);
+
+for (const status of ['reconciled', 'pending', 'cancelled']) {
+  const parsed = parseSalesFilters(
+    new URL(`https://example.test/api/sales?saleStatus=${status}`),
+    storeId,
+    now,
+  );
+  assert.equal(parsed.saleStatus, status);
+  assert.ok(parsed.where.some((clause) => clause.includes("s.status = '")));
+}
+assert.throws(() =>
+  parseSalesFilters(
+    new URL('https://example.test/api/sales?saleStatus=invalid'),
+    storeId,
+    now,
+  ),
+);
 
 const today = parseSalesFilters(
   new URL('https://example.test/api/sales?period=today&issue=pending_payment'),

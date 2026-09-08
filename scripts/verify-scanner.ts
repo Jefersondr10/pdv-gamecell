@@ -5,9 +5,51 @@ import {
   hasValidGtinCheckDigit,
   normalizeCandidate,
   selectCentralCandidate,
+  recentScanSamples,
+  openScannerCamera,
 } from '../lib/scanner.ts';
 import { displayCommercialCode } from '../lib/commercial-code.ts';
 import { normalizeCommercialCode } from '../lib/gtin.ts';
+
+assert.deepEqual(recentScanSamples([{ at: 100 }, { at: 900 }], 1500), [
+  { at: 100 },
+  { at: 900 },
+]);
+assert.deepEqual(recentScanSamples([{ at: 100 }, { at: 900 }], 1501), [
+  { at: 900 },
+]);
+const cameraConstraints: MediaStreamConstraints[] = [];
+const fakeStream = {} as MediaStream;
+assert.equal(
+  await openScannerCamera({
+    getUserMedia: async (constraints) => {
+      cameraConstraints.push(constraints!);
+      if (cameraConstraints.length === 1)
+        throw new DOMException('Unavailable', 'OverconstrainedError');
+      return fakeStream;
+    },
+  }),
+  fakeStream,
+);
+assert.equal(cameraConstraints.length, 2);
+assert.deepEqual(
+  (cameraConstraints[0].video as MediaTrackConstraints).facingMode,
+  { exact: 'environment' },
+);
+assert.deepEqual(
+  (cameraConstraints[1].video as MediaTrackConstraints).facingMode,
+  { ideal: 'environment' },
+);
+let permissionAttempts = 0;
+await assert.rejects(
+  openScannerCamera({
+    getUserMedia: async () => {
+      permissionAttempts += 1;
+      throw new DOMException('Denied', 'NotAllowedError');
+    },
+  }),
+);
+assert.equal(permissionAttempts, 1);
 
 assert.equal(hasValidGtinCheckDigit('4006381333931'), true);
 assert.equal(hasValidGtinCheckDigit('4006381333932'), false);

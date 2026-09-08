@@ -1604,8 +1604,25 @@ function GuideDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 text-sm leading-6">
+          <GuideStep number="Novo" title="Vendas e estoque mais diretos">
+            Toque em uma venda para ver produtos, SNs, pagamentos e
+            comprovantes. Use o filtro Vendedor junto do período. Conciliado
+            significa que os comprovantes conferem com o valor da venda; não
+            confirma crédito no banco. No estoque, pesquise modelo, cor e
+            memória em qualquer ordem, ou um SN. Com estoque, Sem estoque e
+            Todos filtram as variações. Os preços em edição ficam destacados. O
+            PDF mantém modelo e SNs juntos, repetindo a identificação nos blocos
+            de continuação.
+          </GuideStep>
+          <GuideStep number="Novo" title="Clientes sem duplicação">
+            O sistema impede repetir um nome já cadastrado na mesma loja, mesmo
+            com diferenças de maiúsculas, acentos ou espaços. Pesquise e utilize
+            o cadastro existente; se estiver inativo, reative-o. Para pessoas
+            diferentes com o mesmo nome, identifique cada cadastro com um
+            complemento.
+          </GuideStep>
           <GuideStep number="Novo" title="Editar vários preços no estoque">
-            Em Estoque, toque em Editar preços, altere os valores e use Salvar
+            Em Estoque, toque em Preços, altere os valores e use Salvar
             alterações. A pesquisa não descarta preços já digitados. Cancelar
             descarta a edição. Os novos preços valem para próximas vendas e para
             a lista do WhatsApp; vendas anteriores não mudam. É necessário ter

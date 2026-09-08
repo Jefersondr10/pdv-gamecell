@@ -10,6 +10,7 @@ export type SalesPeriod =
   | 'all';
 
 export type SalesIssue = 'missing_receipt' | 'pending_payment';
+export type SalesAutoStatus = 'reconciled' | 'cancelled' | 'pending';
 
 export type ParsedSalesFilters = {
   alertOnly: boolean;
@@ -24,9 +25,11 @@ export type ParsedSalesFilters = {
   month: string | null;
   issue: SalesIssue | null;
   orderStatusId: string | null;
+  saleStatus: SalesAutoStatus | null;
   period: SalesPeriod | null;
   query: string;
   customerId: string | null;
+  sellerId: string | null;
   saleId: string | null;
   to: number | null;
   where: string[];
@@ -35,6 +38,11 @@ export type ParsedSalesFilters = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_LEGACY_PERIOD_MS = 367 * DAY_MS;
 const SAO_PAULO_TIME_ZONE = 'America/Sao_Paulo';
+
+export const SALE_RECONCILED_SQL = `(s.products_total_cents > 0
+  AND EXISTS (SELECT 1 FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt')
+  AND NOT EXISTS (SELECT 1 FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt' AND ar.receipt_amount_cents IS NULL)
+  AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) = s.products_total_cents)`;
 
 export const SALE_ALERT_SQL = `(
   s.received_difference_cents <> 0 OR NOT EXISTS (
@@ -101,8 +109,23 @@ export function parseSalesFilters(
   const alertOnly = alertValue === '1';
   const issue = parseIssue(url.searchParams.get('issue'));
   const orderStatusId = parseOrderStatus(url.searchParams.get('orderStatus'));
+  const saleStatusInput = url.searchParams.get('saleStatus');
+  if (
+    saleStatusInput &&
+    !['reconciled', 'cancelled', 'pending'].includes(saleStatusInput)
+  )
+    throw new HttpError(
+      400,
+      'Status da venda inválido.',
+      'INVALID_SALE_STATUS',
+    );
+  const saleStatus = (saleStatusInput || null) as SalesAutoStatus | null;
   const saleId = (url.searchParams.get('saleId') ?? '').trim() || null;
   const customerId = (url.searchParams.get('customerId') ?? '').trim() || null;
+  const sellerId = (url.searchParams.get('sellerId') ?? '').trim() || null;
+  if (sellerId && !/^[a-f0-9-]{20,80}$/i.test(sellerId)) {
+    throw new HttpError(400, 'Vendedor inválido.', 'INVALID_SELLER');
+  }
   if (customerId && !/^[a-f0-9-]{20,80}$/i.test(customerId)) {
     throw new HttpError(400, 'Cliente inválido.', 'INVALID_CUSTOMER');
   }
@@ -110,6 +133,8 @@ export function parseSalesFilters(
     throw new HttpError(400, 'Venda inválida.', 'INVALID_SALE');
   }
   const current = buildFilterClauses({
+    sellerId,
+    saleStatus,
     customerId,
     alertOnly,
     from,
@@ -125,6 +150,8 @@ export function parseSalesFilters(
     previous && !saleId
       ? {
           ...buildFilterClauses({
+            sellerId,
+            saleStatus,
             customerId,
             alertOnly,
             from: previous.from,
@@ -140,6 +167,8 @@ export function parseSalesFilters(
       : null;
 
   return {
+    sellerId,
+    saleStatus,
     customerId,
     alertOnly,
     bindings: current.bindings,
@@ -158,6 +187,8 @@ export function parseSalesFilters(
 }
 
 function buildFilterClauses({
+  sellerId,
+  saleStatus,
   customerId,
   alertOnly,
   from,
@@ -168,6 +199,8 @@ function buildFilterClauses({
   storeId,
   to,
 }: {
+  sellerId: string | null;
+  saleStatus: SalesAutoStatus | null;
   customerId: string | null;
   alertOnly: boolean;
   from: number | null;
@@ -180,6 +213,15 @@ function buildFilterClauses({
 }) {
   const where = ['s.store_id = ?'];
   const bindings: Array<string | number> = [storeId];
+  if (sellerId) {
+    where.push('s.seller_user_id = ?');
+    bindings.push(sellerId);
+  }
+  if (saleStatus === 'cancelled') where.push("s.status = 'cancelled'");
+  if (saleStatus === 'reconciled')
+    where.push(`s.status = 'completed' AND ${SALE_RECONCILED_SQL}`);
+  if (saleStatus === 'pending')
+    where.push(`s.status = 'completed' AND NOT ${SALE_RECONCILED_SQL}`);
   if (customerId) {
     where.push('s.customer_id = ?');
     bindings.push(customerId);

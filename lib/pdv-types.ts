@@ -1,5 +1,5 @@
 import type { Permission } from './permissions';
-export const GUIDE_VERSION = '2026.09.08-codigos-e-precos-v22';
+export const GUIDE_VERSION = '2026.09.08-estoque-vendas-clientes-v23';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 

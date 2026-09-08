@@ -11,6 +11,8 @@ import {
 } from '@/lib/server/http';
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { normalizeClientName } from '@/lib/client-name';
+import { rejectDuplicateClient } from '@/lib/server/client-identity';
 
 export async function POST(request: Request) {
   try {
@@ -39,6 +41,7 @@ export async function POST(request: Request) {
       return json({ ok: true, id, replayed: true });
     }
     await consumeStoreWriteBudget(db, now, session.storeId!, 3);
+    await rejectDuplicateClient(db, session.storeId!, name);
     if (
       await db
         .prepare('SELECT 1 FROM clients WHERE store_id = ? LIMIT 1 OFFSET 4999')
@@ -55,8 +58,8 @@ export async function POST(request: Request) {
       db
         .prepare(
           `INSERT OR IGNORE INTO clients
-           (id, store_id, name, phone, email, notes, active, created_by, created_at, updated_at)
-           SELECT ?, ?, ?, ?, ?, ?, 1, ?, ?, ?
+           (id, store_id, name, phone, email, notes, active, created_by, created_at, updated_at, name_key)
+           SELECT ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?
            WHERE (
              SELECT COUNT(*) FROM clients WHERE store_id = ?
            ) < 5000`,
@@ -71,6 +74,7 @@ export async function POST(request: Request) {
           session.id,
           now,
           now,
+          normalizeClientName(name),
           session.storeId,
         ),
       db
@@ -111,6 +115,7 @@ export async function POST(request: Request) {
         );
         return json({ ok: true, id, replayed: true });
       }
+      await rejectDuplicateClient(db, session.storeId!, name);
       throw new HttpError(
         409,
         'Esta loja atingiu o limite de 5.000 clientes.',
