@@ -65,7 +65,7 @@ export async function boundedFormData(
     }
     throw new HttpError(
       400,
-      'Não foi possível ler os arquivos enviados.',
+      'O envio dos arquivos chegou incompleto. Confira a conexão e tente novamente.',
       'INVALID_MULTIPART',
       error instanceof Error ? error.message : undefined,
     );

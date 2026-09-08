@@ -111,7 +111,10 @@ export function OperationRecoveryPanel({
         <output>
           {pending
             ? `${pending} envio(s) aguardando confirmação`
-            : error || 'Há envios recuperados para conferir'}
+            : error ||
+              (rows.some((row) => row.state === 'confirmed')
+                ? 'Há envios confirmados para conferir'
+                : 'Há tentativas não concluídas para conferir')}
         </output>
         <Button onClick={() => setOpen(true)} size="sm" variant="outline">
           <CloudUpload className="size-4" />

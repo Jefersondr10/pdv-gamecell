@@ -37,8 +37,16 @@ globalThis.fetch = async (url, init) => {
   }
   posts++;
   const payload = JSON.parse(init.body.get('payload'));
-  assert.equal(init.headers['x-csrf-token'], context.csrfToken);
+  assert.equal(
+    new Headers(init.headers).get('x-csrf-token'),
+    context.csrfToken,
+  );
   if (mode === 'reject') return response({ error: 'SN já cadastrado' }, 409);
+  if (mode === 'invalid-multipart')
+    return response(
+      { error: 'Upload incompleto', code: 'INVALID_MULTIPART' },
+      400,
+    );
   if (mode === 'forbidden')
     return response(
       { error: 'Acesso revogado', code: 'PERMISSION_DENIED' },
@@ -192,6 +200,39 @@ for (const recoverableCode of ['BAD_CSRF', 'PASSWORD_CHANGE_REQUIRED']) {
   mode = 'ok';
   assert.equal((await api.recoverOperation(context, saved)).id, sessionId);
 }
+
+mode = 'invalid-multipart';
+const multipartId = crypto.randomUUID();
+await assert.rejects(
+  () =>
+    api.submitRecoverableOperation(
+      context,
+      'entry',
+      multipartId,
+      'Incomplete upload',
+      form(multipartId),
+    ),
+  api.PendingOperationError,
+);
+const multipartPending = (await api.listOperations(context)).find(
+  (row) => row.id === multipartId,
+);
+assert.equal(multipartPending.state, 'pending');
+assert.ok(
+  multipartPending.form.length,
+  'A failed transport must not discard the photos',
+);
+assert.equal(
+  (await api.listOperations(context)).filter((row) => row.id === multipartId)
+    .length,
+  1,
+);
+mode = 'ok';
+assert.equal(
+  (await secondTab.recoverOperation(context, multipartPending)).id,
+  multipartId,
+);
+assert.equal(committed.has(multipartId), true);
 
 mode = 'hold';
 const simultaneousId = crypto.randomUUID();

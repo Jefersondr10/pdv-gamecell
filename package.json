@@ -17,6 +17,7 @@
     "test:money": "node --experimental-strip-types scripts/verify-money.ts",
     "test:permissions": "node --experimental-strip-types scripts/verify-permissions.ts",
     "test:operations": "node --experimental-transform-types scripts/verify-operation-recovery.mjs",
+    "test:uploads": "node --experimental-transform-types scripts/verify-client-upload.mjs",
     "test:receipt-jobs": "node scripts/verify-receipt-jobs.mjs",
     "test:backup": "node --experimental-strip-types scripts/verify-backup-status.ts",
     "test:backup-reader": "node scripts/verify-backup-reader.mjs",

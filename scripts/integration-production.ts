@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { defaultPermissions, type Permission } from '../lib/permissions.ts';
+import { prepareUploadForm } from '../lib/client-upload.ts';
 import {
   SYSTEM_CATALOG_PRODUCTS,
   SYSTEM_CATALOG_VERSION,
@@ -2562,5 +2563,85 @@ await setStaffPermissions(defaultStaffPermissions, [
 ]);
 console.log(
   'Seller selection/default/replay/actor recovery, menu/action enforcement, session revocation, owner and tenant protection, file access, bank editing/inactivation and history preservation passed.',
+);
+// Reproduce the empty upload symptom before the first entry in a fresh shop,
+// then submit both photo copies and retry the same operation without duplicates.
+const uploadHeaders = {
+  'x-csrf-token': String(secondCatalogSession.body.csrfToken),
+};
+assert.equal(
+  (await call('/api/entries', { cookie: secondShopCookie })).body.total,
+  0,
+);
+if (process.env.PDV_TEST_STANDALONE === '1') {
+  const emptyUpload = await fetch(`${baseUrl}/api/entries`, {
+    method: 'POST',
+    headers: {
+      ...uploadHeaders,
+      origin: baseUrl,
+      cookie: secondShopCookie,
+      'cf-connecting-ip': testSourceIp,
+      'content-type':
+        'multipart/form-data; boundary=----WebKitFormBoundaryEntryTest',
+    },
+    body: new Uint8Array(0),
+  });
+  assert.equal(emptyUpload.status, 400);
+  // Vinext dev intercepts malformed multipart as a server action. Run this check
+  // against the standalone candidate, where API dispatch owns parsing.
+  const emptyUploadError = (await emptyUpload.json()) as {
+    code?: string;
+  } | null;
+  assert.equal(emptyUploadError?.code, 'INVALID_MULTIPART');
+  console.log(
+    'Standalone API rejected an empty multipart body before the first entry.',
+  );
+}
+assert.equal(
+  (await call('/api/entries', { cookie: secondShopCookie })).body.total,
+  0,
+);
+const firstUploadId = crypto.randomUUID();
+const firstUploadPayload = {
+  operationId: firstUploadId,
+  productId: otherProducts[0].id,
+  gtin14: otherProducts[0].codes[0].code,
+  serials: ['K7UPLD0001'],
+};
+const firstUpload = new FormData();
+firstUpload.set('payload', JSON.stringify(firstUploadPayload));
+firstUpload.append('photos', tinyPhoto(), 'Caixa — frente.png');
+firstUpload.append('photos', tinyPhoto(), 'Caixa — verso.png');
+const firstUploaded = await call('/api/entries', {
+  method: 'POST',
+  cookie: secondShopCookie,
+  expected: 201,
+  headers: uploadHeaders,
+  body: await prepareUploadForm(firstUpload),
+});
+assert.equal(firstUploaded.body.added, 1);
+const firstUploadReplay = new FormData();
+firstUploadReplay.set('payload', JSON.stringify(firstUploadPayload));
+assert.equal(
+  (
+    await call('/api/entries', {
+      method: 'POST',
+      cookie: secondShopCookie,
+      headers: uploadHeaders,
+      body: firstUploadReplay,
+    })
+  ).body.replayed,
+  true,
+);
+const firstUploadHistory = (
+  await call('/api/entries', { cookie: secondShopCookie })
+).body;
+assert.equal(firstUploadHistory.total, 1);
+assert.equal(
+  (firstUploadHistory.items as { photos: unknown[] }[])[0].photos.length,
+  2,
+);
+console.log(
+  'First entry in a new shop: two materialized photos save once; retry keeps the same operation and photos.',
 );
 console.log('Production integration flow passed.');

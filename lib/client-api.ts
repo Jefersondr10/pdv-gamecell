@@ -1,3 +1,5 @@
+import { prepareUploadForm } from './client-upload.ts';
+
 export async function requestJson<T = unknown>(
   url: string,
   init?: RequestInit,
@@ -15,26 +17,35 @@ export async function requestJson<T = unknown>(
   if (init?.signal?.aborted) controller.abort();
   else init?.signal?.addEventListener('abort', forwardAbort, { once: true });
   try {
+    const multipart = init?.body instanceof FormData;
+    const headers = multipart ? new Headers(init?.headers) : init?.headers;
+    if (multipart && headers instanceof Headers) headers.delete('content-type');
+    const body =
+      init?.body instanceof FormData
+        ? await prepareUploadForm(init.body, controller.signal)
+        : init?.body;
     const response = await fetch(url, {
       ...init,
+      headers,
+      body,
       credentials: 'same-origin',
       cache: 'no-store',
       signal: controller.signal,
     });
-    const body = (await response.json().catch(() => ({}))) as {
+    const responseBody = (await response.json().catch(() => ({}))) as {
       code?: string;
       details?: unknown;
       error?: string;
     } & T;
     if (!response.ok) {
       throw new ApiError(
-        body.error || 'Não foi possível concluir a operação.',
+        responseBody.error || 'Não foi possível concluir a operação.',
         response.status,
-        body.code,
-        body.details,
+        responseBody.code,
+        responseBody.details,
       );
     }
-    return body;
+    return responseBody;
   } catch (error) {
     if (timedOut) {
       throw new Error(
