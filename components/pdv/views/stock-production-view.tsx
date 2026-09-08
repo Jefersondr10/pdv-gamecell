@@ -2,6 +2,7 @@
 
 import { matchesProductSearch } from '@/lib/product-search';
 import { chunkReportItems } from '@/lib/report-pagination';
+import { summarizeStockByMemory } from '@/lib/stock-report-summary';
 /* oxlint-disable next/no-img-element -- authenticated attachment URLs must load directly with the session cookie */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -1078,13 +1079,7 @@ function StockReport({
     return () => window.clearTimeout(timer);
   }, [detailsStarted, needsDetails, onLoadDetails, open]);
   const available = rows.reduce((sum, row) => sum + row.available, 0);
-  const byModel = useMemo(() => {
-    const grouped = new Map<string, number>();
-    rows.forEach((row) =>
-      grouped.set(row.model, (grouped.get(row.model) ?? 0) + row.available),
-    );
-    return Array.from(grouped, ([model, quantity]) => ({ model, quantity }));
-  }, [rows]);
+  const summary = useMemo(() => summarizeStockByMemory(rows), [rows]);
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-4xl sm:rounded-2xl sm:pb-0 sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2">
@@ -1166,22 +1161,34 @@ function StockReport({
             )}
             <div className="report-section mt-4 grid grid-cols-3 gap-2">
               <ReportMetric label="Disponíveis" value={String(available)} />
-              <ReportMetric label="Modelos" value={String(byModel.length)} />
+              <ReportMetric
+                label="Modelos"
+                value={String(summary.modelCount)}
+              />
               <ReportMetric label="Variações" value={String(rows.length)} />
             </div>
             <section className="report-section mt-5">
-              <h3 className="font-extrabold">Quantidade por aparelho</h3>
+              <h3 className="font-extrabold">
+                Quantidade por modelo e memória
+              </h3>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {byModel.map((item) => (
+                {summary.groups.map((item) => (
                   <div
-                    className="report-row flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                    key={item.model}
+                    className="report-row flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    key={item.key}
                   >
-                    <span>{item.model}</span>
-                    <strong>{item.quantity}</strong>
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>{item.model}</span>
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">
+                        {item.memory || 'Memória não informada'}
+                      </span>
+                    </span>
+                    <strong className="shrink-0 tabular-nums">
+                      {item.quantity}
+                    </strong>
                   </div>
                 ))}
-                {byModel.length === 0 && (
+                {summary.groups.length === 0 && (
                   <p className="text-sm text-slate-500">
                     Nenhum aparelho disponível.
                   </p>
