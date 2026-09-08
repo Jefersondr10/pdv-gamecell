@@ -319,29 +319,46 @@ function RankingRow({
       )}
     >
       <span
+        aria-label={
+          award
+            ? `${row.position}º lugar · Troféu de ${award.toLowerCase()}`
+            : undefined
+        }
+        role={award ? 'img' : undefined}
         className={cn(
-          'grid size-11 place-items-center rounded-xl bg-secondary text-primary',
-          award === 'Ouro' && 'bg-amber-100 text-amber-700',
-          award === 'Prata' && 'bg-slate-100 text-slate-500',
-          award === 'Bronze' && 'bg-orange-100 text-orange-800',
+          'flex w-11 flex-col items-center gap-1',
+          award === 'Ouro' && 'text-amber-700 dark:text-amber-300',
+          award === 'Prata' && 'text-slate-600 dark:text-slate-300',
+          award === 'Bronze' && 'text-orange-800 dark:text-orange-300',
         )}
       >
         {award ? (
-          <Trophy
-            aria-label={`Troféu de ${award.toLowerCase()}`}
-            className="size-6"
-          />
+          <>
+            <span
+              className={cn(
+                'grid size-11 place-items-center rounded-xl',
+                award === 'Ouro' && 'bg-amber-100 dark:bg-amber-400/10',
+                award === 'Prata' && 'bg-slate-100 dark:bg-slate-300/10',
+                award === 'Bronze' && 'bg-orange-100 dark:bg-orange-400/10',
+              )}
+            >
+              <Trophy aria-hidden="true" className="size-6" />
+            </span>
+            <span
+              aria-hidden="true"
+              className="text-sm font-extrabold leading-none tabular-nums"
+            >
+              {row.position}º
+            </span>
+          </>
         ) : (
-          <span className="text-sm font-bold">{row.position}º</span>
+          <span className="grid size-11 place-items-center rounded-xl bg-secondary text-sm font-bold text-primary">
+            {row.position}º
+          </span>
         )}
       </span>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {award && (
-            <span className="text-xs font-bold text-muted-foreground">
-              {row.position}º · {award}
-            </span>
-          )}
           <strong className="break-words text-base">{row.label}</strong>
         </div>
         {dimension === 'product' && (row.color || row.memory) && (

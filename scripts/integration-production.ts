@@ -16,9 +16,6 @@ assert.ok(
 );
 const maintenanceBypass = process.env.PDV_TEST_BYPASS;
 const primaryStoreToken = process.env.PDV_TEST_PRIMARY_TOKEN;
-const passwordSignupToken =
-  process.env.PDV_TEST_SIGNUP_TOKEN ?? primaryStoreToken;
-assert.ok(passwordSignupToken, 'Informe PDV_TEST_SIGNUP_TOKEN para o teste.');
 const runId = Date.now().toString(36);
 const testSourceIp =
   process.env.PDV_TEST_SOURCE_IP ??
@@ -90,16 +87,46 @@ const ownerPayload = {
   storeName: `Loja Integração ${runId}`,
   storeCode: `loja-${runId}`,
 };
+const crossOriginSignup = await fetch(`${baseUrl}/api/auth/register-owner`, {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    origin: 'https://untrusted.example',
+  },
+  body: JSON.stringify(ownerPayload),
+});
+assert.equal(crossOriginSignup.status, 403);
 await call('/api/auth/register-owner', {
   method: 'POST',
   expected: 403,
-  ...jsonBody(ownerPayload),
+  ...jsonBody({ ...ownerPayload, storeCode: 'atacadoapple' }),
 });
+const weakSignup = await call('/api/auth/register-owner', {
+  method: 'POST',
+  expected: 400,
+  ...jsonBody({ ...ownerPayload, password: 'weak' }),
+});
+assert.equal(weakSignup.body.code, 'WEAK_PASSWORD');
 const registration = await call('/api/auth/register-owner', {
   method: 'POST',
   expected: 201,
-  ...jsonBody({ ...ownerPayload, setupToken: passwordSignupToken }),
+  ...jsonBody(ownerPayload),
 });
+const duplicateEmailSignup = await call('/api/auth/register-owner', {
+  method: 'POST',
+  expected: 409,
+  ...jsonBody({ ...ownerPayload, storeCode: `duplicate-email-${runId}` }),
+});
+assert.equal(duplicateEmailSignup.body.code, 'EMAIL_EXISTS');
+const duplicateStoreSignup = await call('/api/auth/register-owner', {
+  method: 'POST',
+  expected: 409,
+  ...jsonBody({
+    ...ownerPayload,
+    email: `duplicate-store-${runId}@example.com`,
+  }),
+});
+assert.equal(duplicateStoreSignup.body.code, 'STORE_CODE_EXISTS');
 ownerCookie = sessionCookie(registration.response);
 const initialRecoveryCodes = registration.body.recoveryCodes as string[];
 assert.equal(initialRecoveryCodes.length, 8);
@@ -1495,7 +1522,6 @@ const isolatedOwner = await call('/api/auth/register-owner', {
     email: `isolated-${runId}@example.com`,
     storeName: 'Loja isolada ranking',
     storeCode: `isolated-${runId}`,
-    setupToken: passwordSignupToken,
   }),
 });
 const isolatedCookie = sessionCookie(isolatedOwner.response);
@@ -1620,7 +1646,6 @@ const secondShop = await call('/api/auth/register-owner', {
     ...ownerPayload,
     email: `isolation-${runId}@example.com`,
     storeCode: `isolation-${runId}`,
-    setupToken: passwordSignupToken,
   }),
 });
 const secondShopCookie = sessionCookie(secondShop.response);
@@ -1898,5 +1923,20 @@ assert.deepEqual(
 );
 console.log(
   'Default catalog: iPhone 15 base, all variants, preserved prices/active state, no stock, idempotency and tenant isolation passed.',
+);
+if (!primaryStoreToken) {
+  const excessiveSignup = await call('/api/auth/register-owner', {
+    method: 'POST',
+    expected: 429,
+    ...jsonBody({
+      ...ownerPayload,
+      email: `rate-limit-${runId}@example.com`,
+      storeCode: `rate-limit-${runId}`,
+    }),
+  });
+  assert.equal(excessiveSignup.body.code, 'REGISTRATION_LIMIT');
+}
+console.log(
+  'Public password registration: no activation token, recovery codes, weak password and duplicate rejection, same-origin and creation rate limits passed.',
 );
 console.log('Production integration flow passed.');

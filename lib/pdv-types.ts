@@ -1,4 +1,4 @@
-export const GUIDE_VERSION = '2026.09.07-iphone15-cores-v17';
+export const GUIDE_VERSION = '2026.09.07-ranking-cadastro-v18';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 

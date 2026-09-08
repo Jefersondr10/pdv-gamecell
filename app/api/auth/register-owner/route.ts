@@ -14,10 +14,7 @@ import {
   sessionCookie,
 } from '@/lib/server/auth';
 import { consumeFixedWindowLimits } from '@/lib/server/rate-limit';
-import {
-  assertPasswordSignupAccess,
-  assertPrimaryStoreAccess,
-} from '@/lib/server/primary-store';
+import { assertPrimaryStoreAccess } from '@/lib/server/primary-store';
 import { assertProductionReady } from '@/lib/server/production-readiness';
 import { runtime } from '@/lib/server/runtime';
 import {
@@ -56,7 +53,6 @@ export async function POST(request: Request) {
         'INVALID_STORE_CODE',
       );
     }
-    assertPasswordSignupAccess(body.setupToken);
     assertPrimaryStoreAccess(storeCode, body.setupToken);
     const passwordError = validatePassword(password);
     if (passwordError) throw new HttpError(400, passwordError, 'WEAK_PASSWORD');

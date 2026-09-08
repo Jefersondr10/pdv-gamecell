@@ -167,9 +167,9 @@ const navigation: Array<{
 }> = [
   { view: 'sell', label: 'Vender', short: 'Venda', icon: ShoppingBag },
   { view: 'entry', label: 'Nova entrada', short: 'Entrada', icon: Package },
+  { view: 'ranking', label: 'Ranking', short: 'Ranking', icon: Trophy },
   { view: 'stock', label: 'Estoque', short: 'Estoque', icon: Warehouse },
   { view: 'sales', label: 'Vendas', short: 'Vendas', icon: History },
-  { view: 'ranking', label: 'Ranking', short: 'Ranking', icon: Trophy },
   {
     view: 'catalog',
     label: 'Cadastros',
@@ -1203,7 +1203,6 @@ function RegisterForm({
     password: '',
     storeName: '',
     storeCode: '',
-    setupToken: '',
   });
   const set = (key: keyof typeof values, value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -1242,7 +1241,7 @@ function RegisterForm({
         <Input
           autoCapitalize="none"
           onChange={(event) => set('storeCode', event.target.value)}
-          placeholder="atacadoapple"
+          placeholder="minha-loja"
           required
           value={values.storeCode}
         />
@@ -1259,23 +1258,14 @@ function RegisterForm({
           />
         </Field>
       </div>
-      <div className="sm:col-span-2">
-        <Field label="Código de ativação">
-          <Input
-            autoComplete="one-time-code"
-            onChange={(event) => set('setupToken', event.target.value)}
-            required
-            value={values.setupToken}
-          />
-        </Field>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Necessário apenas para criar conta sem Google. Solicite o código ao
-          administrador do sistema.
+      {isPrimaryStoreCode(values.storeCode) && (
+        <p role="alert" className="text-sm text-destructive sm:col-span-2">
+          Este identificador de loja é reservado. Escolha outro código.
         </p>
-      </div>
+      )}
       <Button
         className="h-12 rounded-xl sm:col-span-2"
-        disabled={busy}
+        disabled={busy || isPrimaryStoreCode(values.storeCode)}
         type="submit"
       >
         {busy ? <LoaderCircle className="animate-spin" /> : null} Criar conta e
@@ -1322,7 +1312,6 @@ function StoreSetup({
 }) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
-  const [setupToken, setSetupToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   return (
@@ -1349,7 +1338,7 @@ function StoreSetup({
                     'content-type': 'application/json',
                     'x-csrf-token': csrfToken,
                   },
-                  body: JSON.stringify({ name, code, setupToken }),
+                  body: JSON.stringify({ name, code }),
                 });
                 window.location.reload();
               } catch (submissionError) {
@@ -1369,20 +1358,15 @@ function StoreSetup({
               <Input
                 autoCapitalize="none"
                 onChange={(event) => setCode(event.target.value)}
-                placeholder="atacadoapple"
+                placeholder="minha-loja"
                 required
                 value={code}
               />
             </Field>
             {isPrimaryStoreCode(code) && (
-              <Field label="Código de ativação da loja principal">
-                <Input
-                  autoComplete="one-time-code"
-                  onChange={(event) => setSetupToken(event.target.value)}
-                  required
-                  value={setupToken}
-                />
-              </Field>
+              <p role="alert" className="text-sm text-destructive">
+                Este identificador de loja é reservado. Escolha outro código.
+              </p>
             )}
             {error && (
               <p className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
@@ -1391,7 +1375,7 @@ function StoreSetup({
             )}
             <Button
               className="h-12 w-full rounded-xl"
-              disabled={busy}
+              disabled={busy || isPrimaryStoreCode(code)}
               type="submit"
             >
               Criar loja
@@ -1515,7 +1499,12 @@ function GuideDialog({
             lavanda, verde-azulado e prateado. Os tons são ilustrativos; confira
             sempre o nome da cor. No menu, Vender é a ação principal em
             destaque; Nova entrada tem destaque secundário para facilitar o
-            acesso sem carregar a tela.
+            acesso sem carregar a tela. Ranking fica logo abaixo de Nova
+            entrada, com dourado suave. Os primeiros lugares mostram a posição
+            abaixo do troféu: 1º em ouro, 2º em prata e 3º em bronze, inclusive
+            quando houver empate. Novas lojas podem ser criadas com Google ou
+            e-mail e senha, sem código de ativação do administrador. Os códigos
+            de recuperação continuam protegendo o acesso à conta.
           </GuideStep>
           <GuideStep number="Dica" title="Lista de preços para WhatsApp">
             Em Estoque, toque em WhatsApp para gerar a lista de todos os
@@ -1674,7 +1663,9 @@ function navigationButtonClass(view: View, selected: boolean, mobile = false) {
   if (view === 'sell')
     return `${base} ${mobile ? 'min-h-20 px-4 text-lg' : 'mb-2 min-h-14 px-4 text-base'} border-primary bg-primary font-extrabold text-primary-foreground shadow-md shadow-primary/15 hover:bg-primary/90 ${selected ? 'ring-2 ring-primary/25 ring-offset-2 ring-offset-background' : ''}`;
   if (view === 'entry')
-    return `${base} ${mobile ? 'min-h-16 px-3.5 text-[0.9375rem]' : 'mb-3 min-h-12 px-4 text-sm'} border-primary/20 bg-secondary font-bold text-primary hover:border-primary/40 hover:bg-accent ${selected ? 'border-primary/50 ring-1 ring-inset ring-primary/20' : ''}`;
+    return `${base} ${mobile ? 'min-h-16 px-3.5 text-[0.9375rem]' : 'mb-1 min-h-12 px-4 text-sm'} border-primary/20 bg-secondary font-bold text-primary hover:border-primary/40 hover:bg-accent ${selected ? 'border-primary/50 ring-1 ring-inset ring-primary/20' : ''}`;
+  if (view === 'ranking')
+    return `${base} ${mobile ? 'min-h-12 px-3.5 text-sm' : 'mb-3 min-h-11 px-4 text-sm'} border-ranking-border bg-ranking-soft font-semibold text-ranking-foreground hover:bg-ranking-hover ${selected ? 'ring-1 ring-inset ring-ranking-foreground/35' : ''}`;
   return `${base} ${mobile ? 'min-h-12 px-3.5 text-sm' : 'min-h-11 px-4 text-sm'} font-semibold ${selected ? 'border-border bg-muted text-foreground' : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'}`;
 }
 
@@ -1755,14 +1746,14 @@ function MobileNavigation({
                   type="button"
                 >
                   <span
-                    className={`grid shrink-0 place-items-center rounded-xl ${view === 'sell' ? 'size-11 bg-white/15' : view === 'entry' ? 'size-10 bg-background text-primary' : 'size-8 bg-muted text-muted-foreground'}`}
+                    className={`grid shrink-0 place-items-center rounded-xl ${view === 'sell' ? 'size-11 bg-white/15' : view === 'entry' ? 'size-10 bg-background text-primary' : view === 'ranking' ? 'size-8 bg-ranking-hover text-ranking-foreground' : 'size-8 bg-muted text-muted-foreground'}`}
                   >
                     <Icon className="size-5" />
                   </span>
                   <span className="min-w-0 flex-1 truncate">{label}</span>
                   {selected && (
                     <span
-                      className={`rounded-full px-2 py-1 text-xs ${view === 'sell' ? 'bg-white/15' : 'bg-background text-muted-foreground'}`}
+                      className={`rounded-full px-2 py-1 text-xs ${view === 'sell' ? 'bg-white/15' : view === 'ranking' ? 'bg-ranking-hover text-ranking-foreground' : 'bg-background text-muted-foreground'}`}
                     >
                       Atual
                     </span>
