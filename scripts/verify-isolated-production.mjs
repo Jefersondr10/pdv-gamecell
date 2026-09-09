@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 const directory = await mkdtemp(join(tmpdir(), 'pdv-isolated-validation-'));
 const database = new DatabaseSync(join(directory, 'pdv.sqlite'));
 for (const file of (await readdir('drizzle'))
@@ -36,6 +37,8 @@ const env = {
   PRODUCTION_MAINTENANCE: '',
   PASSWORD_SIGNUP_TOKEN_V1: '',
   PRIMARY_STORE_SETUP_TOKEN_V1: randomBytes(24).toString('hex'),
+  GOOGLE_CLIENT_ID: 'isolated-test.apps.googleusercontent.com',
+  GOOGLE_CLIENT_SECRET: 'isolated-test-not-a-real-secret',
   VINEXT_TRUST_PROXY: '1',
   VINEXT_TRUSTED_HOSTS: '127.0.0.1',
 };
@@ -73,6 +76,35 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   if (!ready) throw new Error(`Isolated server not ready: ${serverLog}`);
+  // Exercise the real signed-cookie return flow without visiting/calling Google.
+  const reportPath =
+    '/?report=sales&storeId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa&level=complete&period=day&day=2026-09-08';
+  for (const [requested, expected] of [
+    [reportPath, reportPath],
+    ['https://outside.invalid/', '/'],
+  ]) {
+    const login = await fetch(
+      `${origin}/api/auth/google?returnTo=${encodeURIComponent(requested)}`,
+      { redirect: 'manual' },
+    );
+    assert.equal(login.status, 302);
+    assert.equal(
+      new URL(login.headers.get('location')).origin,
+      'https://accounts.google.com',
+    );
+    const oauthCookie = login.headers.get('set-cookie').split(';')[0];
+    const cancelled = await fetch(
+      `${origin}/api/auth/google/callback?error=access_denied`,
+      { redirect: 'manual', headers: { cookie: oauthCookie } },
+    );
+    const destination = new URL(cancelled.headers.get('location'));
+    destination.searchParams.delete('auth_error');
+    assert.equal(destination.origin, origin);
+    assert.equal(destination.pathname + destination.search, expected);
+  }
+  console.log(
+    'PASS: report login return retained; external redirects rejected; no Google network request made.',
+  );
   const integration = spawn(
     process.execPath,
     [

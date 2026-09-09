@@ -12,6 +12,8 @@ import {
   Camera,
   CircleAlert,
   Download,
+  Link2,
+  RefreshCw,
   FileCheck2,
   FileText,
   ImagePlus,
@@ -33,8 +35,12 @@ import {
 
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
+import { saleFinancialSummary } from '@/lib/sale-financial-summary';
+import { replaceGuardedUrl } from '@/lib/app-back';
+import { salesReportPath, type SalesReportLink } from '@/lib/sales-report-link';
 import {
   SYSTEM_SALE_STATUSES,
+  isAutomaticStatusName,
   saleDisplayStatus,
   saleIssues,
 } from '@/lib/sale-display-status';
@@ -191,26 +197,36 @@ export function SalesProductionView({
   onChanged,
   openSaleId = null,
   onOpenSaleHandled,
+  initialReport = null,
 }: {
   data: BootstrapData;
   onChanged: () => Promise<void>;
   openSaleId?: string | null;
   onOpenSaleHandled?: () => void;
+  initialReport?: SalesReportLink | null;
 }) {
-  const [queryDraft, setQueryDraft] = useState('');
-  const [query, setQuery] = useState('');
+  const [queryDraft, setQueryDraft] = useState(initialReport?.query ?? '');
+  const [query, setQuery] = useState(initialReport?.query ?? '');
   const [period, setPeriod] = useState<PeriodFilter>(() =>
-    openSaleId ? 'all' : 'today',
+    openSaleId ? 'all' : (initialReport?.period ?? 'today'),
   );
-  const [selectedDay, setSelectedDay] = useState(() => dateKey(Date.now()));
-  const [selectedMonth, setSelectedMonth] = useState(() =>
-    dateKey(Date.now()).slice(0, 7),
+  const [selectedDay, setSelectedDay] = useState(
+    () => initialReport?.day || dateKey(Date.now()),
+  );
+  const [selectedMonth, setSelectedMonth] = useState(
+    () => initialReport?.month || dateKey(Date.now()).slice(0, 7),
   );
   const [grouping, setGrouping] = useState<Grouping>('sale');
-  const [alertOnly, setAlertOnly] = useState(false);
-  const [issueFilter, setIssueFilter] = useState<IssueFilter>('all');
-  const [orderStatusFilter, setOrderStatusFilter] = useState('all');
-  const [sellerFilter, setSellerFilter] = useState('all');
+  const [alertOnly, setAlertOnly] = useState(initialReport?.alertOnly ?? false);
+  const [issueFilter, setIssueFilter] = useState<IssueFilter>(
+    initialReport?.issue ?? 'all',
+  );
+  const [orderStatusFilter, setOrderStatusFilter] = useState(
+    initialReport?.orderStatus ?? 'all',
+  );
+  const [sellerFilter, setSellerFilter] = useState(
+    initialReport?.seller ?? 'all',
+  );
   const [sellerOptions, setSellerOptions] = useState<
     Array<{ id: string; name: string }>
   >([]);
@@ -229,7 +245,18 @@ export function SalesProductionView({
   }, [data.store.id]);
   const [sellerRanking, setSellerRanking] = useState<SellerRanking>('items');
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
-  const [periodReportOpen, setPeriodReportOpen] = useState(false);
+  const [periodReportOpen, setPeriodReportOpen] = useState(
+    Boolean(initialReport),
+  );
+  const [returnToPeriodReport, setReturnToPeriodReport] = useState(false);
+  const changePeriodReportOpen = (open: boolean) => {
+    setPeriodReportOpen(open);
+    if (
+      !open &&
+      new URLSearchParams(window.location.search).get('report') === 'sales'
+    )
+      replaceGuardedUrl(window, window.location.pathname);
+  };
   const [selectedGroup, setSelectedGroup] = useState<SelectedGroup | null>(
     null,
   );
@@ -530,7 +557,7 @@ export function SalesProductionView({
       const status = data.orderStatuses.find(
         (candidate) => candidate.id === orderStatusFilter,
       );
-      if (status) pieces.push(`Status: ${status.name}`);
+      if (status) pieces.push(`Acompanhamento manual: ${status.name}`);
     }
     return pieces.join(' · ');
   }, [
@@ -784,7 +811,7 @@ export function SalesProductionView({
                       detail: status.active
                         ? 'Status cadastrado pela loja'
                         : 'Status inativo',
-                      label: `Acompanhamento: ${status.name}${status.active ? '' : ' (inativo)'}`,
+                      label: `${isAutomaticStatusName(status.name) ? 'Manual antigo' : 'Acompanhamento'}: ${status.name}${status.active ? '' : ' (inativo)'}`,
                       value: status.id,
                     })),
                   ]}
@@ -998,13 +1025,15 @@ export function SalesProductionView({
         </CardContent>
       </Card>
       <SaleDetailsDialog
-        sale={
-          detailSale
-            ? (page.items.find((sale) => sale.id === detailSale.id) ??
-              detailSale)
-            : null
-        }
-        onClose={() => setDetailSale(null)}
+        sale={detailSale}
+        onClose={(reason) => {
+          setDetailSale(null);
+          if (returnToPeriodReport && reason !== 'action') {
+            setReturnToPeriodReport(false);
+            setPeriodReportOpen(true);
+          }
+        }}
+        closeLabel={returnToPeriodReport ? 'Voltar ao relatório' : 'Fechar'}
         onReport={setReportSale}
         onEdit={setEditSale}
         onCancel={setCancelSale}
@@ -1013,7 +1042,13 @@ export function SalesProductionView({
       />
       <SaleReport
         onOpenChange={(open) => {
-          if (!open) setReportSale(null);
+          if (!open) {
+            setReportSale(null);
+            if (returnToPeriodReport) {
+              setReturnToPeriodReport(false);
+              setPeriodReportOpen(true);
+            }
+          }
         }}
         sale={reportSale}
         storeName={data.store.name}
@@ -1021,10 +1056,17 @@ export function SalesProductionView({
       <SalesPeriodReport
         filterParams={filterParams}
         filterSummary={reportFilterSummary}
-        onOpenChange={setPeriodReportOpen}
+        onOpenChange={changePeriodReportOpen}
         open={periodReportOpen}
         period={period}
         storeName={data.store.name}
+        storeId={data.store.id}
+        initialLevel={initialReport?.level}
+        onOpenSale={(sale) => {
+          setPeriodReportOpen(false);
+          setReturnToPeriodReport(true);
+          setDetailSale(sale);
+        }}
       />
       <EditSaleDialog
         data={data}
@@ -1094,7 +1136,13 @@ export function SalesProductionView({
           void onChanged();
         }}
         onOpenChange={(open) => {
-          if (!open) setEditSale(null);
+          if (!open) {
+            setEditSale(null);
+            if (returnToPeriodReport) {
+              setReturnToPeriodReport(false);
+              setPeriodReportOpen(true);
+            }
+          }
         }}
         sale={editSale}
       />
@@ -1108,7 +1156,13 @@ export function SalesProductionView({
           await reloadActive();
         }}
         onOpenChange={(open) => {
-          if (!open) setCancelSale(null);
+          if (!open) {
+            setCancelSale(null);
+            if (returnToPeriodReport) {
+              setReturnToPeriodReport(false);
+              setPeriodReportOpen(true);
+            }
+          }
         }}
         sale={cancelSale}
       />
@@ -1132,83 +1186,90 @@ function SaleList({
 }) {
   return (
     <div className="grid gap-1.5 bg-muted/20 p-1.5 sm:gap-2 sm:p-2">
-      {sales.map((sale) => (
-        <button
-          key={sale.id}
-          type="button"
-          aria-label={`Abrir detalhes da venda ${sale.number}, ${sale.customerName}`}
-          onClick={() => onDetails(sale)}
-          className={cn(
-            'w-full rounded-xl border bg-card px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-            sale.status === 'cancelled' && 'bg-muted/40 text-muted-foreground',
-          )}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-base font-bold">
-                {sale.customerName}
-              </p>
-              <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                {sale.items.length}{' '}
-                {sale.items.length === 1 ? 'aparelho' : 'aparelhos'} ·{' '}
-                {sale.items[0]?.productName ?? 'Produto'}
-                {sale.items.length > 1 ? ` +${sale.items.length - 1}` : ''}
-              </p>
+      {sales.map((sale) => {
+        const financial = saleFinancialSummary(sale);
+        return (
+          <button
+            key={sale.id}
+            type="button"
+            aria-label={`Abrir detalhes da venda ${sale.number}, ${sale.customerName}`}
+            onClick={() => onDetails(sale)}
+            className={cn(
+              'w-full rounded-xl border bg-card px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+              sale.status === 'cancelled' &&
+                'bg-muted/40 text-muted-foreground',
+            )}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-base font-bold">
+                  {sale.customerName}
+                </p>
+                <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                  {sale.items.length}{' '}
+                  {sale.items.length === 1 ? 'aparelho' : 'aparelhos'} ·{' '}
+                  {sale.items[0]?.productName ?? 'Produto'}
+                  {sale.items.length > 1 ? ` +${sale.items.length - 1}` : ''}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p
+                  className={cn(
+                    'text-base font-extrabold tabular-nums',
+                    financial.reconciled && 'text-success',
+                  )}
+                >
+                  {formatMoney(sale.productsTotalCents)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {financial.paymentLabel}
+                </p>
+              </div>
             </div>
-            <div className="shrink-0 text-right">
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+              <p className="text-xs text-muted-foreground">
+                #{String(sale.number).padStart(5, '0')} ·{' '}
+                {formatDateTime(sale.createdAt)} · {sale.sellerName}
+              </p>
+              <span className="flex items-center gap-1.5">
+                <SaleStatusBadge sale={sale} />
+                {saleIssues(sale).length > 1 && (
+                  <span
+                    className="text-xs text-muted-foreground"
+                    title={saleIssues(sale)
+                      .slice(1)
+                      .map((issue) => issue.label)
+                      .join(' · ')}
+                  >
+                    +{saleIssues(sale).length - 1}
+                  </span>
+                )}
+              </span>
+            </div>
+            {!financial.reconciled && financial.receiptText && (
               <p
                 className={cn(
-                  'text-base font-extrabold tabular-nums',
-                  sale.status === 'completed' &&
-                    sale.receivedDifferenceCents === 0 &&
-                    sale.productsTotalCents > 0 &&
-                    'text-success',
+                  'mt-1 text-sm tabular-nums',
+                  financial.receiptWarning
+                    ? 'font-semibold text-amber-800 dark:text-amber-200'
+                    : 'text-muted-foreground',
                 )}
               >
-                {formatMoney(sale.productsTotalCents)}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {sale.status === 'cancelled'
-                  ? 'Venda cancelada'
-                  : sale.productsTotalCents <= 0
-                    ? 'Valor não definido'
-                    : sale.receivedDifferenceCents === 0
-                      ? 'Venda / pago'
-                      : `Pago ${formatMoney(sale.receivedTotalCents)}`}
-              </p>
-            </div>
-          </div>
-          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-            <p className="text-xs text-muted-foreground">
-              #{String(sale.number).padStart(5, '0')} ·{' '}
-              {formatDateTime(sale.createdAt)} · {sale.sellerName}
-            </p>
-            <span className="flex items-center gap-1.5">
-              <SaleStatusBadge sale={sale} />
-              {saleIssues(sale).length > 1 && (
-                <span
-                  className="text-xs text-muted-foreground"
-                  title={saleIssues(sale)
-                    .slice(1)
-                    .map((issue) => issue.label)
-                    .join(' · ')}
-                >
-                  +{saleIssues(sale).length - 1}
-                </span>
-              )}
-            </span>
-          </div>
-          {sale.status === 'completed' &&
-            (sale.receivedDifferenceCents !== 0 || !sale.receipts.length) && (
-              <p className="mt-1 truncate text-xs font-semibold text-amber-800 dark:text-amber-200">
-                {paymentDifferenceText(sale) ?? 'Sem comprovante'}
-                {sale.receivedDifferenceCents !== 0 && !sale.receipts.length
-                  ? ' · sem comprovante'
-                  : ''}
+                {financial.receiptText}
               </p>
             )}
-        </button>
-      ))}
+            {sale.status === 'completed' &&
+              (sale.receivedDifferenceCents !== 0 || !sale.receipts.length) && (
+                <p className="mt-1 truncate text-xs font-semibold text-amber-800 dark:text-amber-200">
+                  {paymentDifferenceText(sale) ?? 'Sem comprovante'}
+                  {sale.receivedDifferenceCents !== 0 && !sale.receipts.length
+                    ? ' · sem comprovante'
+                    : ''}
+                </p>
+              )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1709,6 +1770,9 @@ function EditSaleDialog({
                     </NativeSelectOption>
                     {availableStatuses.map((status) => (
                       <NativeSelectOption key={status.id} value={status.id}>
+                        {isAutomaticStatusName(status.name)
+                          ? 'Manual antigo · '
+                          : ''}
                         {status.name}
                         {status.active ? '' : ' (inativo)'}
                       </NativeSelectOption>
@@ -2294,6 +2358,7 @@ function EditSaleDialog({
                 )}
                 <ReceiptPaymentSync
                   saleId={sale.id}
+                  productsTotalCents={sale.productsTotalCents}
                   csrfToken={data.csrfToken}
                   canUse={canPayments && canReceipts}
                   disabled={
@@ -2925,19 +2990,18 @@ function SaleReport({
                       'report-section mt-3 rounded-lg border px-3 py-2 text-sm font-semibold',
                       getPaymentComparison(sale) === 'under' &&
                         'border-rose-200 bg-rose-50 text-rose-950',
-                      getPaymentComparison(sale) === 'equal' &&
+                      saleFinancialSummary(sale).reconciled &&
                         'border-emerald-200 bg-emerald-50 text-emerald-950',
+                      getPaymentComparison(sale) === 'equal' &&
+                        !saleFinancialSummary(sale).reconciled &&
+                        'border-amber-200 bg-amber-50 text-amber-950',
                       getPaymentComparison(sale) === 'over' &&
                         'border-violet-200 bg-violet-50 text-violet-950',
                       getPaymentComparison(sale) === 'unset' &&
                         'border-slate-200 bg-slate-50 text-slate-800',
                     )}
                   >
-                    <PaymentComparisonLabel
-                      className="justify-start"
-                      comparison={getPaymentComparison(sale)}
-                      surface="report"
-                    />
+                    <SaleStatusBadge sale={sale} />
                     <p className="mt-1">
                       Valor da venda: {formatMoney(sale.productsTotalCents)}
                       {' · '}Total pago: {formatMoney(sale.receivedTotalCents)}
@@ -2952,7 +3016,7 @@ function SaleReport({
                 <div
                   className={cn(
                     'report-section mt-3 rounded-lg border px-3 py-2 text-sm',
-                    sale.reconciliation.status === 'reconciled' &&
+                    saleFinancialSummary(sale).reconciled &&
                       'border-emerald-200 bg-emerald-50 text-emerald-950',
                     sale.reconciliation.status === 'pending' &&
                       'border-amber-200 bg-amber-50 text-amber-950',
@@ -3237,6 +3301,9 @@ function SalesPeriodReport({
   filterSummary,
   period,
   onOpenChange,
+  storeId,
+  initialLevel = 'simple',
+  onOpenSale,
 }: {
   open: boolean;
   storeName: string;
@@ -3244,8 +3311,14 @@ function SalesPeriodReport({
   filterSummary: string;
   period: PeriodFilter;
   onOpenChange: (open: boolean) => void;
+  storeId: string;
+  initialLevel?: ReportLevel;
+  onOpenSale: (sale: SaleRecord) => void;
 }) {
-  const [level, setLevel] = useState<ReportLevel>('simple');
+  const [level, setLevel] = useState<ReportLevel>(initialLevel);
+  const [link, setLink] = useState('');
+  const [linkNotice, setLinkNotice] = useState('');
+  const [linkSignature, setLinkSignature] = useState('');
   const [sales, setSales] = useState<SaleRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -3254,6 +3327,12 @@ function SalesPeriodReport({
   const [pdfError, setPdfError] = useState('');
   const [generatedAt, setGeneratedAt] = useState(() => Date.now());
   const reportRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => setLoadRevision((value) => value + 1);
+    window.addEventListener('pdv:sales-changed', refresh);
+    return () => window.removeEventListener('pdv:sales-changed', refresh);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -3341,7 +3420,7 @@ function SalesPeriodReport({
         >
           <DialogTitle>Relatório de vendas</DialogTitle>
           <DialogDescription>
-            PDF com resumo por dia, vendas separadas e anexos identificados.
+            Conferência online ou PDF, com vendas e anexos identificados.
           </DialogDescription>
         </DialogHeader>
         <div
@@ -3551,9 +3630,11 @@ function SalesPeriodReport({
                                 sale.status === 'completed' &&
                                   sale.receivedDifferenceCents > 0 &&
                                   'border-violet-300 bg-violet-50/30',
-                                sale.status === 'completed' &&
-                                  sale.receivedDifferenceCents === 0 &&
+                                saleFinancialSummary(sale).reconciled &&
                                   'border-emerald-300 bg-emerald-50/30',
+                                sale.status === 'completed' &&
+                                  !saleFinancialSummary(sale).reconciled &&
+                                  'border-amber-300 bg-amber-50/30',
                               )}
                               key={sale.id}
                             >
@@ -3566,7 +3647,9 @@ function SalesPeriodReport({
                                       ? 'bg-rose-100/80'
                                       : sale.receivedDifferenceCents > 0
                                         ? 'bg-violet-100/80'
-                                        : 'bg-emerald-100/80',
+                                        : saleFinancialSummary(sale).reconciled
+                                          ? 'bg-emerald-100/80'
+                                          : 'bg-amber-50',
                                 )}
                               >
                                 <div className="min-w-0">
@@ -3579,6 +3662,31 @@ function SalesPeriodReport({
                                     {formatDateTime(sale.createdAt)} ·{' '}
                                     {sale.sellerName}
                                   </p>
+                                  <div className="mt-2">
+                                    <SaleStatusBadge sale={sale} />
+                                  </div>
+                                  {saleFinancialSummary(sale).receiptText && (
+                                    <p
+                                      className={cn(
+                                        'mt-1 text-xs font-semibold',
+                                        saleFinancialSummary(sale)
+                                          .receiptWarning
+                                          ? 'text-amber-900'
+                                          : 'text-slate-600',
+                                      )}
+                                    >
+                                      {saleFinancialSummary(sale).receiptText}
+                                    </p>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="mt-2"
+                                    onClick={() => onOpenSale(sale)}
+                                    data-report-controls
+                                  >
+                                    Abrir venda
+                                  </Button>
                                 </div>
 
                                 {sale.status === 'cancelled' ? (
@@ -3808,9 +3916,54 @@ function SalesPeriodReport({
           )}
         </div>
         <DialogFooter
-          className="m-0 shrink-0 rounded-none border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]"
+          className="m-0 shrink-0 rounded-none border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:flex-wrap"
           data-report-controls
         >
+          {link && linkSignature === `${level}:${filterParams}` && (
+            <div className="w-full min-w-0 text-left sm:basis-full">
+              <Input
+                aria-label="Link do relatório"
+                readOnly
+                value={link}
+                onFocus={(event) => event.target.select()}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {linkNotice} Somente usuários autorizados da loja. Mostra dados
+                atualizados; períodos relativos acompanham a data de abertura.
+              </p>
+            </div>
+          )}
+          <Button
+            variant="outline"
+            disabled={loading || pdfBusy}
+            onClick={() => setLoadRevision((value) => value + 1)}
+          >
+            <RefreshCw /> Atualizar
+          </Button>
+          <Button
+            variant="outline"
+            disabled={loading || Boolean(loadError) || pdfBusy}
+            onClick={async () => {
+              try {
+                const url = new URL(
+                  salesReportPath(storeId, level, filterParams),
+                  window.location.origin,
+                ).toString();
+                setLink(url);
+                setLinkSignature(`${level}:${filterParams}`);
+                try {
+                  await navigator.clipboard.writeText(url);
+                  setLinkNotice('Link copiado.');
+                } catch {
+                  setLinkNotice('Selecione o campo acima para copiar.');
+                }
+              } catch (error) {
+                setPdfError(messageOf(error));
+              }
+            }}
+          >
+            <Link2 /> Copiar link
+          </Button>
           {pdfError && (
             <p className="mr-auto text-left text-sm font-semibold text-destructive">
               {pdfError}

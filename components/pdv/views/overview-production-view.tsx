@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { SystemSaleStatusBadge } from '@/components/pdv/sale-status-badge';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -50,19 +51,35 @@ const date = (value: number) =>
 const number = (value: number) => `#${String(value).padStart(5, '0')}`;
 function SaleComparison({ sale }: { sale: OverviewSale }) {
   const state = overviewSaleComparison(sale);
-  const divergent = state === 'below' || state === 'above';
+  const divergent = [
+    'below',
+    'above',
+    'sale_difference',
+    'missing_price',
+  ].includes(state);
+  const paymentDifference = sale.receiptCents - sale.receivedCents;
+  const saleDifference = sale.receiptCents - sale.saleCents;
+  const reconciled = sale.automaticStatus === 'reconciled';
   return (
     <div
       className={cn(
         'rounded-xl border p-3',
         divergent
           ? 'border-amber-300 border-l-4 bg-amber-50'
-          : state === 'matched'
+          : reconciled
             ? 'border-emerald-200 bg-emerald-50/70'
             : 'bg-slate-50/60',
       )}
     >
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div>
+          <p className="text-sm font-semibold text-muted-foreground">
+            Valor da venda
+          </p>
+          <p className="mt-0.5 break-words text-base font-bold tabular-nums">
+            {money(sale.saleCents)}
+          </p>
+        </div>
         <div>
           <p className="text-[11px] font-semibold text-muted-foreground">
             Pagamento informado
@@ -99,18 +116,38 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
         )}
         {divergent ? (
           <>
-            <span>Conferir diferença:</span>
-            <strong className="text-sm tabular-nums">
-              {money(Math.abs(sale.receiptCents - sale.receivedCents))}{' '}
-              {state === 'below' ? 'abaixo' : 'acima'}
-            </strong>
+            {state === 'missing_price' ? (
+              <span>Verificar preços dos produtos da venda.</span>
+            ) : (
+              <span className="grid gap-1">
+                {saleDifference !== 0 && (
+                  <span>
+                    Comprovantes{' '}
+                    <strong>
+                      {money(Math.abs(saleDifference))}{' '}
+                      {saleDifference < 0 ? 'abaixo' : 'acima'} da venda.
+                    </strong>
+                  </span>
+                )}
+                {paymentDifference !== 0 && (
+                  <span>
+                    Comprovantes{' '}
+                    <strong>
+                      {money(Math.abs(paymentDifference))}{' '}
+                      {paymentDifference < 0 ? 'abaixo' : 'acima'} do pagamento
+                      informado.
+                    </strong>
+                  </span>
+                )}
+              </span>
+            )}
           </>
         ) : state === 'matched' ? (
-          'Valores conferem'
+          'Venda, pagamento e comprovantes com valores iguais'
         ) : state === 'missing' ? (
           'Sem comprovante anexado'
         ) : (
-          `Conferência pendente · ${sale.pendingCount} arquivo(s) sem valor`
+          `Verificar comprovante · ${sale.pendingCount} arquivo(s) sem valor válido ou em leitura`
         )}
       </p>
     </div>
@@ -119,6 +156,8 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
 
 type Receipt = OverviewSale['receipts'][number];
 function receiptState(receipt: Receipt) {
+  if (receipt.receiptAmountCents !== null && receipt.receiptAmountCents <= 0)
+    return 'Valor inválido · conferir na venda';
   if (receipt.receiptAmountCents !== null)
     return receipt.receiptAmountSource === 'manual'
       ? 'Valor informado manualmente'
@@ -419,11 +458,17 @@ export function OverviewProductionView({
                         </strong>
                       </span>
                     )}
+                    {totals.saleDifferenceCount > 0 && (
+                      <span>
+                        {totals.saleDifferenceCount} venda(s) com diferença em
+                        relação ao valor da venda ou preço não definido
+                      </span>
+                    )}
                   </div>
                 )}
                 <p className="mt-1 text-xs">
                   {comparison === 'matched'
-                    ? 'Comprovantes conferidos com os pagamentos informados, venda por venda.'
+                    ? 'Venda, pagamento informado e comprovantes têm valores iguais em cada pedido. O status do pedido também considera as fotos dos aparelhos.'
                     : comparison === 'pending'
                       ? 'Há documentos ausentes ou ainda sem valor identificado.'
                       : 'Confira as vendas sinalizadas abaixo. Diferenças entre vendas não se compensam.'}
@@ -501,6 +546,7 @@ export function OverviewProductionView({
                       <ArrowRight className="size-3.5" />
                     </Button>
                   </div>
+                  <SystemSaleStatusBadge statusKey={sale.automaticStatus} />
                   <SaleComparison sale={sale} />
                   {sale.cashCents > 0 && (
                     <p className="text-xs text-muted-foreground">

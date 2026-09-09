@@ -1,6 +1,12 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { replaceGuardedUrl } from '@/lib/app-back';
+import {
+  parseSalesReportLink,
+  currentReportReturnTo,
+  reportGoogleLoginPath,
+} from '@/lib/sales-report-link';
 import { can, canAny, type PermissionSubject } from '@/lib/permissions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -364,7 +370,17 @@ function CloudPdv({
 }: {
   session: Extract<SessionResponse, { authenticated: true }>;
 }) {
-  const [activeView, setActiveView] = useState<View>('sell');
+  const [activeView, setActiveView] = useState<View>(() =>
+    typeof window !== 'undefined' &&
+    parseSalesReportLink(window.location.search)
+      ? 'sales'
+      : 'sell',
+  );
+  const [linkedReport, setLinkedReport] = useState(() =>
+    typeof window === 'undefined'
+      ? null
+      : parseSalesReportLink(window.location.search),
+  );
   const [run, setRun] = useState(0);
   const [data, setData] = useState<BootstrapData | null>(null);
   const [loadingError, setLoadingError] = useState('');
@@ -542,6 +558,10 @@ function CloudPdv({
   const changeView = (view: View) => {
     if (data && !canView(data.user, view)) return;
     if (view === activeView) return;
+    if (linkedReport) {
+      setLinkedReport(null);
+      replaceGuardedUrl(window, window.location.pathname);
+    }
     previousViews.current = [...previousViews.current.slice(-19), activeView];
     if (view !== 'sales') setSaleToOpen(null);
     setActiveView(view);
@@ -735,6 +755,19 @@ function CloudPdv({
       csrfToken={data?.csrfToken ?? ''}
     >
       <main className="h-dvh overflow-hidden bg-background text-foreground">
+        {data &&
+          linkedReport &&
+          (data.store.id !== linkedReport.storeId ||
+            !can(data.user, 'sales')) && (
+            <div
+              role="alert"
+              className="fixed inset-x-3 bottom-3 z-50 rounded-xl border bg-background p-4 text-sm shadow-lg lg:left-72"
+            >
+              Este relatório pertence a uma loja ou função que não está
+              disponível neste acesso. Entre com um usuário autorizado da loja
+              correta. Nenhum dado do relatório foi carregado.
+            </div>
+          )}
         <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar px-5 py-6 lg:flex lg:flex-col">
           <Brand storeName={data.store.name} />
           <DesktopNavigation
@@ -914,6 +947,9 @@ function CloudPdv({
                 onChanged={() => reload(true)}
                 onOpenSaleHandled={() => setSaleToOpen(null)}
                 openSaleId={saleToOpen}
+                initialReport={
+                  linkedReport?.storeId === data.store.id ? linkedReport : null
+                }
               />
             )}
             {displayedView === 'catalog' && (
@@ -1094,7 +1130,7 @@ function AuthScreen() {
         setBusy(false);
         return;
       }
-      window.location.replace('/');
+      window.location.replace(currentReportReturnTo());
     } catch (submissionError) {
       setError(messageOf(submissionError));
       setBusy(false);
@@ -1107,7 +1143,7 @@ function AuthScreen() {
         <RecoveryCodesPanel
           codes={recoveryCodes}
           continueLabel="Concluir"
-          onContinue={() => window.location.replace('/')}
+          onContinue={() => window.location.replace(currentReportReturnTo())}
         />
       </main>
     );
@@ -1364,7 +1400,7 @@ function LoginForms({
           </div>
           <Button
             className="h-12 w-full rounded-xl"
-            onClick={() => window.location.assign('/api/auth/google')}
+            onClick={() => window.location.assign(reportGoogleLoginPath())}
             type="button"
             variant="outline"
           >
@@ -1464,7 +1500,7 @@ function RegisterForm({
       </div>
       <Button
         className="h-12 rounded-xl sm:col-span-2"
-        onClick={() => window.location.assign('/api/auth/google')}
+        onClick={() => window.location.assign(reportGoogleLoginPath())}
         type="button"
         variant="outline"
       >

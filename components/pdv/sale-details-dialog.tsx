@@ -13,6 +13,7 @@ import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import type { SaleRecord } from '@/lib/pdv-types';
 import { saleIssues } from '@/lib/sale-display-status';
+import { saleFinancialSummary } from '@/lib/sale-financial-summary';
 
 const money = (cents: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
@@ -33,15 +34,18 @@ export function SaleDetailsDialog({
   onCancel,
   canEdit,
   canCancel,
+  closeLabel = 'Fechar',
 }: {
   sale: SaleRecord | null;
-  onClose: () => void;
+  onClose: (reason?: 'action') => void;
   onReport: (sale: SaleRecord) => void;
   onEdit: (sale: SaleRecord) => void;
   onCancel: (sale: SaleRecord) => void;
   canEdit: boolean;
   canCancel: boolean;
+  closeLabel?: string;
 }) {
+  const financial = sale ? saleFinancialSummary(sale) : null;
   return (
     <Dialog
       open={Boolean(sale)}
@@ -101,6 +105,17 @@ export function SaleDetailsDialog({
                     </div>
                   )}
               </dl>
+              {financial?.receiptText && (
+                <p
+                  className={`rounded-xl border p-3 text-sm tabular-nums ${
+                    financial.receiptWarning
+                      ? 'border-amber-300/60 bg-amber-50/50 font-semibold text-amber-800 dark:bg-amber-950/20 dark:text-amber-200'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  {financial.receiptText}
+                </p>
+              )}
               {sale.status === 'cancelled' ? (
                 <p className="rounded-xl bg-muted p-3 text-sm">
                   Cancelada{' '}
@@ -121,11 +136,16 @@ export function SaleDetailsDialog({
                 <h3 className="mb-2 font-bold">
                   Produtos · {sale.items.length} aparelho(s)
                 </h3>
-                <div className="divide-y rounded-xl border">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-2">
                   {sale.items.map((item) => (
-                    <div key={item.id} className="space-y-1 p-3">
-                      <div className="flex justify-between gap-3">
-                        <strong>{item.productName}</strong>
+                    <div
+                      key={item.id}
+                      className="min-w-0 space-y-1 rounded-xl border p-3"
+                    >
+                      <div className="flex flex-wrap justify-between gap-x-2 gap-y-1">
+                        <strong className="min-w-0 break-words">
+                          {item.productName}
+                        </strong>
                         <span className="shrink-0 text-sm font-bold">
                           {money(item.soldPriceCents)}
                         </span>
@@ -133,7 +153,7 @@ export function SaleDetailsDialog({
                       <p className="text-sm text-muted-foreground">
                         {item.productDetail}
                       </p>
-                      <p className="text-sm">
+                      <p className="text-sm break-all">
                         SN <code className="font-semibold">{item.serial}</code>
                       </p>
                       {item.photos.length > 0 && (
@@ -221,7 +241,7 @@ export function SaleDetailsDialog({
                   {sale.reconciliation.pendingReceiptCount > 0
                     ? 'Há valores pendentes de leitura ou conferência.'
                     : sale.reconciliation.status === 'divergent'
-                      ? `Diferença em relação à venda: ${money(sale.reconciliation.differenceCents ?? 0)}.`
+                      ? `Comprovantes ${money(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} da venda.`
                       : ''}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
@@ -237,7 +257,7 @@ export function SaleDetailsDialog({
                   variant="ghost"
                   className="mr-auto text-destructive"
                   onClick={() => {
-                    onClose();
+                    onClose('action');
                     onCancel(sale);
                   }}
                 >
@@ -248,7 +268,7 @@ export function SaleDetailsDialog({
               <Button
                 variant="outline"
                 onClick={() => {
-                  onClose();
+                  onClose('action');
                   onReport(sale);
                 }}
               >
@@ -258,7 +278,7 @@ export function SaleDetailsDialog({
               {canEdit && sale.status === 'completed' && (
                 <Button
                   onClick={() => {
-                    onClose();
+                    onClose('action');
                     onEdit(sale);
                   }}
                 >
@@ -266,8 +286,8 @@ export function SaleDetailsDialog({
                   Editar
                 </Button>
               )}
-              <Button variant="outline" onClick={onClose}>
-                Fechar
+              <Button variant="outline" onClick={() => onClose()}>
+                {closeLabel}
               </Button>
             </div>
           </>

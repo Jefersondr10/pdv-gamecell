@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge';
 import type { OrderStatusColor } from '@/lib/pdv-types';
+import { isAutomaticStatusName } from '@/lib/sale-display-status';
 
 export const ORDER_STATUS_COLOR_OPTIONS: Array<{
   value: OrderStatusColor;
@@ -57,7 +58,11 @@ export function OrderStatusBadge({
       variant="outline"
     >
       <OrderStatusDot color={status.color} />
-      <span className="truncate">{status.name}</span>
+      <span className="truncate">
+        {isAutomaticStatusName(status.name)
+          ? `Manual antigo · ${status.name}`
+          : status.name}
+      </span>
     </Badge>
   );
 }

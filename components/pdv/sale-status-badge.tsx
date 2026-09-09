@@ -1,9 +1,23 @@
 import type { SaleRecord } from '@/lib/pdv-types';
-import { saleDisplayStatus } from '@/lib/sale-display-status';
+import {
+  saleDisplayStatus,
+  SYSTEM_SALE_STATUSES,
+  type SystemSaleStatusKey,
+} from '@/lib/sale-display-status';
 import { cn } from '@/lib/utils';
 
 export function SaleStatusBadge({ sale }: { sale: SaleRecord }) {
   const status = saleDisplayStatus(sale);
+  return <SystemSaleStatusBadge statusKey={status.key} />;
+}
+
+export function SystemSaleStatusBadge({
+  statusKey,
+}: {
+  statusKey: SystemSaleStatusKey;
+}) {
+  const status = SYSTEM_SALE_STATUSES.find((item) => item.key === statusKey);
+  if (!status) return null;
   return (
     <span
       className={cn(

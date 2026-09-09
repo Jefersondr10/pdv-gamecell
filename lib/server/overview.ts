@@ -1,6 +1,7 @@
 import { HttpError } from './http.ts';
 import { parseSalesFilters } from './sales-filters.ts';
 import { overviewFilters, type OverviewFilter } from '../overview.ts';
+import { SALE_AUTO_STATUS_SQL, SALE_ISSUE_SQL } from './sale-status-sql.ts';
 import type {
   OverviewPage,
   OverviewSale,
@@ -23,10 +24,12 @@ export async function readOverview(
     );
   const comparisonWhere: Record<OverviewFilter, string> = {
     all: '1 = 1',
+    review:
+      'receiptCount = 0 OR pendingCount > 0 OR saleInvalid = 1 OR receiptCents != receivedCents OR receiptCents != saleCents',
     matched:
-      'receiptCount > 0 AND pendingCount = 0 AND receiptCents = receivedCents',
+      'receiptCount > 0 AND pendingCount = 0 AND saleInvalid = 0 AND receiptCents = receivedCents AND receiptCents = saleCents',
     divergent:
-      'receiptCount > 0 AND pendingCount = 0 AND receiptCents != receivedCents',
+      'receiptCount > 0 AND pendingCount = 0 AND (saleInvalid = 1 OR receiptCents != receivedCents OR receiptCents != saleCents)',
     pending: 'receiptCount > 0 AND pendingCount > 0',
     missing: 'receiptCount = 0',
   };
@@ -68,7 +71,7 @@ export async function readOverview(
   ), receipts AS (
     SELECT a.sale_id, COUNT(*) AS receiptCount,
       COALESCE(SUM(a.receipt_amount_cents), 0) AS receiptCents,
-      SUM(CASE WHEN a.receipt_amount_cents IS NULL THEN 1 ELSE 0 END) AS pendingCount
+      SUM(CASE WHEN a.receipt_amount_cents IS NULL OR a.receipt_amount_cents <= 0 THEN 1 ELSE 0 END) AS pendingCount
     FROM attachments a JOIN filtered s ON s.id = a.sale_id AND s.store_id = a.store_id
     WHERE a.kind = 'receipt' GROUP BY a.sale_id
   ), cash AS (
@@ -77,7 +80,8 @@ export async function readOverview(
     WHERE p.method = 'cash' GROUP BY p.sale_id
   ), compared AS (
     SELECT s.id, s.number, s.customer_name AS customerName, s.created_at AS createdAt,
-      s.received_total_cents AS receivedCents, s.store_id AS storeId,
+      s.received_total_cents AS receivedCents, s.products_total_cents AS saleCents,
+      ${SALE_AUTO_STATUS_SQL} AS automaticStatus, CASE WHEN ${SALE_ISSUE_SQL.missing_price} THEN 1 ELSE 0 END AS saleInvalid, s.store_id AS storeId,
       COALESCE(c.cashCents, 0) AS cashCents, COALESCE(r.receiptCount, 0) AS receiptCount,
       COALESCE(r.receiptCents, 0) AS receiptCents, COALESCE(r.pendingCount, 0) AS pendingCount
     FROM filtered s LEFT JOIN receipts r ON r.sale_id = s.id LEFT JOIN cash c ON c.sale_id = s.id
@@ -88,7 +92,8 @@ export async function readOverview(
       COALESCE(SUM(cashCents), 0) AS totalCash, COALESCE(SUM(receiptCents), 0) AS totalReceipts,
       COALESCE(SUM(receiptCount), 0) AS totalFiles, COALESCE(SUM(pendingCount), 0) AS totalPending,
       COALESCE(SUM(CASE WHEN receiptCount = 0 THEN 1 ELSE 0 END), 0) AS totalMissing,
-      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents != receivedCents THEN 1 ELSE 0 END), 0) AS totalDivergent,
+      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND (saleInvalid = 1 OR receiptCents != receivedCents OR receiptCents != saleCents) THEN 1 ELSE 0 END), 0) AS totalDivergent,
+      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND (saleInvalid = 1 OR receiptCents != saleCents) THEN 1 ELSE 0 END), 0) AS saleDifferenceCount,
       COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents < receivedCents THEN receivedCents - receiptCents ELSE 0 END), 0) AS totalShortfall,
       COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents > receivedCents THEN receiptCents - receivedCents ELSE 0 END), 0) AS totalSurplus
     FROM selected
@@ -119,6 +124,7 @@ export async function readOverview(
     totalDivergent: number;
     totalShortfall: number;
     totalSurplus: number;
+    saleDifferenceCount: number;
     pendingInPeriod: number;
     attachmentId: string | null;
     fileName: string;
@@ -142,6 +148,7 @@ export async function readOverview(
     divergentCount: Number(first?.totalDivergent ?? 0),
     shortfallCents: Number(first?.totalShortfall ?? 0),
     surplusCents: Number(first?.totalSurplus ?? 0),
+    saleDifferenceCount: Number(first?.saleDifferenceCount ?? 0),
   };
   const sales = new Map<string, OverviewSale>();
   for (const row of rows) {
@@ -153,6 +160,9 @@ export async function readOverview(
         customerName: row.customerName,
         createdAt: row.createdAt,
         receivedCents: row.receivedCents,
+        saleCents: row.saleCents,
+        saleInvalid: row.saleInvalid,
+        automaticStatus: row.automaticStatus,
         cashCents: row.cashCents,
         receiptCents: row.receiptCents,
         receiptCount: row.receiptCount,

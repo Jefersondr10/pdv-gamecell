@@ -368,12 +368,20 @@ await call(`/api/pix-accounts/${pixId}`, {
   body: JSON.stringify({ active: true }),
 });
 
+const automaticNameConflict = await call('/api/order-statuses', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 400,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'Conciliado', color: 'green' }),
+});
+assert.equal(automaticNameConflict.body.code, 'SYSTEM_STATUS_NAME');
 const pendingStatus = await call('/api/order-statuses', {
   method: 'POST',
   cookie: ownerCookie,
   expected: 201,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ name: 'Pagamento pendente', color: 'amber' }),
+  body: JSON.stringify({ name: 'Aguardando retirada', color: 'amber' }),
 });
 const pendingStatusId = String((pendingStatus.body.item as { id: string }).id);
 const duplicateStatus = await call('/api/order-statuses', {
@@ -381,14 +389,14 @@ const duplicateStatus = await call('/api/order-statuses', {
   cookie: ownerCookie,
   expected: 409,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ name: 'pagamento PENDENTE', color: 'red' }),
+  body: JSON.stringify({ name: 'aguardando RETIRADA', color: 'red' }),
 });
 assert.equal(duplicateStatus.body.code, 'ORDER_STATUS_EXISTS');
 await call(`/api/order-statuses/${pendingStatusId}`, {
   method: 'PATCH',
   cookie: ownerCookie,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ name: 'Pagamento pendente', color: 'orange' }),
+  body: JSON.stringify({ name: 'Aguardando retirada', color: 'orange' }),
 });
 const orderStatuses = await call('/api/order-statuses', {
   cookie: ownerCookie,
@@ -1207,7 +1215,7 @@ const editedSale = (
   }>
 )[0];
 assert.equal(editedSale.orderStatus?.id, pendingStatusId);
-assert.equal(editedSale.orderStatus?.name, 'Pagamento pendente');
+assert.equal(editedSale.orderStatus?.name, 'Aguardando retirada');
 assert.equal(editedSale.orderStatus?.color, 'orange');
 assert.equal(editedSale.receipts.length, 1);
 assert.equal(editedSale.receipts[0].receiptAmountCents, 900_000);
@@ -2012,8 +2020,8 @@ for (const amountCents of [500_000, 499_999]) {
   assert.equal(refreshedTotals.receiptCents, amountCents);
   assert.equal(refreshedTotals.receivedCents, amountCents);
   assert.equal(refreshedTotals.pendingCount, 0);
-  // Overview compares receipts with the entered payment, now updated from receipts.
-  assert.equal(refreshedTotals.divergentCount, 0);
+  // Document/payment agreement cannot conceal a difference against the sale.
+  assert.equal(refreshedTotals.divergentCount, amountCents === 500_000 ? 0 : 1);
   const reconciledFilter = await call(
     '/api/sales?group=sale&period=all&saleStatus=reconciled',
     { cookie: ownerCookie },

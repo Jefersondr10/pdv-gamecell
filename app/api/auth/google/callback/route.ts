@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { safeReportReturnTo } from '@/lib/sales-report-link';
 
 import {
   decodeOAuthCookie,
@@ -25,7 +26,10 @@ export async function GET(request: Request) {
   );
   const clearOAuth = oauthCookie(request, '', 0);
   const fail = (message: string) => {
-    const target = new URL('/', request.url);
+    const target = new URL(
+      safeReportReturnTo(transaction?.returnTo),
+      request.url,
+    );
     target.searchParams.set('auth_error', message);
     const headers = new Headers({ location: target.toString() });
     headers.append('set-cookie', clearOAuth);
@@ -217,7 +221,10 @@ export async function GET(request: Request) {
       ]);
     }
     const headers = new Headers({
-      location: new URL('/', request.url).toString(),
+      location: new URL(
+        safeReportReturnTo(transaction.returnTo),
+        request.url,
+      ).toString(),
     });
     headers.append('set-cookie', clearOAuth);
     headers.append('set-cookie', sessionCookie(request, loginSession.token));

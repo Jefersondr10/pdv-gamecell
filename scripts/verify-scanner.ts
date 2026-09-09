@@ -7,9 +7,60 @@ import {
   selectCentralCandidate,
   recentScanSamples,
   openScannerCamera,
+  ScanConsensus,
 } from '../lib/scanner.ts';
 import { displayCommercialCode } from '../lib/commercial-code.ts';
 import { normalizeCommercialCode } from '../lib/gtin.ts';
+
+const sn22 = normalizeCandidate('SFK77X4P22V', 'code_128', 'apple_serial')!;
+const sn33 = normalizeCandidate('FK77X4P33V', 'code_128', 'apple_serial')!;
+assert.equal(sn22.alternateValue, 'FK77X4P22V');
+assert.notEqual(sn22.key, sn33.key);
+const consensus = new ScanConsensus();
+assert.equal(consensus.observe(sn22, 0), null);
+assert.equal(consensus.observe(sn33, 100), null);
+assert.equal(
+  consensus.observe(sn22, 260),
+  null,
+  'Alternating readings do not agree',
+);
+consensus.reset();
+for (const at of [0, 100, 200]) assert.equal(consensus.observe(sn22, at), null);
+assert.equal(consensus.observe(sn22, 300), sn22);
+for (const at of [400, 530, 660, 790])
+  assert.equal(
+    consensus.observe(sn33, at),
+    null,
+    'Different code cannot bypass a locked box',
+  );
+for (let i = 0; i < 5; i++) consensus.observe(null, 800 + i * 100);
+assert.equal(
+  consensus.observe(sn33, 1350),
+  null,
+  'Five empty frames do not rearm',
+);
+for (let i = 0; i < 6; i++) consensus.observe(null, 1500 + i * 100);
+assert.equal(consensus.observe(sn33, 2200), null);
+assert.equal(consensus.observe(sn33, 2330), null);
+assert.equal(consensus.observe(sn33, 2460), sn33);
+consensus.reset();
+consensus.observe(sn22, 0);
+consensus.observe(sn22, 130);
+consensus.observe(null, 150);
+assert.equal(
+  consensus.observe(sn22, 260),
+  null,
+  'Empty frame clears consensus',
+);
+consensus.reset();
+consensus.observe(sn22, 0);
+consensus.observe(sn22, 130);
+consensus.interrupt();
+assert.equal(
+  consensus.observe(sn22, 260),
+  null,
+  'Decoder failure clears consensus',
+);
 
 assert.deepEqual(recentScanSamples([{ at: 100 }, { at: 900 }], 1500), [
   { at: 100 },

@@ -1,6 +1,7 @@
 import { oauthCookie, encodeOAuthCookie } from '@/lib/server/auth';
 import { requiredSecret } from '@/lib/server/runtime';
 import { randomToken, sha256 } from '@/lib/server/security';
+import { safeReportReturnTo } from '@/lib/sales-report-link';
 
 export async function GET(request: Request) {
   const state = randomToken(24);
@@ -11,6 +12,9 @@ export async function GET(request: Request) {
     request.url,
   ).toString();
   const transaction = await encodeOAuthCookie({
+    returnTo: safeReportReturnTo(
+      new URL(request.url).searchParams.get('returnTo'),
+    ),
     state,
     verifier,
     nonce,

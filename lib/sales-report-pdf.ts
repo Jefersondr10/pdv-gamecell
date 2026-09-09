@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { PDFFont, PDFPage } from 'pdf-lib';
 import type { AttachmentRecord, SaleRecord } from './pdv-types';
 import { saleDisplayStatus, saleIssues } from './sale-display-status.ts';
+import { saleFinancialSummary } from './sale-financial-summary.ts';
 
 export type SalesPdfOptions = {
   storeName: string;
@@ -274,8 +275,14 @@ function saleDetails(
             ? `Falta receber ${money(-diff)}`
             : diff > 0
               ? `Pagamento acima da venda em ${money(diff)}`
-              : 'Quitado';
+              : 'Pagamento informado igual ao valor da venda';
       layout.paragraph(label, { bold: true, size: 9 });
+      const financial = saleFinancialSummary(sale);
+      if (financial.receiptText)
+        layout.paragraph(financial.receiptText, {
+          size: 9,
+          bold: financial.receiptWarning,
+        });
     }
   }
   if (sale.status === 'cancelled') {

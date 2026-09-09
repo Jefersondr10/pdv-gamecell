@@ -27,12 +27,14 @@ type State = {
 
 export function ReceiptPaymentSync({
   saleId,
+  productsTotalCents,
   csrfToken,
   canUse,
   disabled,
   onPayments,
 }: {
   saleId: string;
+  productsTotalCents: number;
   csrfToken: string;
   canUse: boolean;
   disabled: boolean;
@@ -114,6 +116,7 @@ export function ReceiptPaymentSync({
   const targetId =
     target || (state.payments.length === 1 ? state.payments[0].id : '');
   const difference = state.receiptTotalCents - state.receivedTotalCents;
+  const differenceFromSale = state.receiptTotalCents - productsTotalCents;
   return (
     <div className="mt-3 rounded-xl border bg-muted/30 p-3 text-sm">
       <p className="font-semibold">
@@ -128,91 +131,103 @@ export function ReceiptPaymentSync({
           ? 'O total pago será atualizado quando todos os comprovantes tiverem valor. Se algum arquivo não for reconhecido, corrija sua leitura.'
           : state.status === 'applied'
             ? 'Uma nova alteração manual no pagamento prevalece até outro envio ou correção de comprovante.'
-            : 'Ao reenviar ou corrigir comprovantes, a soma poderá atualizar o total pago. Uma edição manual posterior será preservada.'}
+            : state.requestId === null && state.complete && difference !== 0
+              ? `Os comprovantes ainda não foram usados para atualizar este pagamento. ${canUse ? 'Use o botão abaixo para aplicar a soma já salva.' : 'Um usuário com permissão de pagamentos pode aplicar a soma já salva.'}`
+              : 'Ao reenviar ou corrigir comprovantes, a soma poderá atualizar o total pago. Uma edição manual posterior será preservada.'}
       </p>
       {state.complete && (
         <p className="mt-2">
           Comprovantes: <strong>{formatMoney(state.receiptTotalCents)}</strong>{' '}
-          · Total pago: <strong>{formatMoney(state.receivedTotalCents)}</strong>
+          · Pago informado:{' '}
+          <strong>{formatMoney(state.receivedTotalCents)}</strong>
         </p>
       )}
       {canUse &&
         state.complete &&
         difference !== 0 &&
         state.status !== 'pending' && (
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            {state.payments.length > 1 && (
-              <NativeSelect
-                aria-label="Pagamento a ajustar pelos comprovantes"
-                value={target}
-                disabled={disabled || busy}
-                onChange={(event) => setTarget(event.target.value)}
-                className="min-w-0 flex-1"
-              >
-                <NativeSelectOption value="">
-                  Escolha qual pagamento ajustar
-                </NativeSelectOption>
-                {state.payments.map((p, index) => (
-                  <NativeSelectOption key={p.id} value={p.id}>
-                    {index + 1}.{' '}
-                    {p.method === 'pix'
-                      ? `Pix · ${p.accountName ?? 'Conta cadastrada'}`
-                      : 'Dinheiro'}{' '}
-                    · {formatMoney(p.amountCents)}
+          <div className="mt-3 space-y-2">
+            <p className="text-sm">
+              Ao usar os comprovantes, o pagamento informado passará para{' '}
+              <strong>{formatMoney(state.receiptTotalCents)}</strong>
+              {productsTotalCents > 0 && differenceFromSale !== 0
+                ? ` e ficará ${formatMoney(Math.abs(differenceFromSale))} ${differenceFromSale < 0 ? 'abaixo' : 'acima'} da venda.`
+                : '.'}
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {state.payments.length > 1 && (
+                <NativeSelect
+                  aria-label="Pagamento a ajustar pelos comprovantes"
+                  value={target}
+                  disabled={disabled || busy}
+                  onChange={(event) => setTarget(event.target.value)}
+                  className="min-w-0 flex-1"
+                >
+                  <NativeSelectOption value="">
+                    Escolha qual pagamento ajustar
                   </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled || busy || !targetId}
-              onClick={async () => {
-                setBusy(true);
-                setError('');
-                const payload = {
-                  targetPaymentId: targetId,
-                  expectedPayments: state.expectedPayments,
-                  expectedReceipts: state.expectedReceipts,
-                  expectedRequestId: state.requestId,
-                };
-                const signature = JSON.stringify(payload);
-                if (operation.current?.signature !== signature)
-                  operation.current = { signature, id: crypto.randomUUID() };
-                try {
-                  const next = await requestJson<State>(
-                    `/api/sales/${saleId}/receipt-payment`,
-                    {
-                      method: 'POST',
-                      headers: {
-                        'content-type': 'application/json',
-                        'x-csrf-token': csrfToken,
+                  {state.payments.map((p, index) => (
+                    <NativeSelectOption key={p.id} value={p.id}>
+                      {index + 1}.{' '}
+                      {p.method === 'pix'
+                        ? `Pix · ${p.accountName ?? 'Conta cadastrada'}`
+                        : 'Dinheiro'}{' '}
+                      · {formatMoney(p.amountCents)}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled || busy || !targetId}
+                onClick={async () => {
+                  setBusy(true);
+                  setError('');
+                  const payload = {
+                    targetPaymentId: targetId,
+                    expectedPayments: state.expectedPayments,
+                    expectedReceipts: state.expectedReceipts,
+                    expectedRequestId: state.requestId,
+                  };
+                  const signature = JSON.stringify(payload);
+                  if (operation.current?.signature !== signature)
+                    operation.current = { signature, id: crypto.randomUUID() };
+                  try {
+                    const next = await requestJson<State>(
+                      `/api/sales/${saleId}/receipt-payment`,
+                      {
+                        method: 'POST',
+                        headers: {
+                          'content-type': 'application/json',
+                          'x-csrf-token': csrfToken,
+                        },
+                        body: JSON.stringify({
+                          ...payload,
+                          operationId: operation.current.id,
+                        }),
                       },
-                      body: JSON.stringify({
-                        ...payload,
-                        operationId: operation.current.id,
-                      }),
-                    },
-                  );
-                  setState(next);
-                  callback.current(next.payments, next.receivedTotalCents);
-                  window.dispatchEvent(new Event('pdv:sales-changed'));
-                  setRevision((value) => value + 1);
-                } catch (caught) {
-                  setError(
-                    caught instanceof Error
-                      ? caught.message
-                      : 'Não foi possível atualizar. Confira a venda.',
-                  );
-                  setRevision((value) => value + 1);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {busy ? 'Atualizando…' : 'Usar total dos comprovantes'}
-            </Button>
+                    );
+                    setState(next);
+                    callback.current(next.payments, next.receivedTotalCents);
+                    window.dispatchEvent(new Event('pdv:sales-changed'));
+                    setRevision((value) => value + 1);
+                  } catch (caught) {
+                    setError(
+                      caught instanceof Error
+                        ? caught.message
+                        : 'Não foi possível atualizar. Confira a venda.',
+                    );
+                    setRevision((value) => value + 1);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? 'Atualizando…' : 'Usar total dos comprovantes'}
+              </Button>
+            </div>
           </div>
         )}
       {state.status === 'review' && (

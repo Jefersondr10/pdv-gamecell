@@ -55,6 +55,13 @@ const enqueue = (id: string, target: string | null = null, override = {}) =>
   );
 const settle = () => settleReceiptPaymentSync(database, 'store', 'sale');
 seed();
+await processReceiptPaymentSync(database);
+assert.equal(
+  paid(),
+  3473000,
+  'Existing receipts require an explicit sync request',
+);
+assert.equal(get('SELECT COUNT(*) AS n FROM audit_events').n, 0);
 await enqueue('two-receipts');
 await settle();
 assert.equal(paid(), 3465000);

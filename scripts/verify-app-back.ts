@@ -4,6 +4,7 @@ import {
   entryBackStep,
   installBackGuard,
   saleBackStep,
+  replaceGuardedUrl,
 } from '../lib/app-back.ts';
 
 const handlers = createBackHandlers();
@@ -119,3 +120,53 @@ assert.equal(backs, 50);
 console.log(
   'Back passed: bounded history, remount, explicit exit, layer priority and wizard steps.',
 );
+
+// Closing a report must not resurrect its original query on Back/reload.
+let linkIndex = 0;
+const urls = [
+  {
+    url: 'https://test/?report=sales',
+    state: { router: 'preserved' } as Record<string, unknown>,
+  },
+];
+const linkListeners = new Set<() => void>();
+const linkHost = {
+  location: {
+    get href() {
+      return urls[linkIndex].url;
+    },
+  },
+  history: {
+    get state() {
+      return urls[linkIndex].state;
+    },
+    replaceState(state: Record<string, unknown>, _title: string, url: string) {
+      urls[linkIndex] = { url, state };
+    },
+    pushState(state: Record<string, unknown>, _title: string, url: string) {
+      urls.splice(linkIndex + 1);
+      urls.push({ url, state });
+      linkIndex++;
+    },
+    go(delta: number) {
+      linkIndex += delta;
+      linkListeners.forEach((handle) => handle());
+    },
+  },
+  addEventListener(_name: string, handle: () => void) {
+    linkListeners.add(handle);
+  },
+  removeEventListener(_name: string, handle: () => void) {
+    linkListeners.delete(handle);
+  },
+};
+const linkedGuard = installBackGuard(linkHost as unknown as Window, () => {});
+replaceGuardedUrl(linkHost as unknown as Window, '/');
+linkHost.history.go(-1);
+assert.equal(linkHost.location.href, 'https://test/');
+assert.equal(linkHost.history.state.router, 'preserved');
+assert.equal(urls.length, 2);
+assert.throws(() =>
+  replaceGuardedUrl(linkHost as unknown as Window, 'https://outside.test/'),
+);
+linkedGuard.dispose();

@@ -66,6 +66,41 @@ type PreparedDetector = {
 
 type TimedSample = ScanCandidate & { at: number };
 
+// One physical presentation can emit only one accepted code. Different readings
+// of the same box must not rearm the scanner or form an interleaved consensus.
+export class ScanConsensus {
+  private samples: TimedSample[] = [];
+  private locked = false;
+  private emptyFrames = 0;
+  reset() {
+    this.samples = [];
+    this.locked = false;
+    this.emptyFrames = 0;
+  }
+  interrupt() {
+    this.samples = [];
+  }
+  observe(candidate: ScanCandidate | null, at: number): ScanCandidate | null {
+    if (!candidate) {
+      this.samples = [];
+      if (this.locked && ++this.emptyFrames >= EMPTY_FRAMES_TO_REARM)
+        this.reset();
+      return null;
+    }
+    this.emptyFrames = 0;
+    if (this.locked) return null;
+    const recent = recentScanSamples(this.samples, at);
+    this.samples =
+      recent.at(-1)?.key === candidate.key
+        ? [...recent, { ...candidate, at }].slice(-6)
+        : [{ ...candidate, at }];
+    if (this.samples.length < 3 || at - this.samples[0].at < 250) return null;
+    this.locked = true;
+    this.samples = [];
+    return candidate;
+  }
+}
+
 export function recentScanSamples<T extends { at: number }>(
   samples: T[],
   now: number,
@@ -136,9 +171,7 @@ export class ScannerService {
   private animationFrame: number | null = null;
   private lastAttemptAt = 0;
   private detectionInFlight = false;
-  private samples: TimedSample[] = [];
-  private lockedKey: string | null = null;
-  private emptyFrames = 0;
+  private consensus = new ScanConsensus();
   private active = false;
   private callbacks: ScannerCallbacks | null = null;
   private mode: ScannerMode = 'apple_serial';
@@ -259,9 +292,7 @@ export class ScannerService {
     );
     this.stopTracks();
     if (this.video) this.video.srcObject = null;
-    this.samples = [];
-    this.lockedKey = null;
-    this.emptyFrames = 0;
+    this.consensus.reset();
     this.lastAttemptAt = 0;
     this.detector = null;
     this.detectionInFlight = false;
@@ -383,26 +414,11 @@ export class ScannerService {
         this.handleEmptyFrame();
         return;
       }
-      this.emptyFrames = 0;
-      if (this.lockedKey === candidate.key) return;
-
-      const at = performance.now();
-      this.samples = [
-        ...this.samples.filter((sample) => at - sample.at <= SAMPLE_WINDOW_MS),
-        { ...candidate, at },
-      ].slice(-3);
-
-      const confirmations = this.samples.filter(
-        (sample) => sample.key === candidate.key,
-      );
-      const requiredConfirmations = 2;
-      if (confirmations.length >= requiredConfirmations) {
-        this.lockedKey = candidate.key;
-        this.samples = [];
-        this.callbacks?.onAccepted(candidate);
-      }
+      const accepted = this.consensus.observe(candidate, performance.now());
+      if (accepted) this.callbacks?.onAccepted(accepted);
     } catch (error) {
       if (!this.isCurrent(generation) || detector !== this.detector) return;
+      this.consensus.interrupt();
       if (this.usingNativeDetector && !this.nativeFallbackAttempted) {
         this.nativeFallbackAttempted = true;
         this.callbacks?.onStateChange?.('loading-decoder');
@@ -431,13 +447,7 @@ export class ScannerService {
   }
 
   private handleEmptyFrame() {
-    this.samples = recentScanSamples(this.samples, performance.now());
-    if (!this.lockedKey) return;
-    this.emptyFrames += 1;
-    if (this.emptyFrames >= EMPTY_FRAMES_TO_REARM) {
-      this.lockedKey = null;
-      this.emptyFrames = 0;
-    }
+    this.consensus.observe(null, performance.now());
   }
 }
 

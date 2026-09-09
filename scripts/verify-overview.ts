@@ -5,11 +5,12 @@ import { overviewComparison, overviewSaleComparison } from '../lib/overview.ts';
 
 const db = new SqliteDatabase(':memory:');
 db.database.exec(`
-  CREATE TABLE sales (id TEXT PRIMARY KEY, store_id TEXT, number INTEGER, customer_name TEXT, created_at INTEGER, status TEXT, received_total_cents INTEGER);
+  CREATE TABLE sales (id TEXT PRIMARY KEY, store_id TEXT, number INTEGER, customer_name TEXT, created_at INTEGER, status TEXT, received_total_cents INTEGER, products_total_cents INTEGER);
   CREATE TABLE attachments (id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT, kind TEXT, file_name TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_at INTEGER, created_at INTEGER);
   CREATE TABLE payments (id TEXT, store_id TEXT, sale_id TEXT, method TEXT, amount_cents INTEGER);
   CREATE TABLE receipt_ocr_jobs (attachment_id TEXT PRIMARY KEY, status TEXT);
-  CREATE TABLE sale_items (id TEXT, sale_id TEXT);
+  CREATE TABLE sale_items (id TEXT, sale_id TEXT, store_id TEXT, sold_price_cents INTEGER);
+  ALTER TABLE attachments ADD COLUMN sale_item_id TEXT;
 `);
 const midnight = Date.parse('2026-09-05T00:00:00-03:00');
 const sale = (
@@ -18,10 +19,14 @@ const sale = (
   store = 'a',
   time = midnight,
   status = 'completed',
-) =>
+) => {
   db.database
-    .prepare('INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, store, 1, `Cliente ${id}`, time, status, paid);
+    .prepare('INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, store, 1, `Cliente ${id}`, time, status, paid, paid);
+  db.database
+    .prepare('INSERT INTO sale_items VALUES (?, ?, ?, ?)')
+    .run(`${id}-item`, id, store, paid);
+};
 const receipt = (
   id: string,
   saleId: string,
@@ -31,7 +36,9 @@ const receipt = (
   kind = 'receipt',
 ) =>
   db.database
-    .prepare('INSERT INTO attachments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .prepare(
+      'INSERT INTO attachments (id,store_id,sale_id,kind,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at,created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    )
     .run(
       id,
       store,
@@ -68,7 +75,7 @@ try {
   receipt('r1', 'one', 6000);
   receipt('r2', 'one', 4000, 'a', 'manual');
   db.database.exec(
-    "INSERT INTO receipt_ocr_jobs VALUES ('r2', 'cancelled'); INSERT INTO sale_items VALUES ('i1', 'one'), ('i2', 'one');",
+    "INSERT INTO receipt_ocr_jobs VALUES ('r2', 'cancelled'); INSERT INTO sale_items VALUES ('i1', 'one', 'a', 6000), ('i2', 'one', 'a', 4000);",
   );
   receipt('photo', 'one', 999999, 'a', 'ocr', 'item_photo');
   // Defensively tenant-filter attachments and payments even for bad foreign rows.
@@ -86,6 +93,7 @@ try {
     divergentCount: 0,
     shortfallCents: 0,
     surplusCents: 0,
+    saleDifferenceCount: 0,
   });
   assert.equal(overviewComparison(page.totals), 'matched');
   assert.equal(page.items[0].receipts.length, 2);
@@ -105,6 +113,7 @@ try {
   assert.equal(page.totals.surplusCents, 100);
   assert.equal((await read('offset', 'comparison=matched')).items.length, 0);
   assert.equal((await read('offset', 'comparison=divergent')).items.length, 2);
+  assert.equal((await read('offset', 'comparison=review')).items.length, 2);
   sale('offset-pending', 1000, 'offset');
   receipt('offset-pending-r', 'offset-pending', null, 'offset');
   assert.equal(overviewComparison((await read('offset')).totals), 'review');
@@ -172,6 +181,77 @@ try {
     'above',
     'below',
   ]);
+  // Receipt synchronization must not hide the remaining gap to the sale price.
+  sale('lumora', 3465000, 'lumora');
+  receipt('lumora1', 'lumora', 1500000, 'lumora');
+  receipt('lumora2', 'lumora', 1965000, 'lumora');
+  db.database.exec(
+    "UPDATE sales SET products_total_cents=3473000 WHERE id='lumora'; UPDATE sale_items SET sold_price_cents=3473000 WHERE sale_id='lumora'",
+  );
+  const lumora = await read('lumora', 'comparison=review');
+  assert.equal(lumora.items.length, 1);
+  assert.equal(lumora.items[0].automaticStatus, 'review');
+  assert.equal(overviewSaleComparison(lumora.items[0]), 'sale_difference');
+  assert.equal(overviewComparison(lumora.totals), 'review');
+  assert.equal(
+    (await read('lumora', 'comparison=matched')).totals.saleCount,
+    0,
+  );
+  assert.equal(
+    (await read('lumora', 'comparison=divergent')).totals.saleCount,
+    1,
+  );
+  assert.equal(lumora.totals.saleDifferenceCount, 1);
+  for (const invalidAmount of [0, -1]) {
+    const fixture = `invalid-${invalidAmount}`;
+    sale(fixture, 100, fixture);
+    receipt(`${fixture}-r`, fixture, invalidAmount, fixture);
+    assert.equal(
+      (await read(fixture, 'comparison=pending')).totals.saleCount,
+      1,
+    );
+    assert.equal(
+      (await read(fixture, 'comparison=review')).totals.saleCount,
+      1,
+    );
+    assert.equal(
+      (await read(fixture, 'comparison=matched')).totals.saleCount,
+      0,
+    );
+  }
+  sale('no-price', 100, 'no-price');
+  receipt('no-price-r', 'no-price', 100, 'no-price');
+  db.database.exec(
+    "UPDATE sale_items SET sold_price_cents=0 WHERE sale_id='no-price'",
+  );
+  const noPrice = await read('no-price', 'comparison=divergent');
+  assert.equal(noPrice.items[0].automaticStatus, 'missing_price');
+  assert.equal(overviewSaleComparison(noPrice.items[0]), 'missing_price');
+  assert.equal(
+    (await read('no-price', 'comparison=matched')).totals.saleCount,
+    0,
+  );
+  sale('no-receipt', 100, 'no-receipt');
+  assert.equal(
+    (await read('no-receipt', 'comparison=review')).totals.saleCount,
+    1,
+  );
+  assert.equal(
+    (await read('no-receipt', 'comparison=missing')).totals.saleCount,
+    1,
+  );
+  sale('paid-gap', 80, 'paid-gap');
+  receipt('paid-gap-r', 'paid-gap', 100, 'paid-gap');
+  db.database.exec(
+    "UPDATE sales SET products_total_cents=100 WHERE id='paid-gap'; UPDATE sale_items SET sold_price_cents=100 WHERE sale_id='paid-gap'",
+  );
+  const paidGap = await read('paid-gap', 'comparison=review');
+  assert.equal(paidGap.items[0].automaticStatus, 'pending_payment');
+  assert.equal(paidGap.totals.saleCount, 1);
+  assert.equal(
+    (await read('paid-gap', 'comparison=matched')).totals.saleCount,
+    0,
+  );
   // The filter precedes pagination and totals; newer unmatched sales cannot hide matches.
   for (let i = 0; i < 45; i++) {
     sale(`f${i}`, 100, 'filtered', midnight + i);

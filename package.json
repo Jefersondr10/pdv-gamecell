@@ -37,6 +37,8 @@
     "test:rankings": "node --experimental-transform-types scripts/verify-rankings.ts",
     "test:overview": "node --experimental-transform-types scripts/verify-overview.ts",
     "test:app-back": "node --experimental-transform-types scripts/verify-app-back.ts",
+    "test:sales-report-link": "node --experimental-transform-types scripts/verify-sales-report-link.ts",
+    "test:sale-financial-summary": "node --experimental-transform-types scripts/verify-sale-financial-summary.ts",
     "test:stock-whatsapp": "node --experimental-strip-types scripts/verify-stock-whatsapp.ts",
     "test:receipt-amount": "node --experimental-strip-types scripts/verify-receipt-amount.ts",
     "test:receipt-reconciliation": "node --experimental-strip-types scripts/verify-receipt-reconciliation.ts"

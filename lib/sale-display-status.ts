@@ -13,6 +13,36 @@ export const SYSTEM_SALE_STATUSES = [
   { key: 'reconciled', label: 'Conciliado', tone: 'success' },
 ] as const;
 export type SystemSaleStatusKey = (typeof SYSTEM_SALE_STATUSES)[number]['key'];
+
+export const SYSTEM_SALE_STATUS_DESCRIPTIONS: Record<
+  SystemSaleStatusKey,
+  string
+> = {
+  cancelled:
+    'A venda foi cancelada e não entra nos totais de vendas concluídas.',
+  missing_price: 'Há produto sem preço de venda válido.',
+  missing_receipt: 'Nenhum comprovante foi anexado à venda.',
+  review: 'Há leitura inválida ou o total dos comprovantes difere da venda.',
+  reading: 'Há comprovante aguardando a conclusão da leitura.',
+  pending_payment: 'O pagamento informado está abaixo do valor da venda.',
+  overpaid: 'O pagamento informado está acima do valor da venda.',
+  missing_photo: 'Falta foto em pelo menos um aparelho vendido.',
+  reconciled:
+    'Preços preenchidos, fotos anexadas e venda, pagamento e comprovantes com valores iguais. Não confirma crédito bancário.',
+};
+
+export function isAutomaticStatusName(name: string) {
+  const normalize = (value: string) =>
+    value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  return SYSTEM_SALE_STATUSES.some(
+    (status) => normalize(status.label) === normalize(name),
+  );
+}
 type StatusSale = Pick<
   SaleRecord,
   'status' | 'reconciliation' | 'productsTotalCents' | 'receivedTotalCents'

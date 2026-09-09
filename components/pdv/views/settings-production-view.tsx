@@ -1,5 +1,9 @@
 'use client';
-import { SYSTEM_SALE_STATUSES } from '@/lib/sale-display-status';
+import {
+  SYSTEM_SALE_STATUSES,
+  SYSTEM_SALE_STATUS_DESCRIPTIONS,
+  isAutomaticStatusName,
+} from '@/lib/sale-display-status';
 
 import { createOperationId } from '@/lib/client-operation-id';
 
@@ -183,8 +187,8 @@ export function SettingsProductionView({
           <SettingsCard
             icon={ListChecks}
             title="Status do pedido"
-            detail={`${data.orderStatuses.length} de 30 cadastrados`}
-            description="Crie etapas como Pendente, Pagamento pendente e Faturado."
+            detail={`${SYSTEM_SALE_STATUSES.length} automáticos · ${data.orderStatuses.length} de 30 manuais`}
+            description="Confira os status obrigatórios e crie acompanhamentos como Aguardando retirada ou Entregue."
             disabled={!can(data.user, 'finance.manage')}
             onManage={() => setManager('order-statuses')}
           />
@@ -790,16 +794,32 @@ function OrderStatusesDialog({
           {error && <ErrorBox>{error}</ErrorBox>}
           <section className="mb-4 rounded-xl border p-3">
             <h3 className="text-sm font-bold">
-              Automáticos · não precisam de cadastro
+              Status automáticos · obrigatórios
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              {SYSTEM_SALE_STATUSES.map((status) => status.label).join(' · ')}
+              Sempre ativos. Não podem ser alterados manualmente nem
+              desativados. Se houver mais de uma pendência, a venda mostra a
+              prioritária e mantém as demais nos detalhes.
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Mudam conforme os dados salvos. Acompanhamentos manuais não
-              substituem a conferência.
-            </p>
+            <ul className="mt-3 divide-y">
+              {SYSTEM_SALE_STATUSES.map((status) => (
+                <li key={status.key} className="py-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">
+                      {status.label}
+                    </span>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium">
+                      Automático · obrigatório
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {SYSTEM_SALE_STATUS_DESCRIPTIONS[status.key]}
+                  </p>
+                </li>
+              ))}
+            </ul>
           </section>
+          <h3 className="mb-2 font-bold">Acompanhamentos manuais da loja</h3>
           <form
             className="grid gap-3 rounded-2xl border bg-muted/25 p-4 sm:grid-cols-[minmax(0,1fr)_11rem_auto] sm:items-end"
             onSubmit={async (event) => {
@@ -937,9 +957,11 @@ function OrderStatusesDialog({
                     <div className="min-w-0">
                       <OrderStatusBadge status={status} />
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {status.active
-                          ? 'Disponível para usar nas vendas.'
-                          : 'Inativo; permanece no histórico antigo.'}
+                        {isAutomaticStatusName(status.name)
+                          ? 'Cadastro manual antigo com nome de status automático. Renomeie ou desative para evitar confusão; isso não desativa a conferência do sistema.'
+                          : status.active
+                            ? 'Disponível para usar nas vendas.'
+                            : 'Inativo; permanece no histórico antigo.'}
                       </p>
                     </div>
                     <div className="flex items-center gap-1">

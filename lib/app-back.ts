@@ -25,13 +25,23 @@ type HistoryHost = Pick<
   Window,
   'history' | 'location' | 'addEventListener' | 'removeEventListener'
 >;
+const guardedUrls = new WeakMap<HistoryHost, { href: string }>();
+export function replaceGuardedUrl(host: HistoryHost, value: string) {
+  const target = new URL(value, host.location.href);
+  if (target.origin !== new URL(host.location.href).origin)
+    throw new Error('Invalid application URL');
+  host.history.replaceState(host.history.state, '', target.href);
+  const current = guardedUrls.get(host);
+  if (current) current.href = target.href;
+}
 export function installBackGuard(host: HistoryHost, onBack: () => void) {
+  const canonical = { href: host.location.href };
+  guardedUrls.set(host, canonical);
   const mark = (value: 'anchor' | 'guard') => ({
     ...host.history.state,
     [marker]: value,
   });
-  const arm = () =>
-    host.history.pushState(mark('guard'), '', host.location.href);
+  const arm = () => host.history.pushState(mark('guard'), '', canonical.href);
   // Reuse the sentinel across Strict Mode remounts and reloads.
   if (host.history.state?.[marker] !== 'guard') {
     host.history.replaceState(mark('anchor'), '', host.location.href);
@@ -43,7 +53,10 @@ export function installBackGuard(host: HistoryHost, onBack: () => void) {
     onBack();
   };
   host.addEventListener('popstate', listener);
-  const dispose = () => host.removeEventListener('popstate', listener);
+  const dispose = () => {
+    host.removeEventListener('popstate', listener);
+    if (guardedUrls.get(host) === canonical) guardedUrls.delete(host);
+  };
   let leaving = false;
   return {
     dispose,

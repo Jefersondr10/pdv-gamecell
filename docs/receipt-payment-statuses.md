@@ -24,3 +24,29 @@ Os acompanhamentos personalizados existentes são preservados e identificados se
 A migração aditiva `0014_receipt_payment_sync` deve ser aplicada no Hostinger antes de disponibilizar esta versão. Não altera pagamentos existentes. O procedimento `scripts/hostinger/deploy-receipts-prices.sh` executa a cadeia com cópia de segurança local e mantém os dados atuais em caso de retorno da aplicação anterior. O processamento financeiro roda no servidor independentemente de o navegador permanecer aberto.
 
 Validações: `test:receipt-payment-sync`, `test:sale-status`, `test:original-sale-payments`, `test:sale-prices`, `test:receipt-delete`, `test:receipt-migration`, `test:sales-filters`, `test:sales-pdf`, TypeScript/lint e integração completa em banco sintético (`scripts/verify-isolated-production.mjs`, após `build:vps`). Não usar lojas reais para testes.
+
+## Revisão de 09/09/2026
+
+- Os nove status automáticos aparecem individualmente em Configurações, sempre obrigatórios, sem edição ou desativação. Novos acompanhamentos manuais não podem usar os nomes reservados. Registros legados homônimos continuam preservados e sinalizados como manuais antigos.
+- Vendas, detalhes e relatórios só usam apresentação de conciliação completa quando a regra automática inteira é satisfeita. Pago informado e comprovantes são apresentados separadamente; igualdade manual não encobre divergência documental.
+- Comprovantes compara venda, pagamento informado e documentos. O filtro amplo **Verificar comprovante** inclui diferenças e ausência de valores/arquivos; **Sem valor válido / em leitura** é o subconjunto sem leitura válida. Diferenças entre pedidos não se compensam.
+- Caso de regressão: venda de R$34.730,00 e comprovantes de R$34.650,00 continuam em revisão tanto antes quanto depois de o pagamento informado ser ajustado para R$34.650,00. O aviso mostra R$80,00 abaixo da venda.
+- Não há atualização retroativa silenciosa de pagamentos. Comprovantes antigos, sem solicitação de sincronização, podem ser aplicados com **Usar total dos comprovantes**, com permissão, conferência de concorrência e auditoria.
+- O aviso de aplicação usa o preço atual do pedido imediatamente após editar preços, sem depender da próxima consulta periódica.
+- Os produtos nos detalhes usam cartões compactos em colunas conforme a largura disponível. Fotos continuam vinculadas ao SN e podem ser abertas.
+
+## Relatório por link
+
+Em Vendas → Relatório de vendas, **Copiar link** preserva loja, nível e filtros. Há campo de cópia manual se a área de transferência não estiver disponível. O relatório é uma visão dos dados atuais, não um retrato imutável. Hoje/ontem/últimos dias são relativos à data em que o link é aberto; use um dia ou mês específico para conferência de período fixo.
+
+O link não contém credenciais nem libera acesso público aos dados. Exige login na loja correspondente e permissão de Vendas. Login por senha ou Google preserva a rota interna validada; destinos externos são rejeitados. Trocar de loja não traz dados de outra loja sem autorização. Abrir venda, foto ou comprovante continua usando os endpoints autenticados existentes. Editar/fechar retorna ao relatório sem sobrepor diálogos; o botão Atualizar recarrega os dados.
+
+## Leitor de SN
+
+A leitura precisa de três observações consecutivas do mesmo candidato em pelo menos 250 ms. Candidatos alternados, falha de leitura ou quadro vazio interrompem a sequência. Após aceitar um código, outro só é aceito depois de seis quadros sem código. Os testes cobrem FK77X4P22V versus FK77X4P33V. Nenhum SN existente foi corrigido automaticamente. Ainda é necessária validação com a câmera física do iPhone; consenso reduz leituras transitórias, mas não prova que um decodificador nunca repetirá um resultado incorreto.
+
+## Segurança e limites desta revisão
+
+O alerta de dependências foi examinado separadamente. Os pacotes sinalizados incluem dependências das ferramentas Cloudflare/Miniflare, de desenvolvimento e geração de esquema. A exposição dos alertas altos no caminho efetivamente executado pelo servidor Linux não foi demonstrada, o que **não** equivale a ausência de vulnerabilidades. Não foi aplicado `npm audit fix --force`: a solução sugerida para parte da cadeia faz downgrade ou deixa outro pacote sinalizado. Atualizar essa cadeia com testes próprios permanece manutenção pendente; bibliotecas nativas do OCR exigem avaliação separada. A prévia de desenvolvimento permanece restrita a 127.0.0.1.
+
+Validações adicionais: `test:sale-financial-summary`, `test:sales-report-link`, consenso em `test:scanner`, retorno em `test:app-back`, paridade automática TS/SQL, filtros financeiros e login de retorno com cookie assinado em banco sintético. Não foram modificados pedidos, pagamentos ou códigos reais durante os testes.

@@ -284,6 +284,7 @@ export async function revokeUserSessions(userId: string) {
 }
 
 export type OAuthCookiePayload = {
+  returnTo?: string;
   state: string;
   verifier: string;
   nonce: string;

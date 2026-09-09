@@ -250,3 +250,42 @@ try {
 console.log(
   'PASS: vector sales PDFs, levels, cancellation totals, linked attachments, rotation, long sales, limits and download errors.',
 );
+
+// Payment equality alone must not be called Quitado while receipts differ.
+const discrepant = sale(10);
+discrepant.productsTotalCents = 3473000;
+discrepant.receivedTotalCents = 3473000;
+discrepant.items[0].soldPriceCents = 3473000;
+discrepant.items[0].photos = [asset('photo')];
+discrepant.payments[0].amountCents = 3473000;
+discrepant.receipts = [{ ...first.receipts[0], receiptAmountCents: 3465000 }];
+discrepant.reconciliation = {
+  status: 'divergent',
+  confirmedTotalCents: 3465000,
+  differenceCents: -8000,
+  pendingReceiptCount: 0,
+};
+const statusBytes = await buildSalesReportPdf(
+  { storeName: 'Loja de teste', sales: [discrepant], level: 'detailed' },
+  loader,
+);
+await writeFile(new URL('novo-status.pdf', out), statusBytes);
+const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+const textTask = getDocument({ data: statusBytes, useSystemFonts: true });
+const textPdf = await textTask.promise;
+let textContent = '';
+for (let pageNo = 1; pageNo <= textPdf.numPages; pageNo++) {
+  const page = await textPdf.getPage(pageNo);
+  const content = await page.getTextContent();
+  textContent += content.items
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ');
+}
+assert.match(textContent, /Verificar comprovante/);
+assert.match(textContent, /Pagamento informado igual ao valor da venda/);
+assert.match(textContent, /80,00 abaixo da venda/);
+assert.doesNotMatch(textContent, /Quitado/);
+await textTask.destroy();
+console.log(
+  'PASS: PDF shows automatic status and R$80 discrepancy, never false Quitado.',
+);

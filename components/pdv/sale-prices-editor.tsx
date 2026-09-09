@@ -213,14 +213,14 @@ export function SalePricesEditor({
               <p
                 className={cn(
                   'mt-1 font-semibold',
-                  difference === 0 ? 'text-success' : 'text-amber-800',
+                  difference === 0 ? 'text-foreground' : 'text-amber-800',
                 )}
               >
                 {difference < 0
                   ? `Falta receber ${money(-difference)}`
                   : difference > 0
                     ? `Pago a mais: ${money(difference)}. Verifique a venda.`
-                    : 'Venda quitada'}
+                    : 'Pagamento informado igual ao novo valor da venda'}
               </p>
             )}
           </div>

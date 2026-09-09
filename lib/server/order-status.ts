@@ -1,11 +1,19 @@
 import { ORDER_STATUS_COLORS, type OrderStatusColor } from '@/lib/pdv-types';
 import { HttpError, stringField } from '@/lib/server/http';
+import { isAutomaticStatusName } from '../sale-display-status';
 
 export function orderStatusName(value: unknown) {
-  return stringField(value, 'Nome do status', { max: 60 }).replace(
+  const name = stringField(value, 'Nome do status', { max: 60 }).replace(
     /\s+/gu,
     ' ',
   );
+  if (isAutomaticStatusName(name))
+    throw new HttpError(
+      400,
+      'Este nome já pertence a um status automático obrigatório. Escolha um nome de acompanhamento, como Aguardando retirada.',
+      'SYSTEM_STATUS_NAME',
+    );
+  return name;
 }
 
 export function normalizeOrderStatusName(value: string) {
