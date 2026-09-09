@@ -346,6 +346,30 @@ export const sales = sqliteTable(
   ],
 );
 
+export const saleReceiptPaymentSync = sqliteTable(
+  'sale_receipt_payment_sync',
+  {
+    saleId: text('sale_id')
+      .primaryKey()
+      .references(() => sales.id, { onDelete: 'cascade' }),
+    storeId: text('store_id')
+      .notNull()
+      .references(() => stores.id, { onDelete: 'cascade' }),
+    requestId: text('request_id').notNull(),
+    requestedBy: text('requested_by')
+      .notNull()
+      .references(() => users.id),
+    targetPaymentId: text('target_payment_id'),
+    status: text('status', {
+      enum: ['pending', 'review', 'applied', 'manual'],
+    }).notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('idx_receipt_payment_pending').on(table.status, table.updatedAt),
+  ],
+);
+
 export const inventoryUnits = sqliteTable(
   'inventory_units',
   {

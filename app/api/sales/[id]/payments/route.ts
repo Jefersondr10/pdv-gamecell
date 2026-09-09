@@ -1,3 +1,4 @@
+import { stopReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
 import { assertCsrf, requireSession } from '@/lib/server/auth';
 import {
   apiError,
@@ -252,6 +253,7 @@ export async function POST(
             }),
             now,
           ),
+        stopReceiptPaymentSync(db, storeId, saleId, now),
         addedPaymentQuery(db, storeId, saleId, paymentId),
       ]);
       const saved = (batchResults.at(-1) as D1Result<AddedPayment> | undefined)
@@ -370,7 +372,7 @@ function addedPaymentQuery(
                    AND json_type(event.details_json, '$.pixAccountId') IS NOT NULL),
                 (SELECT original.value FROM audit_events event, json_each(event.details_json, '$.before') original
                  WHERE event.store_id = payment.store_id AND event.entity_id = payment.sale_id
-                   AND event.action = 'sale.payments_corrected'
+                   AND event.action IN ('sale.payments_corrected', 'sale.payment_from_receipts')
                    AND json_extract(original.value, '$.id') = payment.id
                  ORDER BY event.created_at, event.id LIMIT 1)
               ) AS originalPaymentJson,

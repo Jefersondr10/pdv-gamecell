@@ -12,6 +12,7 @@ import {
 import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import type { SaleRecord } from '@/lib/pdv-types';
+import { saleIssues } from '@/lib/sale-display-status';
 
 const money = (cents: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
@@ -64,6 +65,15 @@ export function SaleDetailsDialog({
                 <h2 className="text-lg font-bold">{sale.customerName}</h2>
                 <SaleStatusBadge sale={sale} />
               </div>
+              {saleIssues(sale).length > 1 && (
+                <p className="text-sm text-muted-foreground">
+                  Outras pendências:{' '}
+                  {saleIssues(sale)
+                    .slice(1)
+                    .map((issue) => issue.label)
+                    .join(' · ')}
+                </p>
+              )}
               <dl className="grid grid-cols-2 gap-3 rounded-xl bg-muted/50 p-3">
                 <div>
                   <dt className="text-sm text-muted-foreground">

@@ -17,6 +17,9 @@ COPY --from=builder --chown=node:node /app/drizzle/0011_user_function_permission
 COPY --from=builder --chown=node:node /app/drizzle/0012_client_name_identity.sql ./drizzle/0012_client_name_identity.sql
 COPY --from=builder --chown=node:node /app/drizzle/0013_manual_receipt_deletion.sql ./drizzle/0013_manual_receipt_deletion.sql
 COPY --from=builder --chown=node:node /app/lib/server/file-deletion.ts ./lib/server/file-deletion.ts
+COPY --from=builder --chown=node:node /app/lib/server/receipt-payment-sync.ts ./lib/server/receipt-payment-sync.ts
+COPY --from=builder --chown=node:node /app/lib/permissions.ts ./lib/permissions.ts
+COPY --from=builder --chown=node:node /app/drizzle/0014_receipt_payment_sync.sql ./drizzle/0014_receipt_payment_sync.sql
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

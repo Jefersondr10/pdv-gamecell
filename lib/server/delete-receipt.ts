@@ -1,3 +1,4 @@
+import { stopReceiptPaymentSync } from './receipt-payment-sync.ts';
 import { can, type PermissionSubject } from '../permissions.ts';
 import { HttpError } from './http.ts';
 import { cleanDeletedFile } from './file-deletion.ts';
@@ -101,6 +102,7 @@ export async function deleteSaleReceipt(
   const now = Date.now();
   try {
     await db.batch([
+      stopReceiptPaymentSync(db, storeId, saleId, now),
       // Snapshot is taken inside the same transaction as the deletion: a
       // concurrent manual/OCR correction cannot produce stale audit evidence.
       db

@@ -1,6 +1,12 @@
 import { assertCsrf, requireSession } from '@/lib/server/auth';
 import { queueSaleReceipts } from '@/lib/server/receipt-ocr-jobs';
 import {
+  requestReceiptPaymentSync,
+  settleReceiptPaymentSync,
+  stopReceiptPaymentSync,
+} from '@/lib/server/receipt-payment-sync';
+import { can } from '@/lib/permissions';
+import {
   assertFormDataKeys,
   boundedFormData,
   cleanupFiles,
@@ -138,6 +144,7 @@ export async function POST(
         key === 'operationId' ||
         key === 'receipts' ||
         key === 'receiptValues' ||
+        key === 'preservePayments' ||
         /^itemPhotos:[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(key),
     );
     const operationFields = form.getAll('operationId');
@@ -149,6 +156,22 @@ export async function POST(
       );
     }
     operationId = operationIdField(operationFields[0]);
+    if (
+      form.getAll('preservePayments').length > 1 ||
+      (form.has('preservePayments') && form.get('preservePayments') !== 'true')
+    )
+      throw new HttpError(
+        400,
+        'Preferência de pagamento inválida.',
+        'INVALID_FIELDS',
+      );
+    const preservePayments = form.get('preservePayments') === 'true';
+    if (preservePayments && !can(session, 'sales.payments'))
+      throw new HttpError(
+        403,
+        'Sem permissão para alterar pagamentos.',
+        'PERMISSION_DENIED',
+      );
     const receiptFiles = validateFiles(form.getAll('receipts'), {
       receipts: true,
       max: MAX_RECEIPTS,
@@ -208,6 +231,8 @@ export async function POST(
       receiptValues,
       itemFiles,
     );
+    if (preservePayments)
+      operationFingerprint = `manual:${operationFingerprint}`;
     const replay = await findAttachmentOperation(db, operationId);
     if (replay) {
       const response = assertSameAttachmentOperation(
@@ -369,6 +394,21 @@ export async function POST(
     const batchResults = await db.batch([
       ...attachmentStatements,
       queueSaleReceipts(db, session.storeId!, saleId, now),
+      ...(receiptUploads.length
+        ? preservePayments
+          ? [stopReceiptPaymentSync(db, session.storeId!, saleId, now)]
+          : requestReceiptPaymentSync(
+              db,
+              {
+                storeId: session.storeId!,
+                saleId,
+                actorId: session.id,
+                subject: session,
+              },
+              operationId,
+              now,
+            )
+        : []),
       db
         .prepare(
           `INSERT INTO audit_events
@@ -425,6 +465,12 @@ export async function POST(
       );
     }
     committed = true;
+    // The durable intent is already saved. A temporary settlement failure must
+    // not turn a successful upload into an apparent failed operation.
+    if (receiptUploads.length)
+      await settleReceiptPaymentSync(db, session.storeId!, saleId).catch(
+        () => {},
+      );
     return attachmentResponse(response, false);
   } catch (error) {
     if (uploaded.length && !committed) {

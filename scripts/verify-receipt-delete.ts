@@ -9,6 +9,7 @@ const db = new SqliteDatabase(':memory:');
 db.database.exec(`
 CREATE TABLE sales(id TEXT PRIMARY KEY, store_id TEXT, status TEXT, products_total_cents INTEGER);
 CREATE TABLE payments(id TEXT PRIMARY KEY, sale_id TEXT, amount_cents INTEGER);
+CREATE TABLE sale_receipt_payment_sync(sale_id TEXT PRIMARY KEY, store_id TEXT, request_id TEXT, status TEXT, updated_at INTEGER);
 CREATE TABLE attachments(id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT REFERENCES sales(id), kind TEXT,
   r2_key TEXT, file_name TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER,
   receipt_amount_source TEXT, receipt_amount_confirmed_by TEXT, receipt_amount_confirmed_at INTEGER);

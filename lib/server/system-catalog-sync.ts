@@ -1,5 +1,4 @@
 import { classifyCommercialCode, normalizeCommercialCode } from '@/lib/gtin';
-import { normalizeOrderStatusName } from '@/lib/server/order-status';
 import {
   SYSTEM_CATALOG_PRODUCTS,
   SYSTEM_CATALOG_VERSION,
@@ -179,27 +178,8 @@ export async function syncSystemCatalog(
     }
   }
 
-  const pendingStatusId = await deterministicId(
-    `order-status:${storeId}:pagamento-pendente`,
-  );
-  statements.push(
-    db
-      .prepare(
-        `INSERT INTO order_statuses
-         (id, store_id, name, name_normalized, color, active, created_by,
-          created_at, updated_at)
-         VALUES (?, ?, 'Pagamento pendente', ?, 'amber', 1, ?, ?, ?)
-         ON CONFLICT(store_id, name_normalized) DO NOTHING`,
-      )
-      .bind(
-        pendingStatusId,
-        storeId,
-        normalizeOrderStatusName('Pagamento pendente'),
-        actorUserId,
-        now,
-        now,
-      ),
-  );
+  // Automatic statuses are built in, not editable order_statuses rows.
+  // Keep every existing custom follow-up and its sale associations.
 
   for (const batch of chunk(statements, 40)) await db.batch(batch);
 

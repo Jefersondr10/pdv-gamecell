@@ -11,6 +11,7 @@ import {
 } from './http';
 import { consumeStoreWriteBudget } from './rate-limit';
 import { runtime } from './runtime';
+import { stopReceiptPaymentSync } from './receipt-payment-sync';
 
 type Payment = {
   id: string;
@@ -224,6 +225,7 @@ export async function editSalePayments(
               storeId,
             ),
         ),
+        stopReceiptPaymentSync(db, storeId, saleId, now),
         db
           .prepare(`UPDATE sales SET received_total_cents = (SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE sale_id = ? AND store_id = ?),
           received_difference_cents = (SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE sale_id = ? AND store_id = ?) - products_total_cents

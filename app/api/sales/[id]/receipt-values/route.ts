@@ -1,3 +1,9 @@
+import {
+  requestReceiptPaymentSync,
+  settleReceiptPaymentSync,
+  stopReceiptPaymentSync,
+} from '@/lib/server/receipt-payment-sync';
+import { can } from '@/lib/permissions';
 import { assertCsrf, requireSession } from '@/lib/server/auth';
 import {
   apiError,
@@ -58,6 +64,7 @@ export async function PATCH(
         (key) =>
           key !== 'operationId' &&
           key !== 'receipts' &&
+          key !== 'preservePayments' &&
           key !== 'onlyIfPending',
       )
     ) {
@@ -78,6 +85,22 @@ export async function PATCH(
       );
     }
     onlyIfPending = body.onlyIfPending === true;
+    if (
+      body.preservePayments !== undefined &&
+      typeof body.preservePayments !== 'boolean'
+    )
+      throw new HttpError(
+        400,
+        'Preferência de pagamento inválida.',
+        'INVALID_FIELDS',
+      );
+    const preservePayments = body.preservePayments === true;
+    if (preservePayments && !can(session, 'sales.payments'))
+      throw new HttpError(
+        403,
+        'Sem permissão para alterar pagamentos.',
+        'PERMISSION_DENIED',
+      );
     operationId = operationIdField(body.operationId);
     const receipts = parseReceiptUpdates(body.receipts);
     requestedCount = receipts.length;
@@ -89,6 +112,7 @@ export async function PATCH(
         ? { saleId, receipts: normalized, onlyIfPending: true }
         : { saleId, receipts: normalized },
     );
+    if (preservePayments) fingerprint = `manual:${fingerprint}`;
     const db = runtime().DB;
 
     const replay = await findOperation(db, operationId);
@@ -199,6 +223,18 @@ export async function PATCH(
     try {
       const results = await db.batch([
         ...updateStatements,
+        ...(receiptsToUpdate.length
+          ? !can(session, 'sales.payments') || preservePayments
+            ? [stopReceiptPaymentSync(db, storeId, saleId, now)]
+            : !onlyIfPending
+              ? requestReceiptPaymentSync(
+                  db,
+                  { storeId, saleId, actorId: session.id, subject: session },
+                  operationId,
+                  now,
+                )
+              : []
+          : []),
         ...receiptsToUpdate.map((receipt) =>
           db
             .prepare(
@@ -250,6 +286,7 @@ export async function PATCH(
       if (Number(auditResult?.meta?.changes ?? 0) !== 1) {
         throw saleChangedError();
       }
+      await settleReceiptPaymentSync(db, storeId, saleId).catch(() => {});
     } catch (error) {
       const saved = await findOperation(db, operationId);
       if (saved) {

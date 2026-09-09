@@ -2,6 +2,7 @@ import { assertCsrf, requireSession } from '@/lib/server/auth';
 import { originalPriceSnapshot } from '@/lib/sale-prices';
 import { can, resolvePermissions } from '@/lib/permissions';
 import { assertPermission } from '@/lib/server/permissions';
+import { originalSalePayments } from '@/lib/server/original-sale-payments';
 import {
   assertFormDataKeys,
   boundedFormData,
@@ -85,6 +86,7 @@ type SaleListRow = Omit<
 type SaleItemListRow = Omit<SaleItemRecord, 'photos'> & { saleId: string };
 type SalePaymentListRow = SalePaymentRecord & { saleId: string };
 type SaleAttachmentListRow = Omit<AttachmentRecord, 'url'> & {
+  receiptOcrStatus: string | null;
   kind: 'item_photo' | 'receipt';
   receiptAmountCents: number | null;
   receiptAmountSource: 'ocr' | 'manual' | null;
@@ -1007,15 +1009,7 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
       )
       .bind(saleId, storeId)
       .all<SaleInputItem>(),
-    db
-      .prepare(
-        `SELECT method, pix_account_id AS pixAccountId,
-                amount_cents AS amountCents
-         FROM payments WHERE sale_id = ? AND store_id = ?
-         ORDER BY created_at, id`,
-      )
-      .bind(saleId, storeId)
-      .all<SaleInputPayment>(),
+    originalSalePayments(db, storeId, saleId),
     db
       .prepare(
         `SELECT id, kind, file_name AS name, mime_type AS mimeType,
@@ -1038,12 +1032,14 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
     details.productsTotalCents ??
     initialPrices?.totalCents ??
     Number(sale.productsTotalCents);
-  const currentReceivedTotalCents = Number(sale.receivedTotalCents);
   const originalDifference = details.receivedDifferenceCents;
   const originalReceivedTotalCents =
     details.receivedTotalCents ??
     (originalDifference === null
-      ? (initialPrices?.receivedTotalCents ?? currentReceivedTotalCents)
+      ? payments.results.reduce(
+          (sum, payment) => sum + Number(payment.amountCents),
+          0,
+        )
       : productsTotalCents + originalDifference);
   return {
     ...sale,
@@ -1143,9 +1139,17 @@ function assertSameSaleOperation(
     payments !== undefined &&
     canonicalSaleOperation(
       saved.originalCustomerId ?? '',
-      saved.items,
+      saved.items.map((item) => ({
+        ...item,
+        serial: serialAliasKey(item.serial),
+      })),
       saved.payments,
-    ) === canonicalSaleOperation(customerId, items, payments);
+    ) ===
+      canonicalSaleOperation(
+        customerId,
+        items.map((item) => ({ ...item, serial: serialAliasKey(item.serial) })),
+        payments,
+      );
   if (
     saved.originalSellerUserId !== sellerUserId ||
     (saved.operationFingerprint
@@ -1396,7 +1400,8 @@ async function hydrateSales(
                  size_bytes AS sizeBytes,
                  receipt_amount_cents AS receiptAmountCents,
                  receipt_amount_source AS receiptAmountSource,
-                 receipt_amount_confirmed_at AS receiptAmountConfirmedAt
+                 receipt_amount_confirmed_at AS receiptAmountConfirmedAt,
+                 (SELECT j.status FROM receipt_ocr_jobs j WHERE j.attachment_id = attachments.id) AS receiptOcrStatus
          FROM attachments
          WHERE store_id = ? AND sale_id IN (${placeholders})
          ORDER BY created_at, id`,
@@ -1486,6 +1491,7 @@ function attachmentRecord(
     sizeBytes: Number(file.sizeBytes),
     receiptAmountCents:
       file.receiptAmountCents === null ? null : Number(file.receiptAmountCents),
+    receiptOcrStatus: file.receiptOcrStatus ?? null,
     receiptAmountSource: file.receiptAmountSource,
     receiptAmountConfirmedAt:
       file.receiptAmountConfirmedAt === null

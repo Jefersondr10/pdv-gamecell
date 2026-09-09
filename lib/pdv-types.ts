@@ -25,6 +25,7 @@ export type AttachmentRecord = {
 };
 
 export type ReceiptAttachmentRecord = AttachmentRecord & {
+  receiptOcrStatus?: string | null;
   receiptAmountCents: number | null;
   receiptAmountSource: 'ocr' | 'manual' | null;
   receiptAmountConfirmedAt: number | null;

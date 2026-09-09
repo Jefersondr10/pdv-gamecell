@@ -2010,9 +2010,10 @@ for (const amountCents of [500_000, 499_999]) {
     divergentCount: number;
   };
   assert.equal(refreshedTotals.receiptCents, amountCents);
-  assert.equal(refreshedTotals.receivedCents, 500_000);
+  assert.equal(refreshedTotals.receivedCents, amountCents);
   assert.equal(refreshedTotals.pendingCount, 0);
-  assert.equal(refreshedTotals.divergentCount, amountCents === 500_000 ? 0 : 1);
+  // Overview compares receipts with the entered payment, now updated from receipts.
+  assert.equal(refreshedTotals.divergentCount, 0);
   const reconciledFilter = await call(
     '/api/sales?group=sale&period=all&saleStatus=reconciled',
     { cookie: ownerCookie },
@@ -2486,6 +2487,7 @@ for (const [path, method] of [
   [`/api/sales/${attributionId}/cancel`, 'POST'],
   [`/api/sales/${attributionId}/attachments`, 'POST'],
   [`/api/sales/${attributionId}/receipt-values`, 'PATCH'],
+  [`/api/sales/${attributionId}/receipt-payment`, 'POST'],
   [`/api/sales/${attributionId}/prices`, 'PATCH'],
   [`/api/sales/${attributionId}/receipts/denied-receipt`, 'DELETE'],
   [`/api/sales/${attributionId}/order-status`, 'PATCH'],
@@ -3515,4 +3517,153 @@ assert.equal(saleAfterDelete.productsTotalCents, 128400);
 console.log(
   'Post-sale prices and manual receipt deletion: authenticated HTTP, CSRF/permission enforcement, current and historical original-sale replay, preserved payments, file 200→404 and immediate reconciliation queries passed.',
 );
+// Explicit use of already saved receipts, manual precedence, replay and CSRF.
+const syncPath = `/api/sales/${activeSaleId}/receipt-payment`;
+const syncState = async () =>
+  (await call(syncPath, { cookie: ownerCookie })).body;
+await call(syncPath, { cookie: secondShopCookie, expected: 404 });
+let beforeSync = await syncState();
+const paidFields = (value: Record<string, unknown>) =>
+  (value.payments as EditablePayment[]).map(
+    ({ id, method, pixAccountId, amountCents }) => ({
+      id,
+      method,
+      pixAccountId,
+      amountCents,
+    }),
+  );
+const manualSet = async (amountCents: number) => {
+  const current = await syncState();
+  const expectedPayments = paidFields(current);
+  await call(`/api/sales/${activeSaleId}/payments`, {
+    ...editingHeaders,
+    method: 'PATCH',
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      expectedPayments,
+      payments: expectedPayments.map((p, i) => (i ? p : { ...p, amountCents })),
+    }),
+  });
+};
+await manualSet(510000);
+beforeSync = await syncState();
+assert.equal(beforeSync.status, 'manual');
+const syncPayload = {
+  operationId: crypto.randomUUID(),
+  targetPaymentId: (beforeSync.payments as EditablePayment[])[0].id,
+  expectedPayments: beforeSync.expectedPayments,
+  expectedReceipts: beforeSync.expectedReceipts,
+  expectedRequestId: beforeSync.requestId,
+};
+await call(syncPath, {
+  ...editingHeaders,
+  headers: { 'content-type': 'application/json', 'x-csrf-token': 'wrong' },
+  method: 'POST',
+  body: JSON.stringify(syncPayload),
+  expected: 403,
+});
+const synced = await call(syncPath, {
+  ...editingHeaders,
+  method: 'POST',
+  body: JSON.stringify(syncPayload),
+});
+assert.equal(synced.body.receivedTotalCents, synced.body.receiptTotalCents);
+assert.equal(synced.body.status, 'applied');
+await manualSet(520000);
+const replaySync = await call(syncPath, {
+  ...editingHeaders,
+  method: 'POST',
+  body: JSON.stringify(syncPayload),
+});
+assert.equal(replaySync.body.replayed, true);
+assert.equal(replaySync.body.receivedTotalCents, 520000);
+await call(syncPath, {
+  ...editingHeaders,
+  method: 'POST',
+  body: JSON.stringify({ ...syncPayload, operationId: crypto.randomUUID() }),
+  expected: 409,
+});
+const correctionPath = `/api/sales/${activeSaleId}/receipt-values`;
+const receiptCorrection = {
+  operationId: crypto.randomUUID(),
+  preservePayments: true,
+  receipts: [
+    {
+      id: overviewItems[0].receipts[0].id,
+      amountCents: 490000,
+      source: 'manual',
+    },
+  ],
+};
+await call(correctionPath, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify(receiptCorrection),
+});
+assert.equal((await syncState()).receivedTotalCents, 520000);
+await call(correctionPath, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify(receiptCorrection),
+});
+assert.equal((await syncState()).receivedTotalCents, 520000);
+await call(correctionPath, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({
+    ...receiptCorrection,
+    operationId: crypto.randomUUID(),
+    preservePayments: false,
+    receipts: [{ ...receiptCorrection.receipts[0], amountCents: 480000 }],
+  }),
+});
+assert.equal((await syncState()).receivedTotalCents, 480000);
+const syncVersion = await call('/api/receipt-ocr/status', {
+  cookie: ownerCookie,
+});
+assert.notEqual(syncVersion.body.version, 'disabled');
+console.log(
+  'Receipt payment HTTP: automatic edit, explicit apply, manual precedence, same-save preservation, replay, stale snapshot, CSRF and tenant isolation passed.',
+);
+if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
+  assert.ok(
+    localTarget &&
+      process.env.PDV_TEST_ISOLATED_DATA_DIR.includes(
+        'pdv-isolated-validation-',
+      ),
+  );
+  const { DatabaseSync } = await import('node:sqlite');
+  const fixturePaths = await import('node:path');
+  const fixtureDb = new DatabaseSync(
+    fixturePaths.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
+  );
+  fixtureDb
+    .prepare(
+      "UPDATE audit_events SET details_json=json_remove(details_json,'$.operationFingerprint','$.receivedTotalCents','$.receivedDifferenceCents') WHERE entity_id=? AND action='sale.created'",
+    )
+    .run(saleId);
+  const currentTotal = fixtureDb
+    .prepare('SELECT received_total_cents AS total FROM sales WHERE id=?')
+    .get(saleId)!.total;
+  fixtureDb.close();
+  const legacyForm = new FormData();
+  legacyForm.set('payload', JSON.stringify(salePayload));
+  const replay = await call('/api/sales', {
+    cookie: ownerCookie,
+    method: 'POST',
+    headers: { 'x-csrf-token': accessOwnerHeaders['x-csrf-token'] },
+    body: legacyForm,
+  });
+  assert.equal(replay.body.replayed, true);
+  const checkDb = new DatabaseSync(
+    fixturePaths.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
+  );
+  assert.equal(
+    checkDb
+      .prepare('SELECT received_total_cents AS total FROM sales WHERE id=?')
+      .get(saleId)!.total,
+    currentTotal,
+  );
+  checkDb.close();
+}
 console.log('Production integration flow passed.');

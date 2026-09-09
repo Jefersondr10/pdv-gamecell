@@ -99,6 +99,13 @@
       "when": 1788931089467,
       "tag": "0013_manual_receipt_deletion",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1788961703944,
+      "tag": "0014_receipt_payment_sync",
+      "breakpoints": true
     }
   ]
 }

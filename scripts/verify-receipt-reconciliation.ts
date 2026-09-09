@@ -6,6 +6,10 @@ import { saleDisplayStatus } from '../lib/sale-display-status.ts';
 const reconciledSale = {
   status: 'completed' as const,
   orderStatus: null,
+  productsTotalCents: 100,
+  receivedTotalCents: 100,
+  items: [{ soldPriceCents: 100, photos: [{}] }],
+  receipts: [{ receiptAmountCents: 100 }],
   reconciliation: deriveReceiptReconciliation([{ amountCents: 100 }], 100),
 };
 assert.equal(saleDisplayStatus(reconciledSale).label, 'Conciliado');
@@ -16,9 +20,10 @@ assert.equal(
 assert.equal(
   saleDisplayStatus({
     ...reconciledSale,
+    receipts: [],
     reconciliation: deriveReceiptReconciliation([], 100),
   }).key,
-  'pending',
+  'missing_receipt',
 );
 
 assert.deepEqual(deriveReceiptReconciliation([], 620_000), {

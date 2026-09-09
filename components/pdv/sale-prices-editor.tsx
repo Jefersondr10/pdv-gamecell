@@ -10,6 +10,7 @@ import { parseMoneyInput } from '@/lib/money';
 import { cn } from '@/lib/utils';
 import type { SaleRecord } from '@/lib/pdv-types';
 import type { SalePrices } from '@/lib/sale-prices';
+import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
 
 const money = (cents: number) =>
   (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -53,8 +54,8 @@ export function SalePricesEditor({
     (item) => item.priceCents <= 0 || item.priceCents > 1_000_000_000,
   );
   const newTotal = items.reduce((total, item) => total + item.priceCents, 0);
-  const difference =
-    (current?.receivedTotalCents ?? sale.receivedTotalCents) - newTotal;
+  const difference = sale.receivedTotalCents - newTotal;
+  const receiptCheck = deriveReceiptReconciliation(sale.receipts, newTotal);
   const headers = {
     'content-type': 'application/json',
     'x-csrf-token': csrfToken,
@@ -195,7 +196,19 @@ export function SalePricesEditor({
           <div className="rounded-xl bg-muted/40 p-3 text-sm">
             <p>Total anterior: {money(current.productsTotalCents)}</p>
             <p className="font-extrabold">Novo total: {money(newTotal)}</p>
-            <p>Pagamentos registrados: {money(current.receivedTotalCents)}</p>
+            <p>Pagamentos registrados: {money(sale.receivedTotalCents)}</p>
+            <p>
+              Comprovantes com valor: {money(receiptCheck.confirmedTotalCents)}
+            </p>
+            {!invalid && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {receiptCheck.status === 'pending'
+                  ? `${receiptCheck.pendingReceiptCount} comprovante(s) pendente(s) de valor ou anexo. A conferência ainda não terminou.`
+                  : receiptCheck.differenceCents === 0
+                    ? 'Comprovantes conferem com o novo total.'
+                    : `Comprovantes ${receiptCheck.differenceCents! < 0 ? 'abaixo' : 'acima'} do novo total em ${money(Math.abs(receiptCheck.differenceCents!))}.`}
+              </p>
+            )}
             {!invalid && (
               <p
                 className={cn(

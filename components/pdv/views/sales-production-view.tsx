@@ -33,8 +33,20 @@ import {
 
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
+import {
+  SYSTEM_SALE_STATUSES,
+  saleDisplayStatus,
+  saleIssues,
+} from '@/lib/sale-display-status';
 import { SaleDetailsDialog } from '@/components/pdv/sale-details-dialog';
 import { DeleteReceiptButton } from '@/components/pdv/delete-receipt-button';
+import { ReceiptPaymentSync } from '@/components/pdv/receipt-payment-sync';
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from '@/components/ui/accordion';
 import { SalePricesEditor } from '@/components/pdv/sale-prices-editor';
 import type { SalePrices } from '@/lib/sale-prices';
 import {
@@ -225,6 +237,39 @@ export function SalesProductionView({
   const [detailSale, setDetailSale] = useState<SaleRecord | null>(null);
   const [editSale, setEditSale] = useState<SaleRecord | null>(null);
   const [cancelSale, setCancelSale] = useState<SaleRecord | null>(null);
+  useEffect(() => {
+    let active = true;
+    let generation = 0;
+    const ids = [
+      ...new Set(
+        [editSale?.id, detailSale?.id, reportSale?.id].filter(
+          (id): id is string => Boolean(id),
+        ),
+      ),
+    ];
+    const refresh = () => {
+      const requestedGeneration = ++generation;
+      for (const id of ids)
+        void requestJson<SalesPage>(
+          `/api/sales?period=all&saleId=${encodeURIComponent(id)}`,
+        )
+          .then((result) => {
+            const record = result.items.find((item) => item.id === id);
+            if (!active || !record || requestedGeneration !== generation)
+              return;
+            setEditSale((current) => (current?.id === id ? record : current));
+            setDetailSale((current) => (current?.id === id ? record : current));
+            setReportSale((current) => (current?.id === id ? record : current));
+          })
+          .catch(() => {});
+    };
+    refresh();
+    window.addEventListener('pdv:sales-changed', refresh);
+    return () => {
+      active = false;
+      window.removeEventListener('pdv:sales-changed', refresh);
+    };
+  }, [editSale?.id, detailSale?.id, reportSale?.id]);
   const [page, setPage] = useState<SalesPage>(() => emptySalesPage());
   const [analyticsState, setAnalyticsState] = useState<{
     key: string;
@@ -475,13 +520,12 @@ export function SalesProductionView({
     if (issueFilter === 'pending_payment') pieces.push('Pagamento pendente');
     if (orderStatusFilter.startsWith('auto_'))
       pieces.push(
-        orderStatusFilter === 'auto_reconciled'
-          ? 'Conciliado'
-          : orderStatusFilter === 'auto_cancelled'
-            ? 'Cancelado'
-            : 'Aguardando conciliação',
+        SYSTEM_SALE_STATUSES.find(
+          (status) => status.key === orderStatusFilter.slice(5),
+        )?.label ?? 'Com pendências',
       );
-    else if (orderStatusFilter === 'none') pieces.push('Sem status de pedido');
+    else if (orderStatusFilter === 'none')
+      pieces.push('Sem acompanhamento adicional');
     else if (orderStatusFilter !== 'all') {
       const status = data.orderStatuses.find(
         (candidate) => candidate.id === orderStatusFilter,
@@ -721,30 +765,26 @@ export function SalesProductionView({
                       value: 'all',
                     },
                     {
-                      detail: 'Pedidos ainda sem classificação',
-                      label: 'Sem status',
+                      detail: 'Sem acompanhamento manual adicional',
+                      label: 'Sem acompanhamento adicional',
                       value: 'none',
                     },
+                    ...SYSTEM_SALE_STATUSES.map((status) => ({
+                      label: status.label,
+                      detail: 'Status automático do sistema',
+                      value: `auto_${status.key}`,
+                    })),
                     {
-                      label: 'Conciliado',
-                      detail: 'Comprovantes conferidos com o valor da venda',
-                      value: 'auto_reconciled',
-                    },
-                    {
-                      label: 'Cancelado',
-                      detail: 'Vendas canceladas',
-                      value: 'auto_cancelled',
-                    },
-                    {
-                      label: 'Aguardando conciliação',
-                      detail: 'Sem comprovante, em leitura ou com divergência',
+                      label: 'Todas com pendências',
+                      detail:
+                        'Qualquer pendência de valor, pagamento, foto ou comprovante',
                       value: 'auto_pending',
                     },
                     ...data.orderStatuses.map((status) => ({
                       detail: status.active
                         ? 'Status cadastrado pela loja'
                         : 'Status inativo',
-                      label: `${status.name}${status.active ? '' : ' (inativo)'}`,
+                      label: `Acompanhamento: ${status.name}${status.active ? '' : ' (inativo)'}`,
                       value: status.id,
                     })),
                   ]}
@@ -1050,6 +1090,7 @@ export function SalesProductionView({
           listDataKeyRef.current = '';
           setAnalyticsState(null);
           await loadSales(null, false, true);
+          window.dispatchEvent(new Event('pdv:sales-changed'));
           void onChanged();
         }}
         onOpenChange={(open) => {
@@ -1142,7 +1183,20 @@ function SaleList({
               #{String(sale.number).padStart(5, '0')} ·{' '}
               {formatDateTime(sale.createdAt)} · {sale.sellerName}
             </p>
-            <SaleStatusBadge sale={sale} />
+            <span className="flex items-center gap-1.5">
+              <SaleStatusBadge sale={sale} />
+              {saleIssues(sale).length > 1 && (
+                <span
+                  className="text-xs text-muted-foreground"
+                  title={saleIssues(sale)
+                    .slice(1)
+                    .map((issue) => issue.label)
+                    .join(' · ')}
+                >
+                  +{saleIssues(sale).length - 1}
+                </span>
+              )}
+            </span>
           </div>
           {sale.status === 'completed' &&
             (sale.receivedDifferenceCents !== 0 || !sale.receipts.length) && (
@@ -1302,6 +1356,8 @@ function EditSaleDialog({
     ),
   );
   const receiptValueOperationIdRef = useRef(createOperationId());
+  // Keep precedence across partial saves and lost responses, not only this click.
+  const preserveReceiptPaymentRef = useRef(new Set<string>());
   const dirtyReceiptIds = useRef(new Set<string>());
   const [dirtyReceipts, setDirtyReceipts] = useState(new Set<string>());
   const serverReceipts = useServerReceiptJobs(sale?.id, (jobs) => {
@@ -1345,6 +1401,28 @@ function EditSaleDialog({
   const paymentCorrectionIdRef = useRef(createOperationId());
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!sale || uploadBusy) return;
+    const timer = window.setTimeout(() => {
+      if (Object.keys(paymentEdits).length === 0)
+        setVisiblePayments(sale.payments);
+      setSavedReceiptValues((current) => {
+        const next = { ...current };
+        for (const receipt of sale.receipts)
+          if (
+            !dirtyReceiptIds.current.has(receipt.id) &&
+            !deletedReceiptIds.current.has(receipt.id)
+          ) {
+            next[receipt.id] = {
+              amountCents: receipt.receiptAmountCents,
+              source: receipt.receiptAmountSource,
+            };
+          }
+        return next;
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [sale, uploadBusy, paymentEdits]);
 
   const existingAttachmentCount = sale
     ? activeReceipts.length +
@@ -1424,7 +1502,7 @@ function EditSaleDialog({
     additionalPaymentCents <= remainingPaymentCents &&
     (paymentMethod !== 'pix' || Boolean(paymentPixAccountId));
   const changedSavedReceiptValues = activeReceipts.flatMap((receipt) => {
-    if (serverReceipts.enabled && !dirtyReceipts.has(receipt.id)) return [];
+    if (!dirtyReceipts.has(receipt.id)) return [];
     const value = savedReceiptValues[receipt.id] ?? {
       amountCents: null,
       source: null,
@@ -1586,15 +1664,39 @@ function EditSaleDialog({
                     <FileCheck2 className="size-5" />
                   </span>
                   <div>
-                    <h3 className="font-extrabold">Status do pedido</h3>
+                    <h3 className="font-extrabold">
+                      Status automático do pedido
+                    </h3>
                     <p className="text-xs text-muted-foreground">
-                      Não altera o estoque nem o cancelamento da venda.
+                      Atualiza ao salvar preços, pagamentos, fotos e
+                      comprovantes.
                     </p>
                   </div>
                 </div>
-                <div className="mt-3">
+                <div className="mt-3 space-y-3">
+                  <SaleStatusBadge sale={sale} />
+                  {saleIssues(sale).length > 1 && (
+                    <p className="text-sm text-muted-foreground">
+                      Outras pendências:{' '}
+                      {saleIssues(sale)
+                        .slice(1)
+                        .map((issue) => issue.label)
+                        .join(' · ')}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Conciliação compara os valores cadastrados; não confirma o
+                    crédito no banco.
+                  </p>
+                  <label
+                    className="block text-sm font-semibold"
+                    htmlFor="sale-custom-status"
+                  >
+                    Acompanhamento personalizado (opcional)
+                  </label>
                   <NativeSelect
-                    aria-label="Status do pedido desta venda"
+                    id="sale-custom-status"
+                    aria-label="Acompanhamento personalizado desta venda"
                     disabled={!can(data.user, 'sales.status') || uploadBusy}
                     className="h-11 w-full [&_select]:h-11"
                     onChange={(event) =>
@@ -1602,7 +1704,9 @@ function EditSaleDialog({
                     }
                     value={selectedStatusId}
                   >
-                    <NativeSelectOption value="">Sem status</NativeSelectOption>
+                    <NativeSelectOption value="">
+                      Sem acompanhamento adicional
+                    </NativeSelectOption>
                     {availableStatuses.map((status) => (
                       <NativeSelectOption key={status.id} value={status.id}>
                         {status.name}
@@ -1613,13 +1717,14 @@ function EditSaleDialog({
                 </div>
                 {selectedStatusId !== currentStatusId && (
                   <p className="mt-2 text-xs font-semibold text-primary">
-                    O novo status será aplicado ao salvar as alterações.
+                    O acompanhamento será aplicado ao salvar as alterações.
                   </p>
                 )}
                 {data.orderStatuses.length === 0 && (
                   <p className="mt-2 text-xs font-semibold text-amber-800">
-                    Cadastre seus status em Ajustes › Financeiro › Status do
-                    pedido.
+                    Os status automáticos já estão disponíveis. Acompanhamentos
+                    adicionais podem ser criados em Ajustes › Financeiro ›
+                    Status do pedido.
                   </p>
                 )}
               </section>
@@ -2187,6 +2292,27 @@ function EditSaleDialog({
                     targetCents={sale.productsTotalCents}
                   />
                 )}
+                <ReceiptPaymentSync
+                  saleId={sale.id}
+                  csrfToken={data.csrfToken}
+                  canUse={canPayments && canReceipts}
+                  disabled={
+                    preparing ||
+                    uploadBusy ||
+                    hasPaymentCorrections ||
+                    queuedPayments.length > 0 ||
+                    paymentMethod !== '' ||
+                    selectedFiles.length > 0 ||
+                    changedSavedReceiptValues.length > 0
+                  }
+                  onPayments={(payments, total) => {
+                    if (Object.keys(paymentEdits).length || uploadBusy)
+                      return false;
+                    setVisiblePayments(payments);
+                    if (total !== sale.receivedTotalCents) void onChanged();
+                    return true;
+                  }}
+                />
               </section>
 
               <section className="rounded-2xl border p-4">
@@ -2197,80 +2323,94 @@ function EditSaleDialog({
                   <div>
                     <h3 className="font-extrabold">Fotos dos aparelhos</h3>
                     <p className="text-xs text-muted-foreground">
-                      A foto fica vinculada ao SN correto da venda.
+                      Abra o aparelho para ver ou anexar fotos pelo SN.
                     </p>
                   </div>
                 </div>
-                <div className="mt-3 divide-y rounded-xl border">
+                <Accordion
+                  className="mt-3 overflow-hidden rounded-xl border"
+                  defaultValue={
+                    sale.items.length === 1 ? [sale.items[0].id] : []
+                  }
+                >
                   {sale.items.map((item) => {
                     const selected = itemFiles[item.id] ?? [];
                     return (
-                      <div className="p-3" key={item.id}>
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate font-bold">
+                      <AccordionItem value={item.id} key={item.id}>
+                        <AccordionTrigger className="items-center gap-3 px-3 py-2.5 hover:no-underline">
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-bold">
                               {item.productName}
-                            </p>
-                            <p className="truncate text-xs text-muted-foreground">
+                            </span>
+                            <span className="block text-xs text-muted-foreground">
                               {item.productDetail} · SN {item.serial}
-                            </p>
-                            <p className="mt-0.5 text-xs font-semibold">
-                              {item.photos.length} de{' '}
-                              {MEDIA_LIMITS.saleItemPhotos} fotos anexadas
-                            </p>
+                            </span>
+                          </span>
+                          <span
+                            className={`shrink-0 text-xs font-semibold ${item.photos.length + selected.length === 0 ? 'text-amber-800' : 'text-muted-foreground'}`}
+                          >
+                            {selected.length
+                              ? `${selected.length} nova(s)`
+                              : item.photos.length
+                                ? `${item.photos.length} foto(s)`
+                                : 'Sem foto'}
+                          </span>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-3 pb-3">
+                          <div className="flex justify-end">
+                            <MediaPickerButtons
+                              accessibleLabel={`fotos do aparelho ${item.productName}, SN ${item.serial}`}
+                              disabled={
+                                !canAttachments ||
+                                preparing ||
+                                uploadBusy ||
+                                item.photos.length + selected.length >=
+                                  MEDIA_LIMITS.saleItemPhotos ||
+                                remainingAttachmentCount <= selectedFiles.length
+                              }
+                              id={`sale-${sale.id}-item-${item.id}`}
+                              onFiles={(files) =>
+                                prepareItemPhotos(item.id, files)
+                              }
+                            />
                           </div>
-                          <MediaPickerButtons
-                            accessibleLabel={`fotos do aparelho ${item.productName}, SN ${item.serial}`}
-                            disabled={
-                              !canAttachments ||
-                              preparing ||
-                              uploadBusy ||
-                              item.photos.length + selected.length >=
-                                MEDIA_LIMITS.saleItemPhotos ||
-                              remainingAttachmentCount <= selectedFiles.length
-                            }
-                            id={`sale-${sale.id}-item-${item.id}`}
-                            onFiles={(files) =>
-                              prepareItemPhotos(item.id, files)
-                            }
-                          />
-                        </div>
-                        {item.photos.length > 0 && (
-                          <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                            {item.photos.map((photo) => (
-                              <a
-                                href={photo.url}
-                                key={photo.id}
-                                rel="noreferrer"
-                                target="_blank"
-                              >
-                                <img
-                                  alt={photo.name}
-                                  className="size-16 rounded-lg border object-cover"
-                                  decoding="async"
-                                  loading="lazy"
-                                  src={photo.url}
-                                />
-                              </a>
-                            ))}
-                          </div>
-                        )}
-                        {selected.length > 0 && (
-                          <SelectedFiles
-                            files={selected}
-                            onClear={() =>
-                              setItemFiles((values) => {
-                                const next = { ...values };
-                                delete next[item.id];
-                                return next;
-                              })
-                            }
-                          />
-                        )}
-                      </div>
+                          {item.photos.length > 0 && (
+                            <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                              {item.photos.map((photo) => (
+                                <a
+                                  href={photo.url}
+                                  key={photo.id}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  <img
+                                    alt={photo.name}
+                                    className="size-16 rounded-lg border object-cover"
+                                    decoding="async"
+                                    loading="lazy"
+                                    src={photo.url}
+                                  />
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                          {selected.length > 0 && (
+                            <SelectedFiles
+                              files={selected}
+                              onClear={() =>
+                                setItemFiles((values) => {
+                                  const next = { ...values };
+                                  delete next[item.id];
+                                  return next;
+                                })
+                              }
+                            />
+                          )}
+                        </AccordionContent>
+                      </AccordionItem>
                     );
                   })}
-                </div>
+                </Accordion>
               </section>
 
               <div className="rounded-xl bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
@@ -2361,6 +2501,12 @@ function EditSaleDialog({
                           }),
                         });
                         paymentSaved = true;
+                        preserveReceiptPaymentRef.current.add(
+                          receiptValueOperationIdRef.current,
+                        );
+                        preserveReceiptPaymentRef.current.add(
+                          attachmentOperationIdRef.current,
+                        );
                         setVisiblePayments(corrected.payments);
                         setPaymentEdits({});
                         paymentCorrectionIdRef.current = createOperationId();
@@ -2389,6 +2535,12 @@ function EditSaleDialog({
                           }),
                         });
                         paymentSaved = true;
+                        preserveReceiptPaymentRef.current.add(
+                          receiptValueOperationIdRef.current,
+                        );
+                        preserveReceiptPaymentRef.current.add(
+                          attachmentOperationIdRef.current,
+                        );
                         latestPending = Math.max(
                           0,
                           -result.sale.receivedDifferenceCents,
@@ -2443,6 +2595,11 @@ function EditSaleDialog({
                             body: JSON.stringify({
                               operationId: receiptValueOperationIdRef.current,
                               receipts: changedSavedReceiptValues,
+                              ...(preserveReceiptPaymentRef.current.has(
+                                receiptValueOperationIdRef.current,
+                              )
+                                ? { preservePayments: true }
+                                : {}),
                             }),
                           },
                         );
@@ -2454,6 +2611,12 @@ function EditSaleDialog({
                       }
                       if (selectedFiles.length > 0) {
                         const form = new FormData();
+                        if (
+                          preserveReceiptPaymentRef.current.has(
+                            attachmentOperationIdRef.current,
+                          )
+                        )
+                          form.set('preservePayments', 'true');
                         form.set(
                           'operationId',
                           attachmentOperationIdRef.current,
@@ -2801,7 +2964,7 @@ function SaleReport({
                     {sale.productsTotalCents <= 0
                       ? 'Venda sem valor definido'
                       : sale.reconciliation.status === 'reconciled'
-                        ? 'Conciliado'
+                        ? 'Comprovantes conferem'
                         : sale.reconciliation.status === 'divergent'
                           ? 'Comprovantes não conferem'
                           : 'Conciliação pendente'}
@@ -2986,7 +3149,9 @@ function SaleReport({
                     </p>
                     <p>
                       <strong>Status do pedido:</strong>{' '}
-                      {sale.orderStatus?.name ?? 'Sem status'}
+                      {saleDisplayStatus(sale).label}
+                      {sale.orderStatus &&
+                        ` · Acompanhamento: ${sale.orderStatus.name}`}
                     </p>
                     <p>
                       <strong>Total cadastrado:</strong>{' '}
@@ -3134,10 +3299,7 @@ function SalesPeriodReport({
     0,
   );
   const alertCount = completedSales.filter(
-    (sale) =>
-      sale.receivedDifferenceCents !== 0 ||
-      sale.receipts.length === 0 ||
-      sale.reconciliation.status !== 'reconciled',
+    (sale) => saleIssues(sale).length > 0,
   ).length;
   const cancelledCount = sales.length - completedSales.length;
   const completeMediaStats = useMemo(
@@ -3536,7 +3698,7 @@ function SalesPeriodReport({
                                       <p className="font-extrabold">
                                         {sale.reconciliation.status ===
                                         'reconciled'
-                                          ? 'Conciliado'
+                                          ? 'Comprovantes conferem'
                                           : sale.reconciliation.status ===
                                               'divergent'
                                             ? 'Comprovantes não conferem'

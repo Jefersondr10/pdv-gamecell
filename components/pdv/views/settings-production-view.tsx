@@ -1,4 +1,5 @@
 'use client';
+import { SYSTEM_SALE_STATUSES } from '@/lib/sale-display-status';
 
 import { createOperationId } from '@/lib/client-operation-id';
 
@@ -781,12 +782,24 @@ function OrderStatusesDialog({
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
           <DialogTitle>Status do pedido</DialogTitle>
           <DialogDescription>
-            Crie os nomes usados para acompanhar cada venda. Cancelamento
-            continua sendo controlado separadamente.
+            Os status automáticos são padrão do sistema. Crie acompanhamentos
+            adicionais para a rotina da loja.
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain">
           {error && <ErrorBox>{error}</ErrorBox>}
+          <section className="mb-4 rounded-xl border p-3">
+            <h3 className="text-sm font-bold">
+              Automáticos · não precisam de cadastro
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {SYSTEM_SALE_STATUSES.map((status) => status.label).join(' · ')}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Mudam conforme os dados salvos. Acompanhamentos manuais não
+              substituem a conferência.
+            </p>
+          </section>
           <form
             className="grid gap-3 rounded-2xl border bg-muted/25 p-4 sm:grid-cols-[minmax(0,1fr)_11rem_auto] sm:items-end"
             onSubmit={async (event) => {
@@ -808,11 +821,11 @@ function OrderStatusesDialog({
               }
             }}
           >
-            <Field label="Nome do status">
+            <Field label="Acompanhamento personalizado">
               <Input
                 maxLength={60}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Pagamento pendente"
+                placeholder="Aguardando retirada"
                 required
                 value={name}
               />
@@ -976,8 +989,9 @@ function OrderStatusesDialog({
             )}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            Você pode começar, por exemplo, com Pendente, Pagamento pendente e
-            Faturado. Os nomes são totalmente personalizáveis.
+            Use acompanhamentos como Aguardando retirada ou Entregue. Valores,
+            pagamentos, fotos e comprovantes são conferidos pelo status
+            automático.
           </p>
         </div>
         <DialogFooter className="m-0 shrink-0 rounded-none border-t p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]">

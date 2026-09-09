@@ -16,7 +16,7 @@ export function SaleStatusBadge({ sale }: { sale: SaleRecord }) {
       )}
       title={
         status.key === 'reconciled'
-          ? 'Valores dos comprovantes conferidos com a venda. Não confirma crédito bancário.'
+          ? 'Venda, pagamento e comprovantes conferem; fotos anexadas. Não confirma crédito bancário.'
           : status.label
       }
     >

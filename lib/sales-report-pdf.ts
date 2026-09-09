@@ -1,6 +1,7 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { PDFFont, PDFPage } from 'pdf-lib';
 import type { AttachmentRecord, SaleRecord } from './pdv-types';
+import { saleDisplayStatus, saleIssues } from './sale-display-status.ts';
 
 export type SalesPdfOptions = {
   storeName: string;
@@ -249,8 +250,17 @@ function saleDetails(
     `${date(sale.createdAt, true)} · Vendedor: ${sale.sellerName}`,
     { size: 9, muted: true },
   );
+  layout.paragraph(`Status: ${saleDisplayStatus(sale).label}`, { size: 9 });
+  if (saleIssues(sale).length > 1)
+    layout.paragraph(
+      `Outras pendências: ${saleIssues(sale)
+        .slice(1)
+        .map((issue) => issue.label)
+        .join(' · ')}`,
+      { size: 9 },
+    );
   if (sale.orderStatus)
-    layout.paragraph(`Status do pedido: ${sale.orderStatus.name}`, { size: 9 });
+    layout.paragraph(`Acompanhamento: ${sale.orderStatus.name}`, { size: 9 });
   layout.y += 8;
   layout.row('Valor da venda', money(sale.productsTotalCents), { bold: true });
   if ((detailed || singleSale) && showFinancial) {
@@ -323,7 +333,7 @@ function saleDetails(
               ? `Leitura/conferência pendente: ${pending} comprovante(s).`
               : 'Conferência dos comprovantes pendente.'
             : diff === 0
-              ? 'Conciliado: os valores dos comprovantes coincidem com a venda.'
+              ? 'Comprovantes conferem com o valor da venda.'
               : diff === null
                 ? 'Conferência pendente.'
                 : `Comprovantes ${diff < 0 ? 'abaixo' : 'acima'} da venda: diferença de ${money(Math.abs(diff))}.`,
@@ -415,15 +425,12 @@ export async function buildSalesReportPdf(
     );
   if (!singleSale) {
     const warnings = completed.filter(
-      (sale) =>
-        sale.receivedDifferenceCents !== 0 ||
-        !sale.receipts.length ||
-        sale.reconciliation.status !== 'reconciled',
+      (sale) => saleIssues(sale).length > 0,
     ).length;
-    layout.paragraph(
-      `${warnings} venda(s) com aviso de pagamento ou comprovante.`,
-      { size: 9, muted: true },
-    );
+    layout.paragraph(`${warnings} venda(s) com pendências.`, {
+      size: 9,
+      muted: true,
+    });
   }
   const days = new Map<string, SaleRecord[]>();
   for (const sale of sales) {

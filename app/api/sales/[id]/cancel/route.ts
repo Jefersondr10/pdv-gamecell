@@ -1,4 +1,5 @@
 import { assertCsrf, requireSession } from '@/lib/server/auth';
+import { stopReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
 import {
   apiError,
   assertJsonRequest,
@@ -82,6 +83,7 @@ export async function POST(
     );
     try {
       await db.batch([
+        stopReceiptPaymentSync(db, storeId, saleId, now),
         db
           .prepare(
             `UPDATE receipt_ocr_jobs SET status='cancelled', generation=generation+1, lease_token=NULL, lease_until=NULL, updated_at=? WHERE status IN ('pending','processing','retry') AND attachment_id IN (SELECT id FROM attachments WHERE store_id=? AND sale_id=?)`,

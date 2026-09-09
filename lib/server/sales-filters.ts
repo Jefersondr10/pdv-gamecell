@@ -1,4 +1,12 @@
 import { HttpError, utf8Prefix } from './http.ts';
+import {
+  SALE_ALERT_SQL,
+  SALE_AUTO_STATUS_SQL,
+  SALE_RECONCILED_SQL,
+  isSystemSaleStatus,
+} from './sale-status-sql.ts';
+import type { SystemSaleStatusKey } from '../sale-display-status.ts';
+export { SALE_ALERT_SQL, SALE_RECONCILED_SQL } from './sale-status-sql.ts';
 
 export type SalesPeriod =
   | 'today'
@@ -10,7 +18,7 @@ export type SalesPeriod =
   | 'all';
 
 export type SalesIssue = 'missing_receipt' | 'pending_payment';
-export type SalesAutoStatus = 'reconciled' | 'cancelled' | 'pending';
+export type SalesAutoStatus = SystemSaleStatusKey | 'pending';
 
 export type ParsedSalesFilters = {
   alertOnly: boolean;
@@ -38,32 +46,6 @@ export type ParsedSalesFilters = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_LEGACY_PERIOD_MS = 367 * DAY_MS;
 const SAO_PAULO_TIME_ZONE = 'America/Sao_Paulo';
-
-export const SALE_RECONCILED_SQL = `(s.products_total_cents > 0
-  AND EXISTS (SELECT 1 FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt')
-  AND NOT EXISTS (SELECT 1 FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt' AND ar.receipt_amount_cents IS NULL)
-  AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) = s.products_total_cents)`;
-
-export const SALE_ALERT_SQL = `(
-  s.received_difference_cents <> 0 OR NOT EXISTS (
-    SELECT 1 FROM attachments reconciliation_receipt
-    WHERE reconciliation_receipt.store_id = s.store_id
-      AND reconciliation_receipt.sale_id = s.id
-      AND reconciliation_receipt.kind = 'receipt'
-  ) OR EXISTS (
-    SELECT 1 FROM attachments reconciliation_receipt
-    WHERE reconciliation_receipt.store_id = s.store_id
-      AND reconciliation_receipt.sale_id = s.id
-      AND reconciliation_receipt.kind = 'receipt'
-      AND reconciliation_receipt.receipt_amount_cents IS NULL
-  ) OR COALESCE((
-    SELECT SUM(reconciliation_receipt.receipt_amount_cents)
-    FROM attachments reconciliation_receipt
-    WHERE reconciliation_receipt.store_id = s.store_id
-      AND reconciliation_receipt.sale_id = s.id
-      AND reconciliation_receipt.kind = 'receipt'
-  ), 0) <> s.products_total_cents
-)`;
 
 export function parseSalesFilters(
   url: URL,
@@ -112,7 +94,8 @@ export function parseSalesFilters(
   const saleStatusInput = url.searchParams.get('saleStatus');
   if (
     saleStatusInput &&
-    !['reconciled', 'cancelled', 'pending'].includes(saleStatusInput)
+    saleStatusInput !== 'pending' &&
+    !isSystemSaleStatus(saleStatusInput)
   )
     throw new HttpError(
       400,
@@ -217,11 +200,12 @@ function buildFilterClauses({
     where.push('s.seller_user_id = ?');
     bindings.push(sellerId);
   }
-  if (saleStatus === 'cancelled') where.push("s.status = 'cancelled'");
-  if (saleStatus === 'reconciled')
-    where.push(`s.status = 'completed' AND ${SALE_RECONCILED_SQL}`);
   if (saleStatus === 'pending')
     where.push(`s.status = 'completed' AND NOT ${SALE_RECONCILED_SQL}`);
+  else if (saleStatus) {
+    where.push(`${SALE_AUTO_STATUS_SQL} = ?`);
+    bindings.push(saleStatus);
+  }
   if (customerId) {
     where.push('s.customer_id = ?');
     bindings.push(customerId);
