@@ -92,6 +92,13 @@
       "when": 1788890740164,
       "tag": "0012_client_name_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1788931089467,
+      "tag": "0013_manual_receipt_deletion",
+      "breakpoints": true
     }
   ]
 }

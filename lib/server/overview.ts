@@ -1,5 +1,6 @@
 import { HttpError } from './http.ts';
 import { parseSalesFilters } from './sales-filters.ts';
+import { overviewFilters, type OverviewFilter } from '../overview.ts';
 import type {
   OverviewPage,
   OverviewSale,
@@ -13,6 +14,22 @@ export async function readOverview(
   url: URL,
   storeId: string,
 ): Promise<OverviewPage> {
+  const comparison = url.searchParams.get('comparison') ?? 'all';
+  if (!overviewFilters.some((filter) => filter.value === comparison))
+    throw new HttpError(
+      400,
+      'Filtro de comprovantes inválido.',
+      'INVALID_COMPARISON',
+    );
+  const comparisonWhere: Record<OverviewFilter, string> = {
+    all: '1 = 1',
+    matched:
+      'receiptCount > 0 AND pendingCount = 0 AND receiptCents = receivedCents',
+    divergent:
+      'receiptCount > 0 AND pendingCount = 0 AND receiptCents != receivedCents',
+    pending: 'receiptCount > 0 AND pendingCount > 0',
+    missing: 'receiptCount = 0',
+  };
   const rawCursor = url.searchParams.get('cursor');
   let cursor: [number, string] | null = null;
   if (rawCursor) {
@@ -64,15 +81,20 @@ export async function readOverview(
       COALESCE(c.cashCents, 0) AS cashCents, COALESCE(r.receiptCount, 0) AS receiptCount,
       COALESCE(r.receiptCents, 0) AS receiptCents, COALESCE(r.pendingCount, 0) AS pendingCount
     FROM filtered s LEFT JOIN receipts r ON r.sale_id = s.id LEFT JOIN cash c ON c.sale_id = s.id
+  ), selected AS (
+    SELECT * FROM compared WHERE ${comparisonWhere[comparison as OverviewFilter]}
   ), summary AS (
     SELECT COUNT(*) AS totalSales, COALESCE(SUM(receivedCents), 0) AS totalReceived,
       COALESCE(SUM(cashCents), 0) AS totalCash, COALESCE(SUM(receiptCents), 0) AS totalReceipts,
       COALESCE(SUM(receiptCount), 0) AS totalFiles, COALESCE(SUM(pendingCount), 0) AS totalPending,
       COALESCE(SUM(CASE WHEN receiptCount = 0 THEN 1 ELSE 0 END), 0) AS totalMissing,
-      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents != receivedCents THEN 1 ELSE 0 END), 0) AS totalDivergent
-    FROM compared
-  ), page AS (SELECT * FROM compared ${cursor ? 'WHERE createdAt < ? OR (createdAt = ? AND id < ?)' : ''} ORDER BY createdAt DESC, id DESC LIMIT ?)
-  SELECT summary.*, page.*, a.id AS attachmentId, a.file_name AS fileName,
+      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents != receivedCents THEN 1 ELSE 0 END), 0) AS totalDivergent,
+      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents < receivedCents THEN receivedCents - receiptCents ELSE 0 END), 0) AS totalShortfall,
+      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents > receivedCents THEN receiptCents - receivedCents ELSE 0 END), 0) AS totalSurplus
+    FROM selected
+  ), page AS (SELECT * FROM selected ${cursor ? 'WHERE createdAt < ? OR (createdAt = ? AND id < ?)' : ''} ORDER BY createdAt DESC, id DESC LIMIT ?)
+  SELECT summary.*, page.*, (SELECT COALESCE(SUM(pendingCount), 0) FROM compared) AS pendingInPeriod,
+    a.id AS attachmentId, a.file_name AS fileName,
     a.mime_type AS mimeType, a.size_bytes AS sizeBytes, a.receipt_amount_cents AS amountCents,
     a.receipt_amount_source AS amountSource, a.receipt_amount_confirmed_at AS confirmedAt,
     j.status AS processingStatus
@@ -95,6 +117,9 @@ export async function readOverview(
     totalPending: number;
     totalMissing: number;
     totalDivergent: number;
+    totalShortfall: number;
+    totalSurplus: number;
+    pendingInPeriod: number;
     attachmentId: string | null;
     fileName: string;
     mimeType: string;
@@ -115,6 +140,8 @@ export async function readOverview(
     pendingCount: Number(first?.totalPending ?? 0),
     missingCount: Number(first?.totalMissing ?? 0),
     divergentCount: Number(first?.totalDivergent ?? 0),
+    shortfallCents: Number(first?.totalShortfall ?? 0),
+    surplusCents: Number(first?.totalSurplus ?? 0),
   };
   const sales = new Map<string, OverviewSale>();
   for (const row of rows) {
@@ -149,6 +176,7 @@ export async function readOverview(
   const last = items.at(-1);
   return {
     totals,
+    pendingInPeriod: Number(first?.pendingInPeriod ?? 0),
     items,
     nextCursor:
       sales.size > pageSize && last

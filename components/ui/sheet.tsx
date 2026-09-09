@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { BackLayerDepth, useBackDismiss } from '@/components/pdv/use-app-back';
 import { Dialog as SheetPrimitive } from '@base-ui/react/dialog';
 
 import { cn } from '@/lib/utils';
@@ -8,7 +9,12 @@ import { Button } from '@/components/ui/button';
 import { XIcon } from 'lucide-react';
 
 function Sheet({ ...props }: SheetPrimitive.Root.Props) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />;
+  const back = useBackDismiss(props);
+  return (
+    <BackLayerDepth value={back.depth}>
+      <SheetPrimitive.Root data-slot="sheet" {...props} {...back.rootProps} />
+    </BackLayerDepth>
+  );
 }
 
 function SheetTrigger({ ...props }: SheetPrimitive.Trigger.Props) {

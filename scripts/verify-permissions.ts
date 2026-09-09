@@ -18,6 +18,39 @@ for (const role of ['owner', 'admin', 'operator'] as const) {
   assert.ok(can({ role }, 'sell.assign'));
 }
 assert.equal(can({ role: 'operator' }, 'sales.cancel'), false);
+assert.equal(can({ role: 'operator' }, 'sales.prices'), false);
+assert.equal(can({ role: 'admin' }, 'sales.prices'), true);
+assert.equal(
+  can(
+    { role: 'operator', permissions: ['sales', 'sales.prices'] },
+    'sales.prices',
+  ),
+  true,
+);
+assert.equal(
+  can({ role: 'operator', permissions: ['sales.prices'] }, 'sales.prices'),
+  false,
+);
+assert.equal(can({ role: 'operator' }, 'sales.receipts.delete'), false);
+assert.equal(can({ role: 'admin' }, 'sales.receipts.delete'), true);
+assert.equal(
+  can({ role: 'owner', permissions: [] }, 'sales.receipts.delete'),
+  true,
+);
+assert.equal(
+  can(
+    { role: 'operator', permissions: ['sales', 'sales.receipts.delete'] },
+    'sales.receipts.delete',
+  ),
+  true,
+);
+assert.equal(
+  can(
+    { role: 'operator', permissions: ['sales.receipts.delete'] },
+    'sales.receipts.delete',
+  ),
+  false,
+);
 assert.equal(
   can(
     { role: 'operator', permissions: ['sales', 'sales.cancel'] },

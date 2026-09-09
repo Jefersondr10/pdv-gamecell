@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import type { SaleRecord } from '../lib/pdv-types.ts';
+import type { SalePrices } from '../lib/sale-prices.ts';
 import { defaultPermissions, type Permission } from '../lib/permissions.ts';
 import { prepareUploadForm } from '../lib/client-upload.ts';
 import { productEditorPayload } from '../lib/product-editor.ts';
@@ -2484,6 +2486,8 @@ for (const [path, method] of [
   [`/api/sales/${attributionId}/cancel`, 'POST'],
   [`/api/sales/${attributionId}/attachments`, 'POST'],
   [`/api/sales/${attributionId}/receipt-values`, 'PATCH'],
+  [`/api/sales/${attributionId}/prices`, 'PATCH'],
+  [`/api/sales/${attributionId}/receipts/denied-receipt`, 'DELETE'],
   [`/api/sales/${attributionId}/order-status`, 'PATCH'],
   [`/api/sales/${attributionId}/participants`, 'PATCH'],
   [`/api/sales/${attributionId}/receipt-ocr`, 'POST'],
@@ -3304,5 +3308,211 @@ await setStaffPermissions(defaultStaffPermissions, [
 ]);
 console.log(
   'Completed sale participant edits: permissions/CSRF/tenant isolation, active choices, preserved financials, customer history, seller filters/rankings, conflicts, original create replay and cancellations passed.',
+);
+// Price correction and receipt deletion operate on this run's synthetic sale.
+const pricePath = `/api/sales/${attributionId}/prices`;
+const priceBefore = (await call(pricePath, { cookie: ownerCookie }))
+  .body as unknown as SalePrices;
+const saleBeforePriceCorrection =
+  (await saleForCorrection()) as unknown as SaleRecord;
+const priceEdit = {
+  operationId: crypto.randomUUID(),
+  revision: priceBefore.revision,
+  items: priceBefore.items.map((item) => ({
+    id: item.id,
+    expectedPriceCents: item.soldPriceCents,
+    priceCents: item.soldPriceCents + 5000,
+  })),
+};
+await call(pricePath, {
+  ...editingHeaders,
+  method: 'PATCH',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(priceEdit),
+  expected: 403,
+});
+accessStaff = await loginAccessStaff();
+await call(pricePath, { ...accessStaff, expected: 403 });
+await call(pricePath, {
+  ...accessStaff,
+  method: 'PATCH',
+  body: JSON.stringify(priceEdit),
+  expected: 403,
+});
+const pricesSaved = (
+  await call(pricePath, {
+    ...editingHeaders,
+    method: 'PATCH',
+    body: JSON.stringify(priceEdit),
+  })
+).body as unknown as SalePrices;
+assert.equal(
+  pricesSaved.productsTotalCents,
+  priceBefore.productsTotalCents + 5000,
+);
+assert.equal(pricesSaved.receivedTotalCents, priceBefore.receivedTotalCents);
+assert.equal(
+  (
+    await call(pricePath, {
+      ...editingHeaders,
+      method: 'PATCH',
+      body: JSON.stringify(priceEdit),
+    })
+  ).body.replayed,
+  true,
+);
+const saleAfterPrices = (await saleForCorrection()) as unknown as SaleRecord;
+assert.deepEqual(saleAfterPrices.payments, saleBeforePriceCorrection.payments);
+assert.equal(
+  saleAfterPrices.items[0].serial,
+  saleBeforePriceCorrection.items[0].serial,
+);
+assert.equal(
+  saleAfterPrices.items[0].referencePriceCents,
+  saleBeforePriceCorrection.items[0].referencePriceCents,
+);
+assert.equal(
+  saleAfterPrices.items[0].soldPriceCents,
+  saleBeforePriceCorrection.items[0].soldPriceCents + 5000,
+);
+const replayOriginalPrice = async () =>
+  call('/api/sales', {
+    cookie: accessStaff.cookie,
+    method: 'POST',
+    headers: { 'x-csrf-token': accessStaff.headers['x-csrf-token'] },
+    body: sellerForm(attributionPayload, false),
+  });
+const createReplayAfterPrice = await replayOriginalPrice();
+assert.equal(createReplayAfterPrice.body.replayed, true);
+assert.equal(createReplayAfterPrice.body.productsTotalCents, 123400);
+assert.equal(createReplayAfterPrice.body.receivedTotalCents, 0);
+// Exercise the historical no-fingerprint fallback only in the isolated runner's database.
+if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
+  assert.ok(
+    localTarget &&
+      process.env.PDV_TEST_ISOLATED_DATA_DIR.includes(
+        'pdv-isolated-validation-',
+      ),
+  );
+  const { DatabaseSync } = await import('node:sqlite');
+  const fixturePath = await import('node:path');
+  const fixtureDb = new DatabaseSync(
+    fixturePath.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
+  );
+  fixtureDb
+    .prepare(
+      "UPDATE audit_events SET details_json=json_remove(details_json,'$.operationFingerprint','$.productsTotalCents','$.receivedTotalCents') WHERE entity_id=? AND action='sale.created'",
+    )
+    .run(attributionId);
+  fixtureDb.close();
+  const legacyReplay = await replayOriginalPrice();
+  assert.equal(legacyReplay.body.replayed, true);
+  assert.equal(legacyReplay.body.productsTotalCents, 123400);
+  assert.equal(legacyReplay.body.receivedTotalCents, 0);
+}
+const receiptsForm = new FormData();
+receiptsForm.set('operationId', crypto.randomUUID());
+receiptsForm.append('receipts', tinyPhoto(), 'apagar-manualmente.png');
+receiptsForm.append('receipts', tinyPhoto(), 'manter-comprovante.png');
+const receiptUpload = await call(`/api/sales/${attributionId}/attachments`, {
+  cookie: ownerCookie,
+  method: 'POST',
+  headers: { 'x-csrf-token': accessOwnerHeaders['x-csrf-token'] },
+  body: receiptsForm,
+});
+const newReceipts = receiptUpload.body.receipts as {
+  id: string;
+  url: string;
+}[];
+assert.equal(newReceipts.length, 2);
+await call(`/api/sales/${attributionId}/receipt-values`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    receipts: newReceipts.map((receipt, index) => ({
+      id: receipt.id,
+      amountCents: index ? 5000 : 123400,
+      source: 'manual',
+    })),
+  }),
+});
+assert.equal(
+  ((await saleForCorrection()) as unknown as SaleRecord).reconciliation.status,
+  'reconciled',
+);
+const deletePath = `/api/sales/${attributionId}/receipts/${newReceipts[0].id}`;
+const deleteBody = JSON.stringify({ operationId: crypto.randomUUID() });
+assert.equal(
+  (
+    await fetch(`${baseUrl}${newReceipts[0].url}`, {
+      headers: { cookie: ownerCookie },
+    })
+  ).status,
+  200,
+);
+await call(deletePath, {
+  ...editingHeaders,
+  method: 'DELETE',
+  body: '{}',
+  expected: 400,
+});
+await call(deletePath, {
+  ...editingHeaders,
+  method: 'DELETE',
+  headers: { 'content-type': 'application/json' },
+  body: deleteBody,
+  expected: 403,
+});
+await call(deletePath, {
+  ...accessStaff,
+  method: 'DELETE',
+  body: deleteBody,
+  expected: 403,
+});
+assert.equal(
+  (
+    await call(deletePath, {
+      ...editingHeaders,
+      method: 'DELETE',
+      body: deleteBody,
+    })
+  ).body.ok,
+  true,
+);
+assert.equal(
+  (
+    await call(deletePath, {
+      ...editingHeaders,
+      method: 'DELETE',
+      body: deleteBody,
+    })
+  ).body.replayed,
+  true,
+);
+assert.equal(
+  (
+    await fetch(`${baseUrl}${newReceipts[0].url}`, {
+      headers: { cookie: ownerCookie },
+    })
+  ).status,
+  404,
+);
+assert.equal(
+  (
+    await fetch(`${baseUrl}${newReceipts[1].url}`, {
+      headers: { cookie: ownerCookie },
+    })
+  ).status,
+  200,
+);
+const saleAfterDelete = (await saleForCorrection()) as unknown as SaleRecord;
+assert.equal(saleAfterDelete.receipts.length, 1);
+assert.equal(saleAfterDelete.receipts[0].id, newReceipts[1].id);
+assert.equal(saleAfterDelete.reconciliation.status, 'divergent');
+assert.deepEqual(saleAfterDelete.payments, saleBeforePriceCorrection.payments);
+assert.equal(saleAfterDelete.productsTotalCents, 128400);
+console.log(
+  'Post-sale prices and manual receipt deletion: authenticated HTTP, CSRF/permission enforcement, current and historical original-sale replay, preserved payments, file 200→404 and immediate reconciliation queries passed.',
 );
 console.log('Production integration flow passed.');

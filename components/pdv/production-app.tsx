@@ -8,7 +8,7 @@ import {
   ChevronDown,
   CircleUserRound,
   History,
-  LayoutDashboard,
+  FileCheck2,
   LoaderCircle,
   LogOut,
   Package,
@@ -71,6 +71,10 @@ import type { BootstrapData } from '@/lib/pdv-types';
 import { ServerReceiptProvider } from '@/components/pdv/server-receipt-runtime';
 import { BackupStatusCard } from '@/components/pdv/backup-status-card';
 import { preloadScannerDecoder } from '@/lib/scanner';
+import {
+  useAppBackGuard,
+  useAppBackHandler,
+} from '@/components/pdv/use-app-back';
 
 const CatalogProductionView = dynamic(
   () =>
@@ -180,9 +184,9 @@ const navigation: Array<{
   { view: 'ranking', label: 'Ranking', short: 'Ranking', icon: Trophy },
   {
     view: 'overview',
-    label: 'Visão geral',
-    short: 'Visão geral',
-    icon: LayoutDashboard,
+    label: 'Comprovantes',
+    short: 'Comprovantes',
+    icon: FileCheck2,
   },
   { view: 'stock', label: 'Estoque', short: 'Estoque', icon: Warehouse },
   { view: 'sales', label: 'Vendas', short: 'Vendas', icon: History },
@@ -367,6 +371,13 @@ function CloudPdv({
   const [guideOpen, setGuideOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [exitOpen, setExitOpen] = useState(false);
+  const [exitBoundary, setExitBoundary] = useState(false);
+  const previousViews = useRef<View[]>([]);
+  const backGuard = useAppBackGuard(
+    () => setExitOpen(true),
+    Boolean(data) && !loadingError,
+  );
   const [installPrompt, setInstallPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(
@@ -530,11 +541,27 @@ function CloudPdv({
 
   const changeView = (view: View) => {
     if (data && !canView(data.user, view)) return;
+    if (view === activeView) return;
+    previousViews.current = [...previousViews.current.slice(-19), activeView];
     if (view !== 'sales') setSaleToOpen(null);
     setActiveView(view);
     setRun((value) => value + 1);
     if (Date.now() - lastReloadAtRef.current >= 60_000) void reload(true);
   };
+  useAppBackHandler(
+    () => {
+      if (!data) return true;
+      let previous = previousViews.current.pop();
+      while (previous && !canView(data.user, previous))
+        previous = previousViews.current.pop();
+      if (!previous) return false;
+      setSaleToOpen(null);
+      setActiveView(previous);
+      setRun((value) => value + 1);
+      return true;
+    },
+    Boolean(data) && !loadingError,
+  );
 
   const productsByCode = useMemo<Record<string, EntryProduct>>(() => {
     const lookup: Record<string, EntryProduct> = {};
@@ -677,7 +704,8 @@ function CloudPdv({
       method: 'POST',
       headers: { 'x-csrf-token': data?.csrfToken ?? session.csrfToken },
     });
-    window.location.reload();
+    backGuard.dispose();
+    window.location.replace('/');
   };
 
   if (loadingError) {
@@ -961,6 +989,48 @@ function CloudPdv({
           storeCode={data.store.code}
           storeName={data.store.name}
         />
+        <Dialog open={exitOpen} onOpenChange={setExitOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Você está no início</DialogTitle>
+              <DialogDescription>
+                Deseja continuar no Atacado ou sair desta página? Voltar não
+                encerra sua sessão.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setExitOpen(false);
+                  backGuard.leave(() => setExitBoundary(true));
+                }}
+              >
+                Sair da página
+              </Button>
+              <Button onClick={() => setExitOpen(false)}>
+                Continuar no sistema
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        {exitBoundary && (
+          <output className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-2xl border bg-white p-4 text-sm shadow-lg">
+            <p>
+              Para sair, use Voltar novamente ou feche esta aba. Sua sessão
+              continua conectada.
+            </p>
+            <Button
+              className="mt-3 w-full"
+              onClick={() => {
+                setExitBoundary(false);
+                backGuard.resume();
+              }}
+            >
+              Continuar no sistema
+            </Button>
+          </output>
+        )}
         <ProfileDialog
           data={data}
           onEntries={() => {
@@ -1024,7 +1094,7 @@ function AuthScreen() {
         setBusy(false);
         return;
       }
-      window.location.assign('/');
+      window.location.replace('/');
     } catch (submissionError) {
       setError(messageOf(submissionError));
       setBusy(false);
@@ -1037,7 +1107,7 @@ function AuthScreen() {
         <RecoveryCodesPanel
           codes={recoveryCodes}
           continueLabel="Concluir"
-          onContinue={() => window.location.assign('/')}
+          onContinue={() => window.location.replace('/')}
         />
       </main>
     );
@@ -1676,8 +1746,8 @@ function GuideDialog({
             cadastro e Reativar para voltar a receber esse produto. Apenas o
             proprietário e os administradores podem alterar a situação.
           </GuideStep>
-          <GuideStep number="Novo" title="Visão geral: conferir comprovantes">
-            No menu da loja, abra Visão geral e escolha o período pela data da
+          <GuideStep number="Novo" title="Comprovantes: conferir os pagamentos">
+            No menu da loja, abra Comprovantes e escolha o período pela data da
             venda. Compare o pago informado com os valores dos comprovantes,
             separados por venda. Toque em um arquivo para abrir a foto ou PDF,
             passe para o próximo ou abra a venda para corrigir dados. Valores

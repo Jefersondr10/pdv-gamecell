@@ -1,4 +1,5 @@
 import { assertCsrf, requireSession } from '@/lib/server/auth';
+import { originalPriceSnapshot } from '@/lib/sale-prices';
 import { can, resolvePermissions } from '@/lib/permissions';
 import { assertPermission } from '@/lib/server/permissions';
 import {
@@ -776,6 +777,8 @@ export async function POST(request: Request) {
           saleId,
           JSON.stringify({
             items: items.length,
+            productsTotalCents,
+            receivedTotalCents,
             receivedDifferenceCents: receivedTotalCents - productsTotalCents,
             operationFingerprint,
             sellerUserId: seller.id,
@@ -961,6 +964,10 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
               received_total_cents AS receivedTotalCents,
               received_difference_cents AS receivedDifferenceCents,
               status,
+              (SELECT json_extract(a.details_json, '$.before') FROM audit_events a
+               WHERE a.store_id = sales.store_id AND a.entity_id = sales.id
+                 AND a.action = 'sale.prices_changed'
+               ORDER BY json_extract(a.details_json, '$.before.revision'), a.created_at, a.id LIMIT 1) AS initialPricesJson,
               (SELECT json_extract(a.details_json, '$.before.sellerUserId') FROM audit_events a
                WHERE a.store_id = sales.store_id AND a.entity_id = sales.id
                  AND a.action = 'sale.participants_changed'
@@ -987,6 +994,7 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
       receivedDifferenceCents: number;
       status: 'completed' | 'cancelled';
       operationDetailsJson: string | null;
+      initialPricesJson: string | null;
       initialSellerUserId: string | null;
       initialCustomerId: string | null;
     }>();
@@ -1025,24 +1033,33 @@ async function findSaleCommit(db: D1Database, storeId: string, saleId: string) {
       }>(),
   ]);
   const details = saleOperationDetails(sale.operationDetailsJson);
-  const productsTotalCents = Number(sale.productsTotalCents);
+  const initialPrices = originalPriceSnapshot(sale.initialPricesJson);
+  const productsTotalCents =
+    details.productsTotalCents ??
+    initialPrices?.totalCents ??
+    Number(sale.productsTotalCents);
   const currentReceivedTotalCents = Number(sale.receivedTotalCents);
-  const currentReceivedDifferenceCents = Number(sale.receivedDifferenceCents);
   const originalDifference = details.receivedDifferenceCents;
+  const originalReceivedTotalCents =
+    details.receivedTotalCents ??
+    (originalDifference === null
+      ? (initialPrices?.receivedTotalCents ?? currentReceivedTotalCents)
+      : productsTotalCents + originalDifference);
   return {
     ...sale,
     number: Number(sale.number),
     productsTotalCents,
-    receivedTotalCents:
-      originalDifference === null
-        ? currentReceivedTotalCents
-        : productsTotalCents + originalDifference,
-    receivedDifferenceCents:
-      originalDifference ?? currentReceivedDifferenceCents,
-    items: items.results.map((item) => ({
-      serial: item.serial,
-      priceCents: Number(item.priceCents),
-    })),
+    receivedTotalCents: originalReceivedTotalCents,
+    receivedDifferenceCents: originalReceivedTotalCents - productsTotalCents,
+    items: initialPrices
+      ? initialPrices.items.map((item) => ({
+          serial: item.serial,
+          priceCents: item.soldPriceCents,
+        }))
+      : items.results.map((item) => ({
+          serial: item.serial,
+          priceCents: Number(item.priceCents),
+        })),
     payments: payments.results.map((payment) => ({
       method: payment.method,
       pixAccountId: payment.pixAccountId,
@@ -1149,11 +1166,19 @@ function saleOperationDetails(detailsJson: string | null) {
       operationFingerprint: null,
       receivedDifferenceCents: null,
       sellerUserId: null,
+      productsTotalCents: null,
+      receivedTotalCents: null,
     };
   }
   try {
     const details = JSON.parse(detailsJson) as Record<string, unknown>;
     return {
+      productsTotalCents: Number.isSafeInteger(details.productsTotalCents)
+        ? (details.productsTotalCents as number)
+        : null,
+      receivedTotalCents: Number.isSafeInteger(details.receivedTotalCents)
+        ? (details.receivedTotalCents as number)
+        : null,
       sellerUserId:
         typeof details.sellerUserId === 'string' ? details.sellerUserId : null,
       operationFingerprint:
@@ -1171,6 +1196,8 @@ function saleOperationDetails(detailsJson: string | null) {
       operationFingerprint: null,
       receivedDifferenceCents: null,
       sellerUserId: null,
+      productsTotalCents: null,
+      receivedTotalCents: null,
     };
   }
 }

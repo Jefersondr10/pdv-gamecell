@@ -27,6 +27,8 @@ const NEGATIVE_LABELS = [
   'agendamento',
   'disponivel',
 ];
+const IDENTIFIER_LINE =
+  /\b(?:cpf|cnpj|documento|identificador|id|autenticacao|controle|e2e|chave|telefone|celular|agencia|conta|data|hora|protocolo|codigo|nsu|linha digitavel|numero|n[º°.]|end.to.end)\b/;
 
 export function extractReceiptAmount(
   sourceText: string,
@@ -39,28 +41,44 @@ export function extractReceiptAmount(
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    const context = [
-      lines[index - 3],
-      lines[index - 2],
-      lines[index - 1],
-      line,
-    ]
+    const context = [lines[index - 3], lines[index - 2], lines[index - 1], line]
       .filter(Boolean)
       .join(' ');
-    const negativeContext = [lines[index - 1], line]
-      .filter(Boolean)
-      .join(' ');
+    const negativeContext = lines[index - 1] ?? '';
     const normalizedContext = normalizeText(context);
     const normalizedNegativeContext = normalizeText(negativeContext);
     const normalizedLine = normalizeText(line);
     const positive = POSITIVE_LABELS.some((label) =>
       normalizedContext.includes(label),
     );
-    const negative = NEGATIVE_LABELS.some((label) =>
-      normalizedNegativeContext.includes(label),
-    );
 
     for (const match of moneyMatches(line)) {
+      const prefix = normalizeText(line.slice(0, match.index));
+      const positivePosition = Math.max(
+        ...[...POSITIVE_LABELS, 'valor'].map((label) =>
+          prefix.lastIndexOf(label),
+        ),
+      );
+      const negativePosition = Math.max(
+        ...NEGATIVE_LABELS.map((label) => prefix.lastIndexOf(label)),
+      );
+      // Amount and balance/tariff can share an OCR/PDF line. Associate each
+      // candidate with its preceding label instead of penalizing the full line.
+      const negative =
+        positivePosition >= 0 || negativePosition >= 0
+          ? negativePosition > positivePosition
+          : NEGATIVE_LABELS.some((label) =>
+              normalizedNegativeContext.includes(label),
+            );
+      if (!match.currency && IDENTIFIER_LINE.test(normalizedLine)) continue;
+      // Bare integers must have an explicit amount label, not merely inherit
+      // one from an earlier line containing a document or transaction number.
+      if (
+        !match.currency &&
+        !match.decimal &&
+        !POSITIVE_LABELS.some((label) => normalizedLine.includes(label))
+      )
+        continue;
       const amountCents = parseMoneyInput(match.value);
       if (amountCents <= 0 || amountCents > 1_000_000_000) continue;
       let score = 0;
@@ -94,17 +112,44 @@ function moneyMatches(line: string) {
     currency: boolean;
     decimal: boolean;
     value: string;
+    index: number;
   }> = [];
+  // Capture the WHOLE numeric token first. A decimal-only regex backtracks
+  // and mistakes the prefix of 19.650 for 19.65, silently losing a zero.
   const pattern =
-    /(?:R\s*[$S]\s*)?(?:\d{1,3}(?:[.\s]\d{3})+|\d+)(?:,\d{2}|\.\d{2})/gi;
+    /(?:R\s*[$S]\s*)?(?:\d{1,3}(?: \d{3})+(?:[.,]\d+)?|\d[\d.,]*)/gi;
   for (const match of line.matchAll(pattern)) {
-    const value = match[0];
-    const prefix = line.slice(Math.max(0, (match.index ?? 0) - 3), match.index);
-    const currency = /R\s*[$S]/i.test(`${prefix}${value}`);
+    const raw = match[0];
+    const start = match.index ?? 0;
+    const before = line[start - 1] ?? '';
+    const after = line[start + raw.length] ?? '';
+    if (/[\p{L}\d.,/+:-]/u.test(before) || /[\p{L}\d.,/+:-]/u.test(after))
+      continue;
+    const currency = /^R\s*[$S]/i.test(raw);
+    if (!currency && (before === '(' || after === ')')) continue;
+    let value = raw.replace(/^R\s*[$S]\s*/i, '').trim();
+    // Do not salvage the prefix of malformed, space-grouped amounts.
+    const following = line.slice(start + raw.length);
+    if (
+      !/[.,]/.test(value) &&
+      /^ +\d/.test(following) &&
+      !/^ +\d+[/:]/.test(following)
+    )
+      continue;
+    // Spaces are grouping separators only in complete groups of three.
+    if (/\s/.test(value)) {
+      if (!/^\d{1,3}(?: \d{3})+(?:,\d{2}|\.\d{2})?$/.test(value)) continue;
+      value = value.replace(/ /g, '');
+    }
+    const br = /^(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}$/.test(value);
+    const dot = /^(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}$/.test(value);
+    const integer = /^(?:\d{1,9}|\d{1,3}(?:\.\d{3})+)$/.test(value);
+    if (!br && !dot && !integer) continue;
     matches.push({
       currency,
-      decimal: /[,.]\d{2}$/.test(value),
+      decimal: br || dot,
       value,
+      index: start,
     });
   }
   return matches;

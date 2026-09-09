@@ -9,9 +9,17 @@ import {
   FileText,
   LoaderCircle,
   RefreshCw,
+  TriangleAlert,
 } from 'lucide-react';
 import { PeriodFilter, localDateKey } from '@/components/pdv/period-filter';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -22,6 +30,9 @@ import {
 import { messageOf, requestJson } from '@/lib/client-api';
 import {
   overviewComparison,
+  overviewFilters,
+  overviewSaleComparison,
+  type OverviewFilter,
   type OverviewPage,
   type OverviewSale,
 } from '@/lib/overview';
@@ -37,12 +48,74 @@ const date = (value: number) =>
     timeStyle: 'short',
   });
 const number = (value: number) => `#${String(value).padStart(5, '0')}`;
-const difference = (value: number) =>
-  value < 0
-    ? `Comprovantes abaixo do pago informado em ${money(-value)}`
-    : value > 0
-      ? `Comprovantes acima do pago informado em ${money(value)}`
-      : 'Comprovantes e pago informado têm o mesmo total';
+function SaleComparison({ sale }: { sale: OverviewSale }) {
+  const state = overviewSaleComparison(sale);
+  const divergent = state === 'below' || state === 'above';
+  return (
+    <div
+      className={cn(
+        'rounded-xl border p-3',
+        divergent
+          ? 'border-amber-300 border-l-4 bg-amber-50'
+          : state === 'matched'
+            ? 'border-emerald-200 bg-emerald-50/70'
+            : 'bg-slate-50/60',
+      )}
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-[11px] font-semibold text-muted-foreground">
+            Pagamento informado
+          </p>
+          <p className="mt-0.5 break-words text-base font-bold tabular-nums">
+            {money(sale.receivedCents)}
+          </p>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold text-muted-foreground">
+            Comprovantes{sale.pendingCount ? ' · parcial' : ''}
+          </p>
+          <p className="mt-0.5 break-words text-base font-bold tabular-nums">
+            {sale.receiptCount ? money(sale.receiptCents) : '—'}
+          </p>
+        </div>
+      </div>
+      <p
+        className={cn(
+          'mt-2 flex flex-wrap items-center gap-1.5 text-xs font-semibold',
+          divergent
+            ? 'text-amber-950'
+            : state === 'matched'
+              ? 'text-emerald-800'
+              : 'text-muted-foreground',
+        )}
+      >
+        {divergent ? (
+          <TriangleAlert className="size-4 shrink-0" />
+        ) : state === 'matched' ? (
+          <Check className="size-4 shrink-0" />
+        ) : (
+          <FileText className="size-4 shrink-0" />
+        )}
+        {divergent ? (
+          <>
+            <span>Conferir diferença:</span>
+            <strong className="text-sm tabular-nums">
+              {money(Math.abs(sale.receiptCents - sale.receivedCents))}{' '}
+              {state === 'below' ? 'abaixo' : 'acima'}
+            </strong>
+          </>
+        ) : state === 'matched' ? (
+          'Valores conferem'
+        ) : state === 'missing' ? (
+          'Sem comprovante anexado'
+        ) : (
+          `Conferência pendente · ${sale.pendingCount} arquivo(s) sem valor`
+        )}
+      </p>
+    </div>
+  );
+}
 
 type Receipt = OverviewSale['receipts'][number];
 function receiptState(receipt: Receipt) {
@@ -67,6 +140,7 @@ export function OverviewProductionView({
   const [period, setPeriod] = useState<SalesPeriod>('today');
   const [day, setDay] = useState(localDateKey);
   const [month, setMonth] = useState(() => localDateKey().slice(0, 7));
+  const [filter, setFilter] = useState<OverviewFilter>('all');
   const [cursors, setCursors] = useState<string[]>(['']);
   const pageIndex = cursors.length - 1;
   const [page, setPage] = useState<OverviewPage | null>(null);
@@ -79,6 +153,7 @@ export function OverviewProductionView({
     period,
     day,
     month,
+    comparison: filter,
     cursor: cursors[pageIndex],
   }).toString();
   const load = useCallback(async () => {
@@ -92,7 +167,19 @@ export function OverviewProductionView({
         `/api/overview?${params}`,
         { signal: request.signal },
       );
-      if (!request.signal.aborted) setPage(result);
+      if (!request.signal.aborted) {
+        setPage(result);
+        setSelected((current) =>
+          result.items.some((sale) =>
+            sale.receipts.some((receipt) => receipt.id === current),
+          )
+            ? current
+            : null,
+        );
+        // OCR can move every remaining row out of a filtered page.
+        if (!result.items.length && result.totals.saleCount && pageIndex > 0)
+          setCursors(['']);
+      }
     } catch (error) {
       if (!request.signal.aborted) setError(messageOf(error));
     } finally {
@@ -101,7 +188,7 @@ export function OverviewProductionView({
         setLoading(false);
       }
     }
-  }, [params]);
+  }, [params, pageIndex]);
   useEffect(() => {
     const initial = setTimeout(() => {
       setPage(null);
@@ -133,7 +220,7 @@ export function OverviewProductionView({
   // One bounded refresh for the whole screen also covers OCR completing before
   // the global status provider has established its initial version baseline.
   useEffect(() => {
-    if (loading || !page?.totals.pendingCount) return;
+    if (loading || !page?.pendingInPeriod) return;
     const timer = setTimeout(() => {
       if (!document.hidden && navigator.onLine !== false) void load();
     }, 30_000);
@@ -152,18 +239,18 @@ export function OverviewProductionView({
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-hidden px-3 py-3 sm:px-6 sm:py-5">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold sm:text-2xl">Visão geral</h1>
+          <h1 className="text-xl font-bold sm:text-2xl">Comprovantes</h1>
           <p className="text-xs text-muted-foreground sm:text-sm">
             Conferência dos pagamentos e comprovantes
           </p>
         </div>
-        <div className="flex w-full items-start gap-2 sm:w-auto">
+        <div className="flex w-full flex-wrap items-end gap-2 sm:w-auto">
           <div className="min-w-0 flex-1">
             <PeriodFilter
               period={period}
               day={day}
               month={month}
-              label="visão geral"
+              label="comprovantes"
               onPeriod={(value) => {
                 setPeriod(value);
                 setCursors(['']);
@@ -177,6 +264,41 @@ export function OverviewProductionView({
                 setCursors(['']);
               }}
             />
+          </div>
+          <div className="min-w-40 flex-1 sm:w-48">
+            <span className="mb-1 block text-xs font-bold text-muted-foreground">
+              Conferência
+            </span>
+            <Select
+              value={filter}
+              onValueChange={(value) => {
+                if (!value) return;
+                setFilter(value as OverviewFilter);
+                setSelected(null);
+                setCursors(['']);
+              }}
+            >
+              <SelectTrigger
+                size="lg"
+                className="h-11 w-full font-bold"
+                aria-label="Filtrar conferência dos comprovantes"
+              >
+                <SelectValue>
+                  {overviewFilters.find((item) => item.value === filter)?.label}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="rounded-xl p-1.5">
+                {overviewFilters.map((item) => (
+                  <SelectItem
+                    key={item.value}
+                    value={item.value}
+                    className="min-h-11 text-sm font-semibold"
+                  >
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Button
             className="size-11 shrink-0"
@@ -229,13 +351,14 @@ export function OverviewProductionView({
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
               <div className="rounded-2xl border bg-white p-3 sm:p-4">
                 <p className="text-xs font-semibold text-muted-foreground">
-                  Pago informado
+                  Pagamento informado
                 </p>
                 <p className="mt-1 break-words text-lg font-bold tabular-nums sm:text-2xl">
                   {money(totals.receivedCents)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {totals.saleCount} venda(s) no período
+                  {totals.saleCount} venda(s){' '}
+                  {filter === 'all' ? 'no período' : 'neste filtro'}
                 </p>
               </div>
               <div className="rounded-2xl border bg-white p-3 sm:p-4">
@@ -260,24 +383,50 @@ export function OverviewProductionView({
                   'rounded-xl border p-3 text-sm',
                   comparison === 'matched'
                     ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                    : 'border-border bg-white',
+                    : comparison === 'review'
+                      ? 'border-amber-300 border-l-4 bg-amber-50 text-amber-950'
+                      : 'border-border bg-white',
                 )}
               >
                 <p className="flex items-center gap-2 font-semibold">
                   {comparison === 'matched' && (
                     <Check className="size-4 shrink-0" />
                   )}
+                  {comparison === 'review' && (
+                    <TriangleAlert className="size-5 shrink-0" />
+                  )}
                   {comparison === 'matched'
-                    ? 'Valores conferem com os pagamentos informados'
+                    ? 'Valores conferem'
                     : comparison === 'pending'
                       ? 'Conferência incompleta'
-                      : 'Revisar comprovantes por venda'}
+                      : `${totals.divergentCount} venda(s) com diferença`}
                 </p>
+                {comparison === 'review' && (
+                  <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                    {totals.shortfallCents > 0 && (
+                      <span>
+                        Abaixo do informado{' '}
+                        <strong className="ml-1 text-base tabular-nums">
+                          {money(totals.shortfallCents)}
+                        </strong>
+                      </span>
+                    )}
+                    {totals.surplusCents > 0 && (
+                      <span>
+                        Acima do informado{' '}
+                        <strong className="ml-1 text-base tabular-nums">
+                          {money(totals.surplusCents)}
+                        </strong>
+                      </span>
+                    )}
+                  </div>
+                )}
                 <p className="mt-1 text-xs">
-                  {comparison === 'pending'
-                    ? 'O total dos comprovantes ainda não permite concluir a conferência.'
-                    : difference(totals.receiptCents - totals.receivedCents) +
-                      '.'}
+                  {comparison === 'matched'
+                    ? 'Comprovantes conferidos com os pagamentos informados, venda por venda.'
+                    : comparison === 'pending'
+                      ? 'Há documentos ausentes ou ainda sem valor identificado.'
+                      : 'Confira as vendas sinalizadas abaixo. Diferenças entre vendas não se compensam.'}
                 </p>
                 {(totals.pendingCount > 0 ||
                   totals.missingCount > 0 ||
@@ -313,15 +462,17 @@ export function OverviewProductionView({
             )}
             {!totals.saleCount && (
               <div className="rounded-2xl border bg-white p-8 text-center text-sm text-muted-foreground">
-                Nenhuma venda concluída neste período.
+                {filter === 'all'
+                  ? 'Nenhuma venda concluída neste período.'
+                  : 'Nenhuma venda encontrada com este filtro no período.'}
               </div>
             )}
             {totals.saleCount > 0 && (
               <div className="flex flex-wrap items-center justify-between gap-1 px-1">
                 <h2 className="text-sm font-bold">Comprovantes por venda</h2>
                 <span className="text-xs text-muted-foreground">
-                  Página {pageIndex + 1} · {totals.saleCount} venda(s) no
-                  período
+                  Página {pageIndex + 1} · {totals.saleCount} venda(s){' '}
+                  {filter === 'all' ? 'no período' : 'neste filtro'}
                 </span>
               </div>
             )}
@@ -350,36 +501,7 @@ export function OverviewProductionView({
                       <ArrowRight className="size-3.5" />
                     </Button>
                   </div>
-                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-                    <span>
-                      Pago informado{' '}
-                      <strong className="ml-1 tabular-nums">
-                        {money(sale.receivedCents)}
-                      </strong>
-                    </span>
-                    <span>
-                      Comprovantes{sale.pendingCount ? ' (parcial)' : ''}{' '}
-                      <strong className="ml-1 tabular-nums">
-                        {money(sale.receiptCents)}
-                      </strong>
-                    </span>
-                  </div>
-                  <p
-                    className={cn(
-                      'text-xs font-medium',
-                      sale.receiptCount &&
-                        !sale.pendingCount &&
-                        sale.receiptCents === sale.receivedCents
-                        ? 'text-emerald-700'
-                        : 'text-muted-foreground',
-                    )}
-                  >
-                    {!sale.receiptCount
-                      ? 'Sem comprovante anexado'
-                      : sale.pendingCount
-                        ? `${sale.pendingCount} arquivo(s) sem valor identificado · conferência pendente`
-                        : difference(sale.receiptCents - sale.receivedCents)}
-                  </p>
+                  <SaleComparison sale={sale} />
                   {sale.cashCents > 0 && (
                     <p className="text-xs text-muted-foreground">
                       Inclui {money(sale.cashCents)} em dinheiro.

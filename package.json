@@ -21,6 +21,8 @@
     "test:operations": "node --experimental-transform-types scripts/verify-operation-recovery.mjs",
     "test:uploads": "node --experimental-transform-types scripts/verify-client-upload.mjs",
     "test:receipt-jobs": "node scripts/verify-receipt-jobs.mjs",
+    "test:receipt-delete": "node --experimental-transform-types scripts/verify-receipt-delete.ts",
+    "test:sale-prices": "node --experimental-transform-types scripts/verify-sale-prices.ts",
     "test:backup": "node --experimental-strip-types scripts/verify-backup-status.ts",
     "test:backup-reader": "node scripts/verify-backup-reader.mjs",
     "test:backup-alert-settings": "node --experimental-strip-types scripts/verify-backup-alert-settings.ts",
@@ -31,6 +33,7 @@
     "test:sales-filters": "node --experimental-transform-types scripts/verify-sales-filters.ts",
     "test:rankings": "node --experimental-transform-types scripts/verify-rankings.ts",
     "test:overview": "node --experimental-transform-types scripts/verify-overview.ts",
+    "test:app-back": "node --experimental-transform-types scripts/verify-app-back.ts",
     "test:stock-whatsapp": "node --experimental-strip-types scripts/verify-stock-whatsapp.ts",
     "test:receipt-amount": "node --experimental-strip-types scripts/verify-receipt-amount.ts",
     "test:receipt-reconciliation": "node --experimental-strip-types scripts/verify-receipt-reconciliation.ts"

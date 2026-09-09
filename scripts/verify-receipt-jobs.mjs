@@ -87,7 +87,7 @@ await processReceiptJob(db, files, 'http://isolated.test', clock);
 assert.equal(job().status, 'done');
 assert.equal(job().attempts, 2);
 
-for (const override of ['manual', 'cancel']) {
+for (const override of ['manual', 'cancel', 'delete']) {
   seed();
   mode = 'hold';
   release = null;
@@ -97,11 +97,17 @@ for (const override of ['manual', 'cancel']) {
     db.database.exec(
       "UPDATE attachments SET receipt_amount_cents=12345, receipt_amount_source='manual'; UPDATE receipt_ocr_jobs SET generation=generation+1,status='cancelled',lease_token=NULL;",
     );
-  } else db.database.exec("UPDATE sales SET status='cancelled'");
+  } else if (override === 'delete') db.database.exec('DELETE FROM attachments');
+  else db.database.exec("UPDATE sales SET status='cancelled'");
   release();
   await running;
-  assert.equal(amount().amount, override === 'manual' ? 12345 : null);
-  assert.equal(job().status, 'cancelled');
+  if (override === 'delete') {
+    assert.equal(amount(), undefined);
+    assert.equal(job(), undefined);
+  } else {
+    assert.equal(amount().amount, override === 'manual' ? 12345 : null);
+    assert.equal(job().status, 'cancelled');
+  }
 }
 seed();
 mode = 'unavailable';

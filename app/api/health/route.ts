@@ -6,10 +6,10 @@ export async function GET() {
   try {
     const schema = await runtime()
       .DB.prepare(
-        "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name IN ('sales', 'attachments', 'users', 'inventory_units', 'receipt_ocr_jobs', 'store_backup_alert_settings')",
+        "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name IN ('sales', 'attachments', 'users', 'inventory_units', 'receipt_ocr_jobs', 'store_backup_alert_settings', 'file_deletion_jobs')",
       )
       .first<{ count: number }>();
-    if (Number(schema?.count) !== 6)
+    if (Number(schema?.count) !== 7)
       return json({ ok: false }, { status: 503 });
     // Do not advertise a healthy release when its required additive migration is missing.
     await runtime().DB.prepare('SELECT name_key FROM clients LIMIT 0').all();

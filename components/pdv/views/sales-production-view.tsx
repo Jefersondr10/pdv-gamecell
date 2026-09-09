@@ -34,6 +34,9 @@ import {
 import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
 import { SaleDetailsDialog } from '@/components/pdv/sale-details-dialog';
+import { DeleteReceiptButton } from '@/components/pdv/delete-receipt-button';
+import { SalePricesEditor } from '@/components/pdv/sale-prices-editor';
+import type { SalePrices } from '@/lib/sale-prices';
 import {
   SaleParticipantsEditor,
   useSaleParticipants,
@@ -247,6 +250,8 @@ export function SalesProductionView({
     'sales.payments',
     'sales.attachments',
     'sales.receipts',
+    'sales.receipts.delete',
+    'sales.prices',
     'sales.status',
   ]);
   const filterParams = useMemo(() => {
@@ -984,6 +989,62 @@ export function SalesProductionView({
       <EditSaleDialog
         data={data}
         key={editSale?.id ?? 'closed-sale-editor'}
+        onPricesChanged={(saleId, value) => {
+          const update = (record: SaleRecord | null) => {
+            if (!record || record.id !== saleId) return record;
+            const items = record.items.map((item) => ({
+              ...item,
+              soldPriceCents:
+                value.items.find((updated) => updated.id === item.id)
+                  ?.soldPriceCents ?? item.soldPriceCents,
+            }));
+            return {
+              ...record,
+              items,
+              productsTotalCents: value.productsTotalCents,
+              receivedTotalCents: value.receivedTotalCents,
+              receivedDifferenceCents: value.receivedDifferenceCents,
+              priceDifferenceCents: value.priceDifferenceCents,
+              reconciliation: deriveReceiptReconciliation(
+                record.receipts,
+                value.productsTotalCents,
+              ),
+            };
+          };
+          setPage((current) => ({
+            ...current,
+            items: current.items.map((record) => update(record)!),
+          }));
+          setEditSale(update);
+          setDetailSale(update);
+          setReportSale(update);
+          window.dispatchEvent(new Event('pdv:sales-changed'));
+        }}
+        onReceiptDeleted={(saleId, receiptId) => {
+          const update = (record: SaleRecord | null) => {
+            if (!record || record.id !== saleId) return record;
+            const receipts = record.receipts.filter(
+              (receipt) => receipt.id !== receiptId,
+            );
+            return {
+              ...record,
+              receipts,
+              reconciliation: deriveReceiptReconciliation(
+                receipts,
+                record.productsTotalCents,
+              ),
+            };
+          };
+          // Confirmed deletion is reflected immediately, even if the list
+          // refresh fails. Unrelated drafts in the keyed editor stay intact.
+          setPage((current) => ({
+            ...current,
+            items: current.items.map((record) => update(record)!),
+          }));
+          setEditSale(update);
+          setDetailSale(update);
+          setReportSale(update);
+        }}
         onChanged={async () => {
           analyticsCacheRef.current.clear();
           listDataKeyRef.current = '';
@@ -1195,15 +1256,26 @@ function EditSaleDialog({
   data,
   onOpenChange,
   onChanged,
+  onReceiptDeleted,
+  onPricesChanged,
 }: {
   sale: SaleRecord | null;
   data: BootstrapData;
   onOpenChange: (open: boolean) => void;
   onChanged: () => Promise<void>;
+  onReceiptDeleted: (saleId: string, receiptId: string) => void;
+  onPricesChanged: (saleId: string, value: SalePrices) => void;
 }) {
   const canPayments = can(data.user, 'sales.payments');
   const canAttachments = can(data.user, 'sales.attachments');
   const canReceipts = can(data.user, 'sales.receipts');
+  const canDeleteReceipts = can(data.user, 'sales.receipts.delete');
+  const [priceEditorOpen, setPriceEditorOpen] = useState(false);
+  const deletedReceiptIds = useRef(new Set<string>());
+  const [deletedReceipts, setDeletedReceipts] = useState(new Set<string>());
+  const activeReceipts = (sale?.receipts ?? []).filter(
+    (receipt) => !deletedReceipts.has(receipt.id),
+  );
   const canParticipants =
     can(data.user, 'sales.participants') && sale?.status === 'completed';
   const participants = useSaleParticipants(
@@ -1236,7 +1308,10 @@ function EditSaleDialog({
     setSavedReceiptValues((current) => {
       const next = { ...current };
       for (const row of jobs)
-        if (!dirtyReceiptIds.current.has(row.id))
+        if (
+          !dirtyReceiptIds.current.has(row.id) &&
+          !deletedReceiptIds.current.has(row.id)
+        )
           next[row.id] = { amountCents: row.amountCents, source: row.source };
       return next;
     });
@@ -1272,11 +1347,11 @@ function EditSaleDialog({
   const [notice, setNotice] = useState('');
 
   const existingAttachmentCount = sale
-    ? sale.receipts.length +
+    ? activeReceipts.length +
       sale.items.reduce((total, item) => total + item.photos.length, 0)
     : 0;
   const existingAttachmentBytes = sale
-    ? sale.receipts.reduce((total, file) => total + file.sizeBytes, 0) +
+    ? activeReceipts.reduce((total, file) => total + file.sizeBytes, 0) +
       sale.items.reduce(
         (total, item) =>
           total + item.photos.reduce((sum, file) => sum + file.sizeBytes, 0),
@@ -1348,23 +1423,21 @@ function EditSaleDialog({
     additionalPaymentCents > 0 &&
     additionalPaymentCents <= remainingPaymentCents &&
     (paymentMethod !== 'pix' || Boolean(paymentPixAccountId));
-  const changedSavedReceiptValues = (sale?.receipts ?? []).flatMap(
-    (receipt) => {
-      if (serverReceipts.enabled && !dirtyReceipts.has(receipt.id)) return [];
-      const value = savedReceiptValues[receipt.id] ?? {
-        amountCents: null,
-        source: null,
-      };
-      return value.amountCents !== receipt.receiptAmountCents ||
-        value.source !== receipt.receiptAmountSource
-        ? [{ id: receipt.id, ...value }]
-        : [];
-    },
-  );
+  const changedSavedReceiptValues = activeReceipts.flatMap((receipt) => {
+    if (serverReceipts.enabled && !dirtyReceipts.has(receipt.id)) return [];
+    const value = savedReceiptValues[receipt.id] ?? {
+      amountCents: null,
+      source: null,
+    };
+    return value.amountCents !== receipt.receiptAmountCents ||
+      value.source !== receipt.receiptAmountSource
+      ? [{ id: receipt.id, ...value }]
+      : [];
+  });
   const reconciliation = sale
     ? deriveReceiptReconciliation(
         [
-          ...sale.receipts.map(
+          ...activeReceipts.map(
             (receipt) =>
               savedReceiptValues[receipt.id] ?? {
                 amountCents: receipt.receiptAmountCents,
@@ -1415,7 +1488,10 @@ function EditSaleDialog({
       const result = await prepareMediaSelection({
         current: receiptFiles,
         incoming,
-        maxFiles: Math.max(0, MEDIA_LIMITS.saleReceipts - sale.receipts.length),
+        maxFiles: Math.max(
+          0,
+          MEDIA_LIMITS.saleReceipts - activeReceipts.length,
+        ),
         allowPdf: true,
         maxDimension: 1_920,
         quality: 0.8,
@@ -1490,7 +1566,8 @@ function EditSaleDialog({
               <DialogDescription>
                 Altere o acompanhamento, complete um pagamento pendente ou
                 acrescente anexos. Com permissão, também troque cliente e
-                vendedor. Produtos, SNs e preços permanecem protegidos.
+                vendedor e corrija os preços desta venda. Produtos e SNs
+                permanecem protegidos.
               </DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 overscroll-contain sm:p-5">
@@ -1553,6 +1630,23 @@ function EditSaleDialog({
                   disabled={preparing || uploadBusy}
                 />
               )}
+
+              {can(data.user, 'sales.prices') &&
+                sale.status === 'completed' && (
+                  <SalePricesEditor
+                    sale={sale}
+                    csrfToken={data.csrfToken}
+                    disabled={preparing || uploadBusy}
+                    onEditingChange={setPriceEditorOpen}
+                    onBusyChange={setUploadBusy}
+                    onSaved={(value) => {
+                      onPricesChanged(sale.id, value);
+                      setNotice(
+                        'Preços da venda atualizados. Os pagamentos e preços padrão foram mantidos.',
+                      );
+                    }}
+                  />
+                )}
 
               {canPayments && sale.status === 'completed' && (
                 <section className="rounded-2xl border p-4">
@@ -1938,7 +2032,7 @@ function EditSaleDialog({
                     <div>
                       <h3 className="font-extrabold">Comprovantes</h3>
                       <p className="text-xs text-muted-foreground">
-                        Foto, imagem ou PDF · {sale.receipts.length} de{' '}
+                        Foto, imagem ou PDF · {activeReceipts.length} de{' '}
                         {MEDIA_LIMITS.saleReceipts} já anexados
                       </p>
                     </div>
@@ -1950,7 +2044,7 @@ function EditSaleDialog({
                       !canAttachments ||
                       preparing ||
                       uploadBusy ||
-                      sale.receipts.length + receiptFiles.length >=
+                      activeReceipts.length + receiptFiles.length >=
                         MEDIA_LIMITS.saleReceipts ||
                       remainingAttachmentCount <= selectedFiles.length
                     }
@@ -1963,16 +2057,61 @@ function EditSaleDialog({
                     {serverReceipts.error}
                   </output>
                 )}
-                {sale.receipts.length > 0 && (
+                {activeReceipts.length > 0 && (
                   <div className="mt-3 space-y-2">
-                    {sale.receipts.map((receipt) => (
+                    {activeReceipts.map((receipt) => (
                       <SavedReceiptValueEditor
+                        receiptAction={
+                          canDeleteReceipts && sale.status === 'completed' ? (
+                            <DeleteReceiptButton
+                              receipt={receipt}
+                              saleId={sale.id}
+                              csrfToken={data.csrfToken}
+                              disabled={preparing || uploadBusy}
+                              onBusyChange={setUploadBusy}
+                              onDeleted={(cleanupPending) => {
+                                deletedReceiptIds.current.add(receipt.id);
+                                setDeletedReceipts(
+                                  new Set(deletedReceiptIds.current),
+                                );
+                                dirtyReceiptIds.current.delete(receipt.id);
+                                setDirtyReceipts(
+                                  new Set(dirtyReceiptIds.current),
+                                );
+                                setSavedReceiptValues((current) => {
+                                  const next = { ...current };
+                                  delete next[receipt.id];
+                                  return next;
+                                });
+                                receiptValueOperationIdRef.current =
+                                  createOperationId();
+                                setError('');
+                                setNotice(
+                                  cleanupPending
+                                    ? 'Comprovante removido da venda. A limpeza do arquivo continuará no servidor.'
+                                    : 'Comprovante excluído. A venda e os pagamentos foram mantidos.',
+                                );
+                                onReceiptDeleted(sale.id, receipt.id);
+                                window.dispatchEvent(
+                                  new Event('pdv:sales-changed'),
+                                );
+                                window.dispatchEvent(
+                                  new Event('pdv:receipts-saved'),
+                                );
+                              }}
+                            />
+                          ) : undefined
+                        }
                         serverJob={serverReceipts.jobs[receipt.id]}
                         onServerRetry={() => serverReceipts.retry(receipt.id)}
                         disabled={!canReceipts || preparing || uploadBusy}
                         key={receipt.id}
                         onAutoValueFound={async (value) => {
-                          if (!canReceipts) return;
+                          if (
+                            !canReceipts ||
+                            deletedReceiptIds.current.has(receipt.id)
+                          )
+                            return;
                           await requestJson(
                             `/api/sales/${sale.id}/receipt-values`,
                             {
@@ -1991,6 +2130,7 @@ function EditSaleDialog({
                           await onChanged();
                         }}
                         onValueChange={(value) => {
+                          if (deletedReceiptIds.current.has(receipt.id)) return;
                           dirtyReceiptIds.current.add(receipt.id);
                           setDirtyReceipts(new Set(dirtyReceiptIds.current));
                           setSavedReceiptValues((current) => ({
@@ -2146,6 +2286,12 @@ function EditSaleDialog({
               </div>
             </div>
             <DialogFooter className="m-0 shrink-0 flex-col rounded-none border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:flex-col">
+              {priceEditorOpen && (
+                <output className="text-xs text-muted-foreground">
+                  Salve ou cancele a edição dos preços antes de salvar as demais
+                  alterações.
+                </output>
+              )}
               {error && (
                 <p
                   className="w-full rounded-xl bg-destructive/10 p-2.5 text-left text-sm font-semibold whitespace-normal text-destructive"
@@ -2167,6 +2313,7 @@ function EditSaleDialog({
                   disabled={
                     preparing ||
                     uploadBusy ||
+                    priceEditorOpen ||
                     invalidPaymentCorrection ||
                     queuedPaymentCents > pendingPaymentCents ||
                     (remainingPaymentCents > 0 &&

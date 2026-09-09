@@ -1,4 +1,6 @@
 'use client';
+import { useAppBackHandler } from '@/components/pdv/use-app-back';
+import { entryBackStep } from '@/lib/app-back';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -136,6 +138,18 @@ export function EntryWizard({
   const serialsRef = useRef<SerialItem[]>([]);
   const pendingSerialKeysRef = useRef(new Map<string, number>());
   const serialGenerationRef = useRef(0);
+  const goBack = () => {
+    if (saving || preparingPhotos) return true;
+    const previous = entryBackStep(step);
+    if (!previous) return false;
+    serialGenerationRef.current += 1;
+    pendingSerialKeysRef.current.clear();
+    setSerialChecksPending(0);
+    setStep(previous);
+    setAnnouncement('Etapa anterior. Os dados preenchidos foram mantidos.');
+    return true;
+  };
+  useAppBackHandler(goBack, true, 10);
   const existingSerialSet = useMemo(
     () => new Set(existingTestSerials),
     [existingTestSerials],
@@ -410,12 +424,7 @@ export function EntryWizard({
           announcement={announcement}
           checking={serialChecksPending > 0}
           onAccepted={acceptSerial}
-          onBack={() => {
-            serialGenerationRef.current += 1;
-            pendingSerialKeysRef.current.clear();
-            setSerialChecksPending(0);
-            setStep('product-confirm');
-          }}
+          onBack={goBack}
           onNext={() => {
             serialGenerationRef.current += 1;
             pendingSerialKeysRef.current.clear();
@@ -440,7 +449,7 @@ export function EntryWizard({
 
       {step === 'photos' && product && (
         <PhotoStage
-          onBack={() => setStep('serials')}
+          onBack={goBack}
           onFiles={(files) => {
             if (preparingPhotos) return;
             setPreparingPhotos(true);
@@ -502,7 +511,7 @@ export function EntryWizard({
       {step === 'review' && product && (
         <EntryReview
           error={submitError}
-          onBack={() => setStep('photos')}
+          onBack={goBack}
           onConfirm={async () => {
             if (committedRef.current || !commercialCode) return;
             committedRef.current = true;

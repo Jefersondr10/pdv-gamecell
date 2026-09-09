@@ -48,7 +48,7 @@ rollback() {
 trap 'status=$?; if test "$status" -ne 0 && test "$config_started" = 1; then rollback; fi; systemctl start atacadoapple-backup.timer' EXIT
 # Online SQLite backup + additive migration; never replays historical seeds.
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-receipt-migration.mjs /data/pdv.sqlite
-docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-client-identity-migration.mjs /data/pdv.sqlite
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-receipt-delete-migration.mjs /data/pdv.sqlite
 config_started=1
 cp "$source_dir/deploy/hostinger/compose.yaml" compose.yaml
 sed -i "s/^PDV_IMAGE=.*/PDV_IMAGE=atacadoapple:$release/" .env

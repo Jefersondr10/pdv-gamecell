@@ -23,8 +23,10 @@ export const PERMISSION_GROUPS = [
         'Alterar cliente e vendedor de vendas registradas',
       ],
       ['sales.payments', 'Adicionar e corrigir pagamentos'],
+      ['sales.prices', 'Alterar preços de produtos em vendas realizadas'],
       ['sales.attachments', 'Anexar fotos e comprovantes'],
       ['sales.receipts', 'Corrigir valores e reler comprovantes'],
+      ['sales.receipts.delete', 'Excluir comprovantes manualmente'],
       ['sales.status', 'Alterar status do pedido'],
       ['sales.cancel', 'Cancelar vendas'],
     ],
@@ -33,7 +35,7 @@ export const PERMISSION_GROUPS = [
     label: 'Análise',
     items: [
       ['ranking', 'Acessar rankings'],
-      ['overview', 'Acessar visão geral e comprovantes'],
+      ['overview', 'Acessar comprovantes e conferência de pagamentos'],
     ],
   },
   {
@@ -68,6 +70,8 @@ export type PermissionSubject = {
   permissions?: readonly Permission[];
 };
 const MANAGER_ONLY: Permission[] = [
+  'sales.prices',
+  'sales.receipts.delete',
   'sales.cancel',
   'sales.participants',
   'clients.manage',
@@ -81,8 +85,10 @@ export const PERMISSION_PARENTS: Partial<
 > = {
   'sell.assign': ['sell'],
   'sales.payments': ['sales'],
+  'sales.prices': ['sales'],
   'sales.attachments': ['sales'],
   'sales.receipts': ['sales'],
+  'sales.receipts.delete': ['sales'],
   'sales.status': ['sales'],
   'sales.cancel': ['sales'],
   'sales.participants': ['sales'],

@@ -1,13 +1,23 @@
 'use client';
 
 import * as React from 'react';
+import { BackLayerDepth, useBackDismiss } from '@/components/pdv/use-app-back';
 import { AlertDialog as AlertDialogPrimitive } from '@base-ui/react/alert-dialog';
 
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
 function AlertDialog({ ...props }: AlertDialogPrimitive.Root.Props) {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
+  const back = useBackDismiss(props);
+  return (
+    <BackLayerDepth value={back.depth}>
+      <AlertDialogPrimitive.Root
+        data-slot="alert-dialog"
+        {...props}
+        {...back.rootProps}
+      />
+    </BackLayerDepth>
+  );
 }
 
 function AlertDialogTrigger({ ...props }: AlertDialogPrimitive.Trigger.Props) {

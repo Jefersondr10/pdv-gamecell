@@ -76,6 +76,7 @@ export function routePermissions(request: Request): Permission[] | null {
       : ['sell'];
   if (path === '/api/sales/groups') return ['sales', 'ranking'];
   if (/^\/api\/sales\/[^/]+\/payments$/.test(path)) return ['sales.payments'];
+  if (/^\/api\/sales\/[^/]+\/prices$/.test(path)) return ['sales.prices'];
   if (/^\/api\/sales\/[^/]+\/attachments$/.test(path))
     return ['sales.attachments'];
   if (/^\/api\/sales\/[^/]+\/cancel$/.test(path)) return ['sales.cancel'];
@@ -84,6 +85,8 @@ export function routePermissions(request: Request): Permission[] | null {
     return ['sales.participants'];
   if (/^\/api\/sales\/[^/]+\/receipt-values$/.test(path))
     return ['sales.receipts'];
+  if (/^\/api\/sales\/[^/]+\/receipts\/[^/]+$/.test(path))
+    return ['sales.receipts.delete'];
   if (/^\/api\/sales\/[^/]+\/receipt-ocr$/.test(path))
     return read ? ['sales', 'overview'] : ['sales.receipts'];
   if (path === '/api/receipt-ocr/status') return ['sales', 'overview', 'sell'];

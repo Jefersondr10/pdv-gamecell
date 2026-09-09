@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { SqliteDatabase } from '../lib/server/node/sqlite.mjs';
 import { readOverview } from '../lib/server/overview.ts';
-import { overviewComparison } from '../lib/overview.ts';
+import { overviewComparison, overviewSaleComparison } from '../lib/overview.ts';
 
 const db = new SqliteDatabase(':memory:');
 db.database.exec(`
@@ -84,6 +84,8 @@ try {
     pendingCount: 0,
     missingCount: 0,
     divergentCount: 0,
+    shortfallCents: 0,
+    surplusCents: 0,
   });
   assert.equal(overviewComparison(page.totals), 'matched');
   assert.equal(page.items[0].receipts.length, 2);
@@ -99,6 +101,13 @@ try {
   assert.equal(page.totals.receivedCents, page.totals.receiptCents);
   assert.equal(page.totals.divergentCount, 2);
   assert.equal(overviewComparison(page.totals), 'review');
+  assert.equal(page.totals.shortfallCents, 100);
+  assert.equal(page.totals.surplusCents, 100);
+  assert.equal((await read('offset', 'comparison=matched')).items.length, 0);
+  assert.equal((await read('offset', 'comparison=divergent')).items.length, 2);
+  sale('offset-pending', 1000, 'offset');
+  receipt('offset-pending-r', 'offset-pending', null, 'offset');
+  assert.equal(overviewComparison((await read('offset')).totals), 'review');
 
   receipt('pending', 'one', null);
   db.database.exec(
@@ -132,6 +141,75 @@ try {
   assert.equal(
     (await read('a', 'q=foreign&saleId=foreign-sale')).totals.saleCount,
     3,
+  );
+  for (const [filter, ids] of [
+    ['matched', ['last-ms']],
+    ['pending', ['one']],
+    ['missing', ['missing']],
+    ['divergent', []],
+  ] as const) {
+    const filtered = await read('a', `comparison=${filter}`);
+    assert.deepEqual(
+      filtered.items.map((item) => item.id),
+      ids,
+    );
+    assert.equal(filtered.totals.saleCount, ids.length);
+  }
+  assert.equal(
+    overviewSaleComparison((await read('a', 'comparison=matched')).items[0]),
+    'matched',
+  );
+  assert.equal(
+    overviewSaleComparison((await read('a', 'comparison=pending')).items[0]),
+    'pending',
+  );
+  assert.equal(
+    overviewSaleComparison((await read('a', 'comparison=missing')).items[0]),
+    'missing',
+  );
+  const differences = (await read('offset', 'comparison=divergent')).items;
+  assert.deepEqual(differences.map(overviewSaleComparison).sort(), [
+    'above',
+    'below',
+  ]);
+  // The filter precedes pagination and totals; newer unmatched sales cannot hide matches.
+  for (let i = 0; i < 45; i++) {
+    sale(`f${i}`, 100, 'filtered', midnight + i);
+    receipt(`fr${i}`, `f${i}`, i % 2 === 0 ? 100 : null, 'filtered');
+  }
+  const filteredFirst = await read('filtered', 'comparison=matched');
+  const filteredSecond = await read(
+    'filtered',
+    `comparison=matched&cursor=${encodeURIComponent(filteredFirst.nextCursor!)}`,
+  );
+  assert.equal(filteredFirst.items.length, 20);
+  assert.equal(filteredSecond.items.length, 3);
+  assert.equal(filteredFirst.totals.saleCount, 23);
+  assert.equal(filteredFirst.pendingInPeriod, 22);
+  assert.equal(filteredFirst.totals.receivedCents, 2300);
+  assert.deepEqual(filteredFirst.totals, filteredSecond.totals);
+  assert.equal(
+    new Set(
+      [...filteredFirst.items, ...filteredSecond.items].map((item) => item.id),
+    ).size,
+    23,
+  );
+  // OCR completing moves the sale between filters immediately on reload.
+  db.database.exec(
+    "UPDATE attachments SET receipt_amount_cents = 100 WHERE id = 'fr1'",
+  );
+  assert.equal(
+    (await read('filtered', 'comparison=matched')).totals.saleCount,
+    24,
+  );
+  assert.equal(
+    (await read('filtered', 'comparison=pending')).totals.saleCount,
+    21,
+  );
+  await assert.rejects(
+    read('a', 'comparison=wrong'),
+    (error: unknown) =>
+      error instanceof Error && 'status' in error && error.status === 400,
   );
 
   for (let i = 0; i < 43; i++) {

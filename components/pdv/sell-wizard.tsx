@@ -1,4 +1,6 @@
 'use client';
+import { useAppBackHandler } from '@/components/pdv/use-app-back';
+import { saleBackStep } from '@/lib/app-back';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -254,6 +256,22 @@ export function SellWizard({
   const operationIdRef = useRef(createOperationId());
   const checkingSerialRef = useRef(false);
   const serialLookupGenerationRef = useRef(0);
+  const goBack = () => {
+    if (saving || preparingPhotos || preparingReceipts) return true;
+    const previous = saleBackStep(step, items.length > 0);
+    if (!previous) return false;
+    serialLookupGenerationRef.current += 1;
+    checkingSerialRef.current = false;
+    setCheckingSerial(false);
+    setStep(previous);
+    setAnnouncement(
+      previous === 'items'
+        ? 'Revise os aparelhos ou siga novamente para o pagamento.'
+        : 'Etapa anterior. Os dados preenchidos foram mantidos.',
+    );
+    return true;
+  };
+  useAppBackHandler(goBack, true, 10);
   const draftValue = useMemo(
     () => ({
       step,
@@ -788,7 +806,7 @@ export function SellWizard({
           candidate={pendingSerial}
           checking={checkingSerial}
           onAccepted={acceptSerial}
-          onBack={() => setStep(items.length > 0 ? 'items' : 'customer')}
+          onBack={goBack}
           onConfirm={() => {
             setStep('photo');
             setAnnouncement('Etapa 3. Fotografe o aparelho.');
@@ -811,7 +829,7 @@ export function SellWizard({
       {step === 'photo' && pendingSerial && (
         <SalePhotoStage
           candidate={pendingSerial}
-          onBack={() => setStep('serial')}
+          onBack={goBack}
           onFiles={prepareItemPhotos}
           onNext={() => {
             setStep('price');
@@ -828,7 +846,7 @@ export function SellWizard({
       {step === 'price' && pendingSerial && pendingProduct && (
         <PriceStage
           candidate={pendingSerial}
-          onBack={() => setStep('photo')}
+          onBack={goBack}
           onChange={setPrice}
           onNext={addPendingItem}
           product={pendingProduct}
@@ -855,12 +873,7 @@ export function SellWizard({
         <PaymentStage
           itemCount={items.length}
           onAdd={addPayment}
-          onBack={() => {
-            setStep('items');
-            setAnnouncement(
-              'Revise os aparelhos ou siga novamente para o pagamento.',
-            );
-          }}
+          onBack={goBack}
           onNext={() => {
             setStep('receipt');
             setAnnouncement(
@@ -881,7 +894,7 @@ export function SellWizard({
       {step === 'receipt' && (
         <ReceiptStage
           files={receiptFiles}
-          onBack={() => setStep('payments')}
+          onBack={goBack}
           onClear={() => {
             setReceiptFiles([]);
             setReceiptValues([]);
@@ -926,7 +939,7 @@ export function SellWizard({
             setStep('items');
             setAnnouncement('Revise os aparelhos antes de finalizar a venda.');
           }}
-          onBack={() => setStep('receipt')}
+          onBack={goBack}
           onConfirm={async () => {
             if (
               defaultSellerId &&

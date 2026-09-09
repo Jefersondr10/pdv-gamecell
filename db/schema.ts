@@ -521,6 +521,19 @@ export const receiptOcrJobs = sqliteTable(
   ],
 );
 
+// Transactional outbox: metadata removal cannot leave untracked private files.
+export const fileDeletionJobs = sqliteTable(
+  'file_deletion_jobs',
+  {
+    operationId: text('operation_id').primaryKey(),
+    r2Key: text('r2_key').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [index('idx_file_deletion_ready').on(table.nextAttemptAt)],
+);
+
 export const guideReads = sqliteTable(
   'guide_reads',
   {

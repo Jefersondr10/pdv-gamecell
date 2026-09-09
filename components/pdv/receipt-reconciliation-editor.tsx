@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from 'react';
 import {
   AlertTriangle,
@@ -312,6 +313,7 @@ export function SavedReceiptValueEditor({
   value,
   serverJob,
   onServerRetry,
+  receiptAction,
 }: {
   disabled?: boolean;
   onAutoValueFound?: (value: ReceiptValueInput) => Promise<void>;
@@ -320,6 +322,7 @@ export function SavedReceiptValueEditor({
   value: ReceiptValueInput;
   serverJob?: ServerReceiptJob;
   onServerRetry?: () => Promise<void>;
+  receiptAction?: ReactNode;
 }) {
   const { enabled: serverReading } = useReceiptRuntime();
   const [state, setState] = useState<AnalysisState | null>(null);
@@ -480,7 +483,7 @@ export function SavedReceiptValueEditor({
   if (serverReading)
     return (
       <div className="rounded-xl border bg-muted/20 p-2.5">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <a
             className="min-w-0 flex-1 truncate text-xs font-bold underline-offset-2 hover:underline"
             href={receipt.url}
@@ -502,6 +505,7 @@ export function SavedReceiptValueEditor({
                 Tentar leitura
               </Button>
             )}
+          {receiptAction}
         </div>
         <output className="mt-1 block text-xs text-muted-foreground">
           {value.amountCents !== null
@@ -554,6 +558,7 @@ export function SavedReceiptValueEditor({
               ? 'Tentar novamente'
               : 'Ler novamente'}
         </Button>
+        {receiptAction}
       </div>
       {reading && (
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">

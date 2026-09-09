@@ -116,12 +116,50 @@ assert.equal(
   db.prepare('SELECT value FROM fixture_preservation').get().value,
   'synthetic-record',
 );
+db.close();
+const migrateReceiptDeletion = () =>
+  execFileSync(
+    process.execPath,
+    [resolve('scripts/hostinger/apply-receipt-delete-migration.mjs'), path],
+    { stdio: 'pipe' },
+  );
+migrateReceiptDeletion();
+migrateReceiptDeletion();
+db = new DatabaseSync(path);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM pdv_release_migrations').get().n,
+  5,
+);
+assert.equal(
+  db.prepare('PRAGMA table_info(file_deletion_jobs)').all().length,
+  5,
+);
+assert.equal(
+  db.prepare('SELECT value FROM fixture_preservation').get().value,
+  'synthetic-record',
+);
+assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
+const deletionChecksum = db
+  .prepare('SELECT checksum FROM pdv_release_migrations WHERE name=?')
+  .get('0013_manual_receipt_deletion').checksum;
+db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
+  'changed',
+  '0013_manual_receipt_deletion',
+);
+db.close();
+assert.throws(migrateReceiptDeletion, /Migration checksum mismatch/);
+db = new DatabaseSync(path);
+db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
+  deletionChecksum,
+  '0013_manual_receipt_deletion',
+);
 db.prepare('UPDATE pdv_release_migrations SET checksum=?').run('changed');
 db.close();
 assert.throws(migrate, /Migration checksum mismatch/);
 assert.throws(migrateAlerts, /Migration checksum mismatch/);
 assert.throws(migratePermissions, /Migration checksum mismatch/);
 assert.throws(migrateClientIdentity, /Migration checksum mismatch/);
+assert.throws(migrateReceiptDeletion, /Migration checksum mismatch/);
 console.log(
   'Additive migration, preservation, backups, repeat and checksum rejection passed.',
 );
