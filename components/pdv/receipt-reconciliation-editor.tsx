@@ -287,10 +287,10 @@ export function ReconciliationSummary({
         {targetCents <= 0
           ? 'Venda sem valor definido'
           : reconciled
-            ? 'Conciliado'
+            ? 'Comprovantes iguais ao valor da venda'
             : divergent
               ? 'Comprovantes não conferem'
-              : 'Conciliação pendente'}
+              : 'Conferência dos comprovantes pendente'}
       </p>
       <p className="mt-0.5">
         {targetCents <= 0

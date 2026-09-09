@@ -54,7 +54,7 @@ import {
   AccordionContent,
 } from '@/components/ui/accordion';
 import { SalePricesEditor } from '@/components/pdv/sale-prices-editor';
-import type { SalePrices } from '@/lib/sale-prices';
+import { applySalePrices, type SalePrices } from '@/lib/sale-prices';
 import {
   SaleParticipantsEditor,
   useSaleParticipants,
@@ -157,17 +157,17 @@ const PERIOD_OPTIONS: Array<FilterOption<PeriodFilter>> = [
 const ISSUE_OPTIONS: Array<FilterOption<IssueFilter>> = [
   {
     detail: 'Exibe vendas com ou sem aviso',
-    label: 'Todas as pendências',
+    label: 'Qualquer pendência',
     value: 'all',
   },
   {
-    detail: 'Venda ainda sem arquivo anexado',
-    label: 'Sem comprovante',
+    detail: 'Inclui vendas com outras pendências prioritárias',
+    label: 'Falta comprovante',
     value: 'missing_receipt',
   },
   {
-    detail: 'Ainda existe valor a receber',
-    label: 'Pagamento pendente',
+    detail: 'Pagamento informado abaixo da venda, mesmo com outros avisos',
+    label: 'Tem saldo a receber',
     value: 'pending_payment',
   },
 ];
@@ -317,6 +317,18 @@ export function SalesProductionView({
     new Map<string, { loadedAt: number; value: SalesAnalytics }>(),
   );
   const canCancel = can(data.user, 'sales.cancel');
+  const handlePricesChanged = (saleId: string, value: SalePrices) => {
+    const update = (record: SaleRecord | null) =>
+      record?.id === saleId ? applySalePrices(record, value) : record;
+    setPage((current) => ({
+      ...current,
+      items: current.items.map((record) => update(record)!),
+    }));
+    setEditSale(update);
+    setDetailSale(update);
+    setReportSale(update);
+    window.dispatchEvent(new Event('pdv:sales-changed'));
+  };
   const canEdit = canAny(data.user, [
     'sales.participants',
     'sales.payments',
@@ -761,12 +773,12 @@ export function SalesProductionView({
               )}
             >
               <div className="min-w-0">
-                <span className="sr-only mb-1 items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
                   <CircleAlert className="size-3 text-muted-foreground" />
-                  Pendência
+                  Contém pendência
                 </span>
                 <SalesFilterSelect
-                  aria-label="Pendência da venda"
+                  aria-label="Contém pendência na venda"
                   onValueChange={(next) => {
                     setIssueFilter(next);
                     if (next !== 'all') {
@@ -781,6 +793,7 @@ export function SalesProductionView({
               <div className="min-w-0">
                 <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
                   <ListFilter className="size-3 text-muted-foreground" /> Status
+                  principal
                 </span>
                 <SalesFilterSelect
                   aria-label="Status da venda ou acompanhamento"
@@ -798,7 +811,7 @@ export function SalesProductionView({
                     },
                     ...SYSTEM_SALE_STATUSES.map((status) => ({
                       label: status.label,
-                      detail: 'Status automático do sistema',
+                      detail: 'Status principal exibido na venda',
                       value: `auto_${status.key}`,
                     })),
                     {
@@ -1025,7 +1038,11 @@ export function SalesProductionView({
         </CardContent>
       </Card>
       <SaleDetailsDialog
+        key={detailSale?.id ?? 'closed-sale-details'}
         sale={detailSale}
+        canEditPrices={can(data.user, 'sales.prices')}
+        csrfToken={data.csrfToken}
+        onPricesChanged={handlePricesChanged}
         onClose={(reason) => {
           setDetailSale(null);
           if (returnToPeriodReport && reason !== 'action') {
@@ -1071,37 +1088,7 @@ export function SalesProductionView({
       <EditSaleDialog
         data={data}
         key={editSale?.id ?? 'closed-sale-editor'}
-        onPricesChanged={(saleId, value) => {
-          const update = (record: SaleRecord | null) => {
-            if (!record || record.id !== saleId) return record;
-            const items = record.items.map((item) => ({
-              ...item,
-              soldPriceCents:
-                value.items.find((updated) => updated.id === item.id)
-                  ?.soldPriceCents ?? item.soldPriceCents,
-            }));
-            return {
-              ...record,
-              items,
-              productsTotalCents: value.productsTotalCents,
-              receivedTotalCents: value.receivedTotalCents,
-              receivedDifferenceCents: value.receivedDifferenceCents,
-              priceDifferenceCents: value.priceDifferenceCents,
-              reconciliation: deriveReceiptReconciliation(
-                record.receipts,
-                value.productsTotalCents,
-              ),
-            };
-          };
-          setPage((current) => ({
-            ...current,
-            items: current.items.map((record) => update(record)!),
-          }));
-          setEditSale(update);
-          setDetailSale(update);
-          setReportSale(update);
-          window.dispatchEvent(new Event('pdv:sales-changed'));
-        }}
+        onPricesChanged={handlePricesChanged}
         onReceiptDeleted={(saleId, receiptId) => {
           const update = (record: SaleRecord | null) => {
             if (!record || record.id !== saleId) return record;

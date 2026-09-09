@@ -40,7 +40,7 @@ export type OverviewPage = {
 
 export const overviewFilters = [
   { value: 'all', label: 'Todos' },
-  { value: 'review', label: 'Verificar comprovante' },
+  { value: 'review', label: 'Pendências de conferência' },
   { value: 'matched', label: 'Valores conferem' },
   { value: 'divergent', label: 'Diferença / preço não definido' },
   { value: 'pending', label: 'Sem valor válido / em leitura' },

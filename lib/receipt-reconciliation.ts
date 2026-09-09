@@ -22,9 +22,13 @@ export function deriveReceiptReconciliation(
   const values = receipts.map(
     (receipt) => receipt.receiptAmountCents ?? receipt.amountCents ?? null,
   );
-  const pendingReceiptCount = values.filter((value) => value === null).length;
+  const validAmount = (value: number | null): value is number =>
+    value !== null && Number.isSafeInteger(value) && value > 0;
+  const pendingReceiptCount = values.filter(
+    (value) => !validAmount(value),
+  ).length;
   const confirmedTotalCents = values.reduce<number>(
-    (sum, value) => sum + (value ?? 0),
+    (sum, value) => sum + (validAmount(value) ? value : 0),
     0,
   );
 

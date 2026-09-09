@@ -90,3 +90,17 @@ assert.deepEqual(deriveReceiptReconciliation([{ amountCents: 50_000 }], 0), {
 });
 
 console.log('Receipt reconciliation checks passed.');
+
+for (const amountCents of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+  const invalid = deriveReceiptReconciliation(
+    [{ amountCents: 100 }, { amountCents }],
+    100,
+  );
+  assert.equal(
+    invalid.status,
+    'pending',
+    'Invalid receipts cannot complete reconciliation',
+  );
+  assert.equal(invalid.confirmedTotalCents, 100);
+  assert.equal(invalid.pendingReceiptCount, 1);
+}

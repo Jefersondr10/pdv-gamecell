@@ -1,3 +1,13 @@
+import type { SaleRecord } from './pdv-types.ts';
+import { deriveReceiptReconciliation } from './receipt-reconciliation.ts';
+import { parseMoneyInput } from './money.ts';
+
+export function parseSalePriceInput(value: string) {
+  // Reject signs, words and accounting negatives instead of silently stripping them.
+  const input = value.trim().replace(/^R\$\s*/, '');
+  return /^[\d.,\s]+$/.test(input) ? parseMoneyInput(input) : 0;
+}
+
 export type SalePrices = {
   revision: number;
   status: 'completed' | 'cancelled';
@@ -7,6 +17,31 @@ export type SalePrices = {
   priceDifferenceCents: number;
   items: { id: string; soldPriceCents: number }[];
 };
+
+// Apply only the server-confirmed prices; never rewrite payments or receipts.
+export function applySalePrices(
+  sale: SaleRecord,
+  value: SalePrices,
+): SaleRecord {
+  return {
+    ...sale,
+    status: value.status,
+    items: sale.items.map((item) => ({
+      ...item,
+      soldPriceCents:
+        value.items.find((updated) => updated.id === item.id)?.soldPriceCents ??
+        item.soldPriceCents,
+    })),
+    productsTotalCents: value.productsTotalCents,
+    receivedTotalCents: value.receivedTotalCents,
+    receivedDifferenceCents: value.receivedDifferenceCents,
+    priceDifferenceCents: value.priceDifferenceCents,
+    reconciliation: deriveReceiptReconciliation(
+      sale.receipts,
+      value.productsTotalCents,
+    ),
+  };
+}
 
 export function originalPriceSnapshot(value: string | null) {
   if (!value) return null;

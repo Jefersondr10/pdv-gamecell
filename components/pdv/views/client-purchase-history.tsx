@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
+import { SystemSaleStatusBadge } from '@/components/pdv/sale-status-badge';
 import { messageOf, requestJson } from '@/lib/client-api';
 import type { ClientRecord, ClientHistoryPage } from '@/lib/pdv-types';
 
@@ -151,13 +151,7 @@ export function ClientPurchaseHistory({
                 <span className="text-xs text-muted-foreground">
                   {date(sale.createdAt)}
                 </span>
-                {sale.status === 'cancelled' ? (
-                  <Badge variant="outline">Cancelada</Badge>
-                ) : (
-                  sale.orderStatus && (
-                    <OrderStatusBadge status={sale.orderStatus} />
-                  )
-                )}
+                <SystemSaleStatusBadge statusKey={sale.automaticStatus} />
               </div>
               <Button
                 disabled={!onOpenSale}

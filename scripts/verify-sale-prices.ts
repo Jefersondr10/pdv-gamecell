@@ -1,7 +1,55 @@
 import assert from 'node:assert/strict';
 import { SqliteDatabase } from '../lib/server/node/sqlite.mjs';
 import { changeSalePrices, readSalePrices } from '../lib/server/sale-prices.ts';
-import { originalPriceSnapshot } from '../lib/sale-prices.ts';
+import {
+  originalPriceSnapshot,
+  parseSalePriceInput,
+  applySalePrices,
+} from '../lib/sale-prices.ts';
+import type { SaleRecord } from '../lib/pdv-types.ts';
+import { saleDisplayStatus } from '../lib/sale-display-status.ts';
+import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
+
+for (const text of ['-10,00', '−10,00', '(10,00)', 'abc10', '+10', '', '0'])
+  assert.equal(parseSalePriceInput(text), 0, `Reject invalid price ${text}`);
+for (const text of ['4.950,00', '4950', 'R$ 4.950,00'])
+  assert.equal(parseSalePriceInput(text), 495000);
+
+// Updating the price must immediately reevaluate the three totals and every status.
+const saleFixture = {
+  id: 'sale',
+  status: 'completed',
+  productsTotalCents: 3473000,
+  receivedTotalCents: 3473000,
+  receivedDifferenceCents: 0,
+  items: [{ id: 'item', soldPriceCents: 3473000, photos: [{}] }],
+  receipts: [{ receiptAmountCents: 1500000 }, { receiptAmountCents: 1965000 }],
+  payments: [{ amountCents: 3473000 }],
+  reconciliation: deriveReceiptReconciliation(
+    [{ amountCents: 3465000 }],
+    3473000,
+  ),
+} as SaleRecord;
+const applyFixture = (total: number, paid = 3473000) =>
+  applySalePrices(saleFixture, {
+    revision: 1,
+    status: 'completed',
+    productsTotalCents: total,
+    receivedTotalCents: paid,
+    receivedDifferenceCents: paid - total,
+    priceDifferenceCents: 0,
+    items: [{ id: 'item', soldPriceCents: total }],
+  });
+assert.equal(saleDisplayStatus(applyFixture(3465000)).key, 'overpaid');
+assert.equal(saleDisplayStatus(applyFixture(3500000)).key, 'review');
+assert.equal(
+  saleDisplayStatus(applyFixture(3465000, 3465000)).key,
+  'reconciled',
+);
+assert.equal(applyFixture(3500000).reconciliation.differenceCents, -35000);
+assert.equal(applyFixture(3500000).payments, saleFixture.payments);
+assert.equal(applyFixture(3500000).receipts, saleFixture.receipts);
+assert.equal(saleFixture.items[0].soldPriceCents, 3473000);
 const adapter = new SqliteDatabase(':memory:');
 const db = adapter as unknown as D1Database;
 adapter.database

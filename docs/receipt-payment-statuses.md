@@ -13,7 +13,7 @@
 
 ## Preços e status
 
-Em Vendas → abrir venda → Editar → Preços desta venda, quem possui `sales.prices` pode alterar cada preço por SN. O total vendido é recalculado sem alterar pagamentos, estoque ou preço padrão. A prévia compara o novo total com pagamentos e comprovantes; salvar atualiza o status.
+Em Vendas → abrir venda → Produtos → **Editar preços**, quem possui `sales.prices` pode alterar cada preço por SN diretamente nos detalhes. O acesso anterior em Editar → Preços desta venda continua disponível. O total vendido é recalculado sem alterar pagamentos, estoque ou preço padrão. A prévia compara o novo total com pagamentos e comprovantes; salvar atualiza o status. A edição destaca os itens modificados, impede sair enquanto salva e exige salvar ou cancelar antes de outra ação. Valores negativos digitados são rejeitados, não convertidos para positivos.
 
 Os status automáticos são padrão para todas as lojas, não são registros editáveis em `order_statuses`. A prioridade é: Cancelado, Sem valor de venda, Sem comprovante, Verificar comprovante, Comprovante em leitura, Pagamento pendente, Pagamento acima da venda, Sem foto do aparelho, Conciliado. Outras pendências continuam visíveis nos detalhes. Conciliação completa requer preços válidos, pagamentos e comprovantes coincidentes e foto em cada aparelho. Um valor manual válido prevalece sobre o estado de uma leitura antiga.
 
@@ -29,11 +29,14 @@ Validações: `test:receipt-payment-sync`, `test:sale-status`, `test:original-sa
 
 - Os nove status automáticos aparecem individualmente em Configurações, sempre obrigatórios, sem edição ou desativação. Novos acompanhamentos manuais não podem usar os nomes reservados. Registros legados homônimos continuam preservados e sinalizados como manuais antigos.
 - Vendas, detalhes e relatórios só usam apresentação de conciliação completa quando a regra automática inteira é satisfeita. Pago informado e comprovantes são apresentados separadamente; igualdade manual não encobre divergência documental.
-- Comprovantes compara venda, pagamento informado e documentos. O filtro amplo **Verificar comprovante** inclui diferenças e ausência de valores/arquivos; **Sem valor válido / em leitura** é o subconjunto sem leitura válida. Diferenças entre pedidos não se compensam.
+- Comprovantes compara venda, pagamento informado e documentos. O filtro amplo **Pendências de conferência** inclui diferenças e ausência de valores/arquivos; **Sem valor válido / em leitura** é o subconjunto sem leitura válida. Esse conjunto é diferente do status principal **Verificar comprovante** de Vendas. Diferenças entre pedidos não se compensam.
 - Caso de regressão: venda de R$34.730,00 e comprovantes de R$34.650,00 continuam em revisão tanto antes quanto depois de o pagamento informado ser ajustado para R$34.650,00. O aviso mostra R$80,00 abaixo da venda.
 - Não há atualização retroativa silenciosa de pagamentos. Comprovantes antigos, sem solicitação de sincronização, podem ser aplicados com **Usar total dos comprovantes**, com permissão, conferência de concorrência e auditoria.
 - O aviso de aplicação usa o preço atual do pedido imediatamente após editar preços, sem depender da próxima consulta periódica.
 - Os produtos nos detalhes usam cartões compactos em colunas conforme a largura disponível. Fotos continuam vinculadas ao SN e podem ser abertas.
+- **Conciliado** é reservado ao status completo; o resumo parcial usa **Comprovantes iguais ao valor da venda**. Recibos zerados, negativos ou sem valor inteiro válido não concluem a conferência documental.
+- Histórico do cliente recebe o mesmo status automático calculado no servidor, inclusive para perfis com acesso apenas ao histórico, sem liberar fotos ou comprovantes.
+- Vendas distingue **Status principal** de **Contém pendência**. A decisão de manter ou remover o acompanhamento manual está aguardando definição do usuário; nenhum cadastro ou vínculo histórico foi excluído nesta revisão.
 
 ## Relatório por link
 

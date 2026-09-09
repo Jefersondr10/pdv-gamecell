@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { FileText, Pencil, XCircle, Paperclip } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +15,8 @@ import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
 import type { SaleRecord } from '@/lib/pdv-types';
 import { saleIssues } from '@/lib/sale-display-status';
 import { saleFinancialSummary } from '@/lib/sale-financial-summary';
+import { SalePricesEditor } from '@/components/pdv/sale-prices-editor';
+import type { SalePrices } from '@/lib/sale-prices';
 
 const money = (cents: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
@@ -34,6 +37,9 @@ export function SaleDetailsDialog({
   onCancel,
   canEdit,
   canCancel,
+  canEditPrices,
+  csrfToken,
+  onPricesChanged,
   closeLabel = 'Fechar',
 }: {
   sale: SaleRecord | null;
@@ -43,17 +49,27 @@ export function SaleDetailsDialog({
   onCancel: (sale: SaleRecord) => void;
   canEdit: boolean;
   canCancel: boolean;
+  canEditPrices: boolean;
+  csrfToken: string;
+  onPricesChanged: (saleId: string, value: SalePrices) => void;
   closeLabel?: string;
 }) {
   const financial = sale ? saleFinancialSummary(sale) : null;
+  const [pricesBusy, setPricesBusy] = useState(false);
+  const [pricesEditing, setPricesEditing] = useState(false);
+  const [notice, setNotice] = useState('');
+  const locked = pricesBusy || pricesEditing;
   return (
     <Dialog
       open={Boolean(sale)}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open && !locked) onClose();
       }}
     >
-      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] [&>[data-slot=dialog-close]]:top-[max(.5rem,env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-2xl sm:rounded-2xl sm:py-0">
+      <DialogContent
+        showCloseButton={!locked}
+        className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] [&>[data-slot=dialog-close]]:top-[max(.5rem,env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-2xl sm:rounded-2xl sm:py-0"
+      >
         {sale && (
           <>
             <DialogHeader className="shrink-0 border-b px-4 py-3 pr-12">
@@ -65,6 +81,13 @@ export function SaleDetailsDialog({
               </DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 overscroll-contain">
+              {notice && (
+                <output
+                  className="block rounded-xl bg-success/10 p-3 text-sm font-semibold text-success"
+                >
+                  {notice}
+                </output>
+              )}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-lg font-bold">{sale.customerName}</h2>
                 <SaleStatusBadge sale={sale} />
@@ -132,10 +155,21 @@ export function SaleDetailsDialog({
                   </div>
                 )
               )}
-              <section>
-                <h3 className="mb-2 font-bold">
-                  Produtos · {sale.items.length} aparelho(s)
-                </h3>
+              <SalePricesEditor
+                sale={sale}
+                csrfToken={csrfToken}
+                title={`Produtos · ${sale.items.length} aparelho(s)`}
+                editable={canEditPrices && sale.status === 'completed'}
+                disabled={pricesBusy}
+                onBusyChange={setPricesBusy}
+                onEditingChange={setPricesEditing}
+                onSaved={(value) => {
+                  onPricesChanged(sale.id, value);
+                  setNotice(
+                    'Preços salvos. Total, pagamentos, comprovantes e status conferidos novamente.',
+                  );
+                }}
+              >
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-2">
                   {sale.items.map((item) => (
                     <div
@@ -175,7 +209,7 @@ export function SaleDetailsDialog({
                     </div>
                   ))}
                 </div>
-              </section>
+              </SalePricesEditor>
               <section>
                 <h3 className="mb-2 font-bold">Pagamentos informados</h3>
                 <div className="divide-y rounded-xl border">
@@ -251,9 +285,19 @@ export function SaleDetailsDialog({
               </section>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-background p-3">
+              {locked && (
+                <output
+                  className="block w-full text-sm text-muted-foreground"
+                >
+                  {pricesBusy
+                    ? 'Aguarde a confirmação do servidor.'
+                    : 'Salve ou cancele a edição dos preços para continuar.'}
+                </output>
+              )}
               {canCancel && sale.status === 'completed' && (
                 <Button
                   aria-label="Cancelar esta venda"
+                  disabled={locked}
                   variant="ghost"
                   className="mr-auto text-destructive"
                   onClick={() => {
@@ -267,6 +311,7 @@ export function SaleDetailsDialog({
               )}
               <Button
                 variant="outline"
+                disabled={locked}
                 onClick={() => {
                   onClose('action');
                   onReport(sale);
@@ -277,6 +322,7 @@ export function SaleDetailsDialog({
               </Button>
               {canEdit && sale.status === 'completed' && (
                 <Button
+                  disabled={locked}
                   onClick={() => {
                     onClose('action');
                     onEdit(sale);
@@ -286,7 +332,11 @@ export function SaleDetailsDialog({
                   Editar
                 </Button>
               )}
-              <Button variant="outline" onClick={() => onClose()}>
+              <Button
+                disabled={locked}
+                variant="outline"
+                onClick={() => onClose()}
+              >
                 {closeLabel}
               </Button>
             </div>

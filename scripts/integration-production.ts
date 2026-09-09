@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import type { SaleRecord } from '../lib/pdv-types.ts';
 import type { SalePrices } from '../lib/sale-prices.ts';
+import { saleDisplayStatus } from '../lib/sale-display-status.ts';
 import { defaultPermissions, type Permission } from '../lib/permissions.ts';
 import { prepareUploadForm } from '../lib/client-upload.ts';
 import { productEditorPayload } from '../lib/product-editor.ts';
@@ -2693,10 +2694,24 @@ accessStaff = await loginAccessStaff();
 await call('/api/sales?period=all', { ...accessStaff, expected: 403 });
 const restrictedHistory = (
   await call(`/api/sales?period=all&customerId=${staffClientId}`, accessStaff)
-).body.items as { customerId: string; items: object[] }[];
+).body.items as {
+  id: string;
+  customerId: string;
+  automaticStatus: string;
+  items: object[];
+}[];
+const fullHistory = (
+  await call(`/api/sales?period=all&customerId=${staffClientId}`, {
+    cookie: ownerCookie,
+  })
+).body.items as (SaleRecord & { automaticStatus: string })[];
 assert.ok(restrictedHistory.length);
 for (const row of restrictedHistory) {
   assert.equal(row.customerId, staffClientId);
+  const full = fullHistory.find((sale) => sale.id === row.id);
+  assert.ok(full);
+  assert.equal(row.automaticStatus, saleDisplayStatus(full).key);
+  assert.equal(row.automaticStatus, full.automaticStatus);
   for (const key of ['payments', 'receipts', 'reconciliation'])
     assert.ok(!(key in row));
   assert.ok(row.items.every((item) => !('photos' in item)));

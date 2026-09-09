@@ -40,6 +40,7 @@ import {
 } from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
+import { saleDisplayStatus } from '@/lib/sale-display-status';
 import type {
   AttachmentRecord,
   ClientHistoryPage,
@@ -240,7 +241,10 @@ export async function GET(request: Request) {
     const sales = ids.length ? await hydrateSales(db, storeId, visible) : [];
     const last = visible.at(-1);
     const page = {
-      items: sales,
+      items: sales.map((sale) => ({
+        ...sale,
+        automaticStatus: saleDisplayStatus(sale).key,
+      })),
       groups: [],
       nextCursor:
         hasMore && last ? encodeCursor(last.createdAt, last.id) : null,
@@ -258,6 +262,7 @@ export async function GET(request: Request) {
           customerName: sale.customerName,
           sellerName: sale.sellerName,
           orderStatus: sale.orderStatus,
+          automaticStatus: saleDisplayStatus(sale).key,
           productsTotalCents: sale.productsTotalCents,
           receivedTotalCents: sale.receivedTotalCents,
           status: sale.status,

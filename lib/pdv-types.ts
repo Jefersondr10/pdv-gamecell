@@ -233,6 +233,7 @@ export type ClientHistoryPage = Omit<SalesPage, 'items'> & {
     | 'cancelledAt'
     | 'cancellationReason'
   > & {
+    automaticStatus: import('./sale-display-status').SystemSaleStatusKey;
     items: Pick<
       SaleItemRecord,
       'id' | 'productName' | 'productDetail' | 'serial' | 'soldPriceCents'
