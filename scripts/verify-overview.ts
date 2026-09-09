@@ -30,6 +30,10 @@ const sale = (
   db.database
     .prepare('INSERT INTO sale_items VALUES (?, ?, ?, ?)')
     .run(`${id}-item`, id, store, paid);
+  if (paid > 0)
+    db.database
+      .prepare('INSERT INTO payments VALUES (?, ?, ?, ?, ?)')
+      .run(`${id}-default-pay`, store, id, 'pix', paid);
 };
 const receipt = (
   id: string,
@@ -74,10 +78,11 @@ const read = (store = 'a', extra = '') =>
   );
 try {
   sale('one', 10000);
+  db.database.exec("DELETE FROM payments WHERE sale_id='one'");
   payment('pay1', 'one', 6000);
   payment('pay2', 'one', 4000, 'cash');
-  receipt('r1', 'one', 6000);
-  receipt('r2', 'one', 4000, 'a', 'manual');
+  receipt('r1', 'one', 3000);
+  receipt('r2', 'one', 3000, 'a', 'manual');
   db.database.exec(
     "INSERT INTO receipt_ocr_jobs VALUES ('r2', 'cancelled'); INSERT INTO sale_items VALUES ('i1', 'one', 'a', 6000), ('i2', 'one', 'a', 4000);",
   );
@@ -90,7 +95,8 @@ try {
     saleCount: 1,
     receivedCents: 10000,
     cashCents: 4000,
-    receiptCents: 10000,
+    pixCents: 6000,
+    receiptCents: 6000,
     receiptCount: 2,
     pendingCount: 0,
     missingCount: 0,
@@ -129,9 +135,10 @@ try {
   page = await read();
   assert.equal(page.totals.pendingCount, 1);
   assert.equal(page.totals.divergentCount, 0);
-  assert.equal(page.totals.receiptCents, 10000);
+  assert.equal(page.totals.receiptCents, 6000);
   assert.equal(overviewComparison(page.totals), 'pending');
   sale('missing', 0);
+  payment('missing-pix', 'missing', 1);
   assert.equal((await read()).totals.missingCount, 1);
   sale('cancelled', 900000, 'a', midnight, 'cancelled');
   receipt('cancel-r', 'cancelled', 900000);
@@ -146,7 +153,7 @@ try {
   page = await read();
   assert.equal(page.totals.saleCount, 3);
   assert.equal(page.totals.receivedCents, 10001);
-  assert.equal(page.totals.receiptCents, 10001);
+  assert.equal(page.totals.receiptCents, 6001);
   assert.equal((await read('b')).totals.saleCount, 1);
   assert.equal((await read('b')).totals.receiptCents, 9000000);
   assert.deepEqual((await read('empty')).items, []);
@@ -159,7 +166,7 @@ try {
     ['matched', ['last-ms']],
     ['pending', ['one']],
     ['missing', ['missing']],
-    ['divergent', []],
+    ['divergent', ['missing']],
   ] as const) {
     const filtered = await read('a', `comparison=${filter}`);
     assert.deepEqual(
@@ -195,7 +202,7 @@ try {
   const lumora = await read('lumora', 'comparison=review');
   assert.equal(lumora.items.length, 1);
   assert.equal(lumora.items[0].automaticStatus, null);
-  assert.ok(lumora.items[0].issueKeys.includes('review'));
+  assert.ok(lumora.items[0].issueKeys.includes('pending_payment'));
   assert.equal(overviewSaleComparison(lumora.items[0]), 'sale_difference');
   assert.equal(overviewComparison(lumora.totals), 'review');
   assert.equal(
@@ -389,6 +396,27 @@ try {
   manualOverview = (await read('statuses')).items[0];
   assert.equal(manualOverview.displayStatus.key, 'manual');
   assert.deepEqual(manualOverview.issueKeys, ['pending_payment']);
+  // Real-world mix: only Pix is compared with receipts; cash stays manual.
+  sale('mixed-cash', 710000, 'mixed');
+  db.database.exec(
+    "UPDATE payments SET amount_cents=410000 WHERE sale_id='mixed-cash'",
+  );
+  payment('mixed-money', 'mixed-cash', 300000, 'cash', 'mixed');
+  receipt('mixed-proof', 'mixed-cash', 410000, 'mixed');
+  const mixed = await read('mixed', 'comparison=matched');
+  assert.equal(mixed.items.length, 1);
+  assert.equal(mixed.totals.pixCents, 410000);
+  assert.equal(mixed.totals.receivedCents, 710000);
+  assert.equal(mixed.totals.divergentCount, 0);
+  assert.equal(overviewSaleComparison(mixed.items[0]), 'matched');
+  sale('cash-only', 710000, 'cash-only');
+  db.database.exec(
+    "UPDATE payments SET method='cash' WHERE sale_id='cash-only'",
+  );
+  const cashOnly = await read('cash-only', 'comparison=matched');
+  assert.equal(cashOnly.items.length, 1);
+  assert.equal(overviewSaleComparison(cashOnly.items[0]), 'not_required');
+  assert.equal((await read('cash-only', 'comparison=missing')).items.length, 0);
   db.database.exec(
     "UPDATE order_statuses SET store_id='foreign' WHERE id='manual'",
   );

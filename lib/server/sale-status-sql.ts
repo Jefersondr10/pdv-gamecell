@@ -11,10 +11,11 @@ export function validReceiptAmountSql(alias: 'a' | 'ar') {
 }
 const complete = `(EXISTS (${receipts}) AND NOT EXISTS (${receipts} AND NOT ${validReceiptAmountSql('ar')}))`;
 const failed = `EXISTS (${receipts} AND ((ar.receipt_amount_cents IS NOT NULL AND NOT ${validReceiptAmountSql('ar')}) OR (ar.receipt_amount_cents IS NULL AND NOT EXISTS (SELECT 1 FROM receipt_ocr_jobs j WHERE j.attachment_id = ar.id AND j.status IN ('pending', 'processing', 'retry')))))`;
+export const SALE_PIX_TOTAL_SQL = `COALESCE((SELECT SUM(pix_payment.amount_cents) FROM payments pix_payment WHERE pix_payment.sale_id=s.id AND pix_payment.store_id=s.store_id AND pix_payment.method='pix'), 0)`;
 export const SALE_ISSUE_SQL: Record<SaleIssueKey, string> = {
   missing_price: `(s.products_total_cents <= 0 OR NOT EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.store_id = s.store_id) OR EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.store_id = s.store_id AND si.sold_price_cents <= 0))`,
-  missing_receipt: `NOT EXISTS (${receipts})`,
-  review: `(${failed} OR (s.products_total_cents > 0 AND ${complete} AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) <> s.products_total_cents))`,
+  missing_receipt: `(${SALE_PIX_TOTAL_SQL} > 0 AND NOT EXISTS (${receipts}))`,
+  review: `(${failed} OR (${complete} AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) <> ${SALE_PIX_TOTAL_SQL}))`,
   reading: `(NOT ${failed} AND EXISTS (${receipts} AND ar.receipt_amount_cents IS NULL))`,
   pending_payment: 's.received_total_cents < s.products_total_cents',
   overpaid: 's.received_total_cents > s.products_total_cents',

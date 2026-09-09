@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/native-select';
 import { requestJson } from '@/lib/client-api';
 import type { SalePaymentRecord } from '@/lib/pdv-types';
+import { paymentMethodTotals } from '@/lib/receipt-reconciliation';
 const formatMoney = (cents: number) =>
   (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -113,49 +114,58 @@ export function ReceiptPaymentSync({
     };
   }, [saleId, revision]);
   if (!state || state.saleStatus !== 'completed') return null;
+  const pixPayments = state.payments.filter((p) => p.method === 'pix');
+  const { pixCents, cashCents } = paymentMethodTotals(state.payments);
   const targetId =
-    target || (state.payments.length === 1 ? state.payments[0].id : '');
-  const difference = state.receiptTotalCents - state.receivedTotalCents;
-  const differenceFromSale = state.receiptTotalCents - productsTotalCents;
+    pixPayments.find((p) => p.id === target)?.id ||
+    (pixPayments.length === 1 ? pixPayments[0].id : '');
+  const difference = state.receiptTotalCents - pixCents;
+  const receivedAfter = state.receiptTotalCents + cashCents;
+  const differenceFromSale = receivedAfter - productsTotalCents;
   return (
     <div className="mt-3 rounded-xl border bg-muted/30 p-3 text-sm">
       <p className="font-semibold">
         {state.status === 'applied'
-          ? 'Total pago atualizado pelos comprovantes'
+          ? 'Pix atualizado pelos comprovantes'
           : state.status === 'pending'
-            ? 'Atualização do pagamento pendente'
-            : 'Total pago e comprovantes'}
+            ? 'Atualização do Pix pendente'
+            : 'Pix e comprovantes'}
       </p>
       <p className="mt-1 text-muted-foreground">
-        {state.status === 'pending'
-          ? 'O total pago será atualizado quando todos os comprovantes tiverem valor. Se algum arquivo não for reconhecido, corrija sua leitura.'
-          : state.status === 'applied'
-            ? 'Uma nova alteração manual no pagamento prevalece até outro envio ou correção de comprovante.'
-            : state.requestId === null && state.complete && difference !== 0
-              ? `Os comprovantes ainda não foram usados para atualizar este pagamento. ${canUse ? 'Use o botão abaixo para aplicar a soma já salva.' : 'Um usuário com permissão de pagamentos pode aplicar a soma já salva.'}`
-              : 'Ao reenviar ou corrigir comprovantes, a soma poderá atualizar o total pago. Uma edição manual posterior será preservada.'}
+        {pixPayments.length === 0
+          ? 'Nenhum Pix informado. O dinheiro é conferido manualmente e não será alterado pelos comprovantes.'
+          : state.status === 'pending'
+            ? 'O Pix será atualizado quando todos os comprovantes tiverem valor. Dinheiro permanece como informado manualmente.'
+            : state.status === 'applied'
+              ? 'Uma nova alteração manual no pagamento prevalece até outro envio ou correção de comprovante.'
+              : state.requestId === null && state.complete && difference !== 0
+                ? `Os comprovantes ainda não foram usados para atualizar este pagamento. ${canUse ? 'Use o botão abaixo para aplicar a soma já salva.' : 'Um usuário com permissão de pagamentos pode aplicar a soma já salva.'}`
+                : 'Ao reenviar ou corrigir comprovantes, a soma poderá atualizar apenas o Pix. Dinheiro e uma edição manual posterior são preservados.'}
       </p>
       {state.complete && (
         <p className="mt-2">
           Comprovantes: <strong>{formatMoney(state.receiptTotalCents)}</strong>{' '}
-          · Pago informado:{' '}
-          <strong>{formatMoney(state.receivedTotalCents)}</strong>
+          · Pix informado: <strong>{formatMoney(pixCents)}</strong> · Dinheiro
+          (manual): <strong>{formatMoney(cashCents)}</strong>
         </p>
       )}
       {canUse &&
+        pixPayments.length > 0 &&
         state.complete &&
         difference !== 0 &&
         state.status !== 'pending' && (
           <div className="mt-3 space-y-2">
             <p className="text-sm">
-              Ao usar os comprovantes, o pagamento informado passará para{' '}
-              <strong>{formatMoney(state.receiptTotalCents)}</strong>
+              O Pix passará para{' '}
+              <strong>{formatMoney(state.receiptTotalCents)}</strong>, mantendo{' '}
+              {formatMoney(cashCents)} em dinheiro. O total pago será{' '}
+              <strong>{formatMoney(receivedAfter)}</strong>
               {productsTotalCents > 0 && differenceFromSale !== 0
                 ? ` e ficará ${formatMoney(Math.abs(differenceFromSale))} ${differenceFromSale < 0 ? 'abaixo' : 'acima'} da venda.`
                 : '.'}
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
-              {state.payments.length > 1 && (
+              {pixPayments.length > 1 && (
                 <NativeSelect
                   aria-label="Pagamento a ajustar pelos comprovantes"
                   value={target}
@@ -164,9 +174,9 @@ export function ReceiptPaymentSync({
                   className="min-w-0 flex-1"
                 >
                   <NativeSelectOption value="">
-                    Escolha qual pagamento ajustar
+                    Escolha qual Pix ajustar
                   </NativeSelectOption>
-                  {state.payments.map((p, index) => (
+                  {pixPayments.map((p, index) => (
                     <NativeSelectOption key={p.id} value={p.id}>
                       {index + 1}.{' '}
                       {p.method === 'pix'

@@ -60,8 +60,8 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
     'sale_difference',
     'missing_price',
   ].includes(state);
-  const paymentDifference = sale.receiptCents - sale.receivedCents;
-  const saleDifference = sale.receiptCents - sale.saleCents;
+  const paymentDifference = sale.receiptCents - sale.pixCents;
+  const saleDifference = sale.receivedCents - sale.saleCents;
   const reconciled = sale.automaticStatus === 'reconciled';
   return (
     <div
@@ -89,6 +89,10 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
           </p>
           <p className="mt-0.5 break-words text-base font-bold tabular-nums">
             {money(sale.receivedCents)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Pix {money(sale.pixCents)} · dinheiro (manual){' '}
+            {money(sale.cashCents)}
           </p>
         </div>
         <div>
@@ -125,7 +129,7 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
               <span className="grid gap-1">
                 {saleDifference !== 0 && (
                   <span>
-                    Comprovantes{' '}
+                    Pagamento total{' '}
                     <strong>
                       {money(Math.abs(saleDifference))}{' '}
                       {saleDifference < 0 ? 'abaixo' : 'acima'} da venda.
@@ -137,7 +141,7 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
                     Comprovantes{' '}
                     <strong>
                       {money(Math.abs(paymentDifference))}{' '}
-                      {paymentDifference < 0 ? 'abaixo' : 'acima'} do pagamento
+                      {paymentDifference < 0 ? 'abaixo' : 'acima'} do Pix
                       informado.
                     </strong>
                   </span>
@@ -146,7 +150,9 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
             )}
           </>
         ) : state === 'matched' ? (
-          'Venda, pagamento e comprovantes com valores iguais'
+          'Comprovantes conferem com o Pix; Pix + dinheiro conferem com a venda'
+        ) : state === 'not_required' ? (
+          'Sem Pix — comprovante não exigido. Dinheiro informado manualmente.'
         ) : state === 'missing' ? (
           'Sem comprovante anexado'
         ) : (
@@ -393,9 +399,13 @@ export function OverviewProductionView({
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
               <div className="rounded-2xl border bg-white p-3 sm:p-4">
                 <p className="text-xs font-semibold text-muted-foreground">
-                  Pagamento informado
+                  Pix informado
                 </p>
                 <p className="mt-1 break-words text-lg font-bold tabular-nums sm:text-2xl">
+                  {money(totals.pixCents)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Dinheiro (manual): {money(totals.cashCents)} · Total pago:{' '}
                   {money(totals.receivedCents)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
@@ -447,7 +457,7 @@ export function OverviewProductionView({
                   <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
                     {totals.shortfallCents > 0 && (
                       <span>
-                        Abaixo do informado{' '}
+                        Comprovantes abaixo do Pix{' '}
                         <strong className="ml-1 text-base tabular-nums">
                           {money(totals.shortfallCents)}
                         </strong>
@@ -455,7 +465,7 @@ export function OverviewProductionView({
                     )}
                     {totals.surplusCents > 0 && (
                       <span>
-                        Acima do informado{' '}
+                        Comprovantes acima do Pix{' '}
                         <strong className="ml-1 text-base tabular-nums">
                           {money(totals.surplusCents)}
                         </strong>
@@ -471,7 +481,7 @@ export function OverviewProductionView({
                 )}
                 <p className="mt-1 text-xs">
                   {comparison === 'matched'
-                    ? 'Venda, pagamento informado e comprovantes têm valores iguais em cada pedido. O status do pedido também considera as fotos dos aparelhos.'
+                    ? 'Comprovantes conferem com o Pix, e Pix mais dinheiro fecham cada venda. Dinheiro é informado manualmente. O status também considera as fotos dos aparelhos.'
                     : comparison === 'pending'
                       ? 'Há documentos ausentes ou ainda sem valor identificado.'
                       : 'Confira as vendas sinalizadas abaixo. Diferenças entre vendas não se compensam.'}

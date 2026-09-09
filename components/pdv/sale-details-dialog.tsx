@@ -254,7 +254,7 @@ export function SaleDetailsDialog({
                   )}
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Total dos comprovantes:{' '}
+                  Valor identificado nos comprovantes:{' '}
                   <strong>
                     {money(sale.reconciliation.confirmedTotalCents)}
                   </strong>
@@ -262,12 +262,13 @@ export function SaleDetailsDialog({
                   {sale.reconciliation.pendingReceiptCount > 0
                     ? 'Há valores pendentes de leitura ou conferência.'
                     : sale.reconciliation.status === 'divergent'
-                      ? `Comprovantes ${money(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} da venda.`
+                      ? `Comprovantes ${money(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado.`
                       : ''}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Conciliação compara documentos com o valor da venda; não
-                  confirma crédito na conta bancária.
+                  Comprovantes são comparados apenas com o Pix informado.
+                  Dinheiro é conferido manualmente. Não confirma crédito na
+                  conta bancária.
                 </p>
               </section>
             </div>

@@ -113,6 +113,7 @@ import {
 import { parseMoneyInput } from '@/lib/money';
 import {
   deriveReceiptReconciliation,
+  paymentMethodTotals,
   type ReceiptValueInput,
 } from '@/lib/receipt-reconciliation';
 import { cn } from '@/lib/utils';
@@ -1133,7 +1134,7 @@ export function SalesProductionView({
               receipts,
               reconciliation: deriveReceiptReconciliation(
                 receipts,
-                record.productsTotalCents,
+                paymentMethodTotals(record.payments).pixCents,
               ),
             };
           };
@@ -1601,6 +1602,13 @@ function EditSaleDialog({
       ? [{ id: receipt.id, ...value }]
       : [];
   });
+  const draftPixCents = paymentMethodTotals([
+    ...correctedPayments,
+    ...queuedPayments,
+    ...(paymentReady
+      ? [{ method: paymentMethod, amountCents: additionalPaymentCents }]
+      : []),
+  ]).pixCents;
   const reconciliation = sale
     ? deriveReceiptReconciliation(
         [
@@ -1613,7 +1621,7 @@ function EditSaleDialog({
           ),
           ...receiptValues,
         ],
-        sale.productsTotalCents,
+        draftPixCents,
       )
     : null;
 
@@ -2367,7 +2375,7 @@ function EditSaleDialog({
                         )
                       }
                       showSummary={false}
-                      targetCents={sale.productsTotalCents}
+                      targetCents={draftPixCents}
                       values={receiptValues}
                     />
                   </>
@@ -2376,7 +2384,7 @@ function EditSaleDialog({
                   <ReconciliationSummary
                     className="mt-3"
                     reconciliation={reconciliation}
-                    targetCents={sale.productsTotalCents}
+                    targetCents={draftPixCents}
                   />
                 )}
                 <ReceiptPaymentSync
@@ -3049,20 +3057,21 @@ function SaleReport({
                   )}
                 >
                   <p className="font-extrabold">
-                    {sale.productsTotalCents <= 0
-                      ? 'Venda sem valor definido'
+                    {sale.reconciliation.status === 'not_required'
+                      ? 'Sem Pix — comprovante não exigido'
                       : sale.reconciliation.status === 'reconciled'
-                        ? 'Comprovantes conferem'
+                        ? 'Comprovantes conferem com o Pix'
                         : sale.reconciliation.status === 'divergent'
                           ? 'Comprovantes não conferem'
                           : 'Conciliação pendente'}
                   </p>
                   <p className="mt-0.5">
                     Comprovantes confirmados:{' '}
-                    {formatMoney(sale.reconciliation.confirmedTotalCents)} ·
-                    Total da venda: {formatMoney(sale.productsTotalCents)}
+                    {formatMoney(sale.reconciliation.confirmedTotalCents)} · Pix
+                    informado:{' '}
+                    {formatMoney(paymentMethodTotals(sale.payments).pixCents)}
                     {sale.reconciliation.status === 'divergent'
-                      ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} da venda`
+                      ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado`
                       : ''}
                   </p>
                 </div>
@@ -3832,12 +3841,15 @@ function SalesPeriodReport({
                                     >
                                       <p className="font-extrabold">
                                         {sale.reconciliation.status ===
-                                        'reconciled'
-                                          ? 'Comprovantes conferem'
+                                        'not_required'
+                                          ? 'Sem Pix — comprovante não exigido'
                                           : sale.reconciliation.status ===
-                                              'divergent'
-                                            ? 'Comprovantes não conferem'
-                                            : 'Conciliação pendente'}
+                                              'reconciled'
+                                            ? 'Comprovantes conferem com o Pix'
+                                            : sale.reconciliation.status ===
+                                                'divergent'
+                                              ? 'Comprovantes não conferem'
+                                              : 'Conciliação pendente'}
                                       </p>
                                       <p>
                                         Comprovantes:{' '}
@@ -3845,11 +3857,14 @@ function SalesPeriodReport({
                                           sale.reconciliation
                                             .confirmedTotalCents,
                                         )}{' '}
-                                        · Venda:{' '}
-                                        {formatMoney(sale.productsTotalCents)}
+                                        · Pix informado:{' '}
+                                        {formatMoney(
+                                          paymentMethodTotals(sale.payments)
+                                            .pixCents,
+                                        )}
                                         {sale.reconciliation.status ===
                                         'divergent'
-                                          ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} da venda`
+                                          ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado`
                                           : ''}
                                       </p>
                                     </div>

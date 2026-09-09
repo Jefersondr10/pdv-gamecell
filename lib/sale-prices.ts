@@ -1,5 +1,8 @@
 import type { SaleRecord } from './pdv-types.ts';
-import { deriveReceiptReconciliation } from './receipt-reconciliation.ts';
+import {
+  deriveReceiptReconciliation,
+  paymentMethodTotals,
+} from './receipt-reconciliation.ts';
 import { parseMoneyInput } from './money.ts';
 
 export function parseSalePriceInput(value: string) {
@@ -38,7 +41,7 @@ export function applySalePrices(
     priceDifferenceCents: value.priceDifferenceCents,
     reconciliation: deriveReceiptReconciliation(
       sale.receipts,
-      value.productsTotalCents,
+      paymentMethodTotals(sale.payments).pixCents,
     ),
   };
 }

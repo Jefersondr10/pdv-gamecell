@@ -71,7 +71,7 @@ export function SystemSaleStatusBadge({
       )}
       title={
         status.key === 'reconciled'
-          ? 'Venda, pagamento e comprovantes conferem; fotos anexadas. Não confirma crédito bancário.'
+          ? 'Pix + dinheiro conferem com a venda; comprovantes conferem com o Pix; fotos anexadas. Dinheiro informado manualmente. Não confirma crédito bancário.'
           : status.label
       }
     >

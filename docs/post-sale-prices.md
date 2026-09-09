@@ -4,7 +4,7 @@ Em Vendas → abrir venda → Editar → Preços desta venda → Editar preços,
 
 Permissão dedicada `sales.prices`: habilitada para proprietário/administrador com permissões padrão, explicitamente configurável para funcionários. O servidor exige sessão, mesma origem, CSRF, loja correta e venda concluída. Vendas canceladas não podem ter preços alterados.
 
-Somente preço vendido dos itens, total vendido e diferenças derivadas mudam. Não se altera catálogo, preço padrão, valor de referência histórico, recebimentos, estoque, SN ou composição da venda. Não há crédito/reembolso/pagamento automático. A conciliação compara novamente os comprovantes com o novo total; divergências devem ser conferidas.
+Somente preço vendido dos itens, total vendido e diferenças derivadas mudam. Não se altera catálogo, preço padrão, valor de referência histórico, recebimentos, estoque, SN ou composição da venda. Não há crédito/reembolso/pagamento automático. A conciliação compara novamente o novo total com Pix + dinheiro e os comprovantes apenas com Pix. Alterar o preço da venda não muda o valor Pix esperado nos comprovantes; divergências devem ser conferidas.
 
 A auditoria registra operador, data, preços por SN e totais antes/depois. A transação compara revisão e preços anteriores, prevenindo perda de alterações concorrentes, inclusive mudanças que voltam ao mesmo valor. Uma repetição após resposta perdida reutiliza o identificador da operação. Pedidos sem alteração de preço são rejeitados sem escrita.
 

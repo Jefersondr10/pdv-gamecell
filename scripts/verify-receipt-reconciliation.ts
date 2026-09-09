@@ -8,6 +8,7 @@ const reconciledSale = {
   orderStatus: null,
   productsTotalCents: 100,
   receivedTotalCents: 100,
+  payments: [{ method: 'pix', amountCents: 100 }],
   items: [{ soldPriceCents: 100, photos: [{}] }],
   receipts: [{ receiptAmountCents: 100 }],
   reconciliation: deriveReceiptReconciliation([{ amountCents: 100 }], 100),
@@ -83,9 +84,9 @@ assert.deepEqual(
 );
 
 assert.deepEqual(deriveReceiptReconciliation([{ amountCents: 50_000 }], 0), {
-  status: 'pending',
+  status: 'divergent',
   confirmedTotalCents: 50_000,
-  differenceCents: null,
+  differenceCents: 50_000,
   pendingReceiptCount: 0,
 });
 

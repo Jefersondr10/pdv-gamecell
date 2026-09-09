@@ -3,6 +3,7 @@ import {
   resolvePermissions,
   type PermissionSubject,
 } from '../permissions.ts';
+import { paymentMethodTotals } from '../receipt-reconciliation.ts';
 
 type Payment = {
   id: string;
@@ -113,6 +114,7 @@ export async function readReceiptPaymentSync(
   return {
     sale,
     payments,
+    ...paymentMethodTotals(payments),
     receipts,
     complete,
     total,
@@ -130,7 +132,8 @@ export async function settleReceiptPaymentSync(
   const current = await readReceiptPaymentSync(db, storeId, saleId);
   const request = current?.request;
   if (!current || !request || request.status !== 'pending') return;
-  const { sale, payments, receipts, complete, total } = current;
+  const { sale, payments, receipts, complete, total, pixCents, cashCents } =
+    current;
   if (sale.status !== 'completed' || !complete) return;
   const actor = await db
     .prepare(
@@ -151,24 +154,30 @@ export async function settleReceiptPaymentSync(
       },
       'sales.payments',
     );
+  const pixPayments = payments.filter((p) => p.method === 'pix');
   const target = request.targetPaymentId
-    ? payments.find((p) => p.id === request.targetPaymentId)
-    : payments.length === 1
-      ? payments[0]
+    ? pixPayments.find((p) => p.id === request.targetPaymentId)
+    : pixPayments.length === 1
+      ? pixPayments[0]
       : undefined;
   const targetAmount = target
     ? total -
-      payments
+      pixPayments
         .filter((p) => p.id !== target.id)
         .reduce((sum, p) => sum + p.amountCents, 0)
     : 0;
-  const matched = total === sale.receivedTotalCents;
+  const matched = total === pixCents;
+  const receivedAfter = cashCents + total;
   if (
     !allowed ||
+    pixPayments.length === 0 ||
+    (request.targetPaymentId !== null && !target) ||
     (!matched &&
       (!target || targetAmount < 1 || targetAmount > 1_000_000_000)) ||
     !Number.isSafeInteger(total) ||
-    total > 100_000_000_000
+    total > 100_000_000_000 ||
+    !Number.isSafeInteger(receivedAfter) ||
+    receivedAfter > 100_000_000_000
   ) {
     await db
       .prepare(
@@ -189,7 +198,9 @@ export async function settleReceiptPaymentSync(
     after,
     receipts,
     beforeTotalCents: sale.receivedTotalCents,
-    afterTotalCents: total,
+    afterTotalCents: receivedAfter,
+    pixTotalCents: total,
+    cashPreservedCents: cashCents,
     targetPaymentId: target?.id ?? null,
   });
   await db.batch([
@@ -225,7 +236,7 @@ export async function settleReceiptPaymentSync(
         sale.receiptsJson,
       ),
     db
-      .prepare(`UPDATE payments SET amount_cents=? WHERE id=? AND sale_id=? AND store_id=?
+      .prepare(`UPDATE payments SET amount_cents=? WHERE id=? AND sale_id=? AND store_id=? AND method='pix'
       AND EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND request_id=? AND status='pending')
       AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND details_json=?)`)
       .bind(
@@ -243,8 +254,8 @@ export async function settleReceiptPaymentSync(
       AND EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND request_id=? AND status='pending')
       AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND details_json=?)`)
       .bind(
-        total,
-        total,
+        receivedAfter,
+        receivedAfter,
         saleId,
         storeId,
         saleId,

@@ -14,6 +14,7 @@ const fixture = (
     status: cancelled ? ('cancelled' as const) : ('completed' as const),
     productsTotalCents: 3473000,
     receivedTotalCents: paid,
+    payments: [{ method: 'pix', amountCents: paid }],
     items: [{ soldPriceCents: 3473000, photos: [{}] }],
     receipts,
     reconciliation: deriveReceiptReconciliation(receipts, 3473000),
@@ -25,7 +26,7 @@ const below = saleFinancialSummary(actual);
 assert.equal(below.reconciled, false);
 assert.match(below.paymentLabel, /Pago informado.*34\.730,00/);
 assert.equal(below.receiptDifferenceCents, -8000);
-assert.match(below.receiptText!, /34\.650,00.*80,00 abaixo da venda/);
+assert.match(below.receiptText!, /34\.650,00.*80,00 abaixo do Pix informado/);
 assert.equal(below.receiptWarning, true);
 assert.equal(
   JSON.stringify(actual),
@@ -38,7 +39,7 @@ assert.equal(equal.paymentLabel, 'Venda / pago');
 assert.equal(equal.receiptWarning, false);
 const above = saleFinancialSummary(fixture([3481000]));
 assert.equal(above.reconciled, false);
-assert.match(above.receiptText!, /80,00 acima da venda/);
+assert.match(above.receiptText!, /80,00 acima do Pix informado/);
 for (const receipts of [[], [null], [1500000, null], [0], [-1]]) {
   const pending = saleFinancialSummary(fixture(receipts));
   assert.equal(pending.reconciled, false);

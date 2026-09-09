@@ -1732,7 +1732,7 @@ function GuideDialog({
           <GuideStep number="Novo" title="Vendas e estoque mais diretos">
             Toque em uma venda para ver produtos, SNs, pagamentos e
             comprovantes. Use o filtro Vendedor junto do período. Conciliado
-            significa que os comprovantes conferem com o valor da venda; não
+            significa que os comprovantes conferem com o Pix informado; não
             confirma crédito no banco. No estoque, pesquise modelo, cor e
             memória em qualquer ordem, ou um SN. Com estoque, Sem estoque e
             Todos filtram as variações. Os preços em edição ficam destacados. O
@@ -1784,13 +1784,14 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="Novo" title="Comprovantes: conferir os pagamentos">
             No menu da loja, abra Comprovantes e escolha o período pela data da
-            venda. Compare o pago informado com os valores dos comprovantes,
+            venda. Compare o Pix informado com os valores dos comprovantes,
             separados por venda. Toque em um arquivo para abrir a foto ou PDF,
             passe para o próximo ou abra a venda para corrigir dados. Valores
             ainda não identificados ficam pendentes; anexos só são carregados ao
             abrir. Vendas canceladas não entram. Pagamentos em dinheiro são
-            identificados e podem não ter comprovante. Esta conferência é
-            documental: não confirma crédito na conta bancária.
+            informados e conferidos manualmente, fora da comparação dos
+            comprovantes. Esta conferência é documental: não confirma crédito na
+            conta bancária.
           </GuideStep>
           <GuideStep number="Novo" title="iPhone 15 e cores revisadas">
             O catálogo padrão inclui agora o iPhone 15 base, com cinco cores e
@@ -1842,11 +1843,12 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
-            compara visualmente Valor da venda e Total pago: verde quando são
-            iguais e um aviso discreto quando falta receber ou foi pago a mais.
-            A conferência dos comprovantes aparece separadamente, para não ser
-            confundida com pagamento pendente. Alterar o preço de venda não gera
-            aviso em comparação ao preço padrão.
+            compara visualmente Valor da venda e Total pago. O destaque verde de
+            conciliação exige também as demais conferências completas; há avisos
+            quando falta receber ou foi pago a mais. A conferência dos
+            comprovantes aparece separadamente, para não ser confundida com
+            pagamento pendente. Alterar o preço de venda não gera aviso em
+            comparação ao preço padrão.
           </GuideStep>
           <GuideStep number="5" title="Relatórios e histórico">
             O estoque abre somente com variações disponíveis. Nos detalhes,
@@ -1866,8 +1868,9 @@ function GuideDialog({
             quitadas. As correções ficam no histórico e o saldo é recalculado.
             Você também pode completar o pagamento, dividir o saldo em mais de
             uma forma, mudar o status do pedido, conferir comprovantes ou
-            acrescentar fotos ao SN correto. Produtos e preços originais
-            permanecem protegidos.
+            acrescentar fotos ao SN correto. Com permissão, use Editar preços
+            nos detalhes para corrigir os valores vendidos. Produtos e SNs
+            permanecem protegidos, e as alterações de preço ficam no histórico.
           </GuideStep>
           <GuideStep number="7" title="Usuários e lojas">
             Cada loja é isolada. O proprietário cria funcionários e senhas;

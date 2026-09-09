@@ -39,7 +39,10 @@ import {
   sha256,
 } from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
-import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
+import {
+  deriveReceiptReconciliation,
+  paymentMethodTotals,
+} from '@/lib/receipt-reconciliation';
 import {
   saleDisplayStatus,
   automaticSaleStatus,
@@ -1489,7 +1492,10 @@ async function hydrateSales(
       items: itemsBySale.get(sale.id) ?? [],
       payments: paymentsBySale.get(sale.id) ?? [],
       receipts,
-      reconciliation: deriveReceiptReconciliation(receipts, productsTotalCents),
+      reconciliation: deriveReceiptReconciliation(
+        receipts,
+        paymentMethodTotals(paymentsBySale.get(sale.id) ?? []).pixCents,
+      ),
     };
   });
 }

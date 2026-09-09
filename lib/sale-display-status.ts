@@ -4,6 +4,10 @@ import type {
   OrderStatusColor,
 } from './pdv-types.ts';
 import { normalizeOrderStatusName } from './order-status-names.ts';
+import {
+  deriveReceiptReconciliation,
+  paymentMethodTotals,
+} from './receipt-reconciliation.ts';
 
 // Only these outcomes are automatic. All other order statuses belong to the store.
 export const SYSTEM_SALE_STATUSES = [
@@ -34,14 +38,15 @@ export const SYSTEM_SALE_STATUS_DESCRIPTIONS: Record<SaleCheckKey, string> = {
   cancelled:
     'A venda foi cancelada e não entra nos totais de vendas concluídas.',
   missing_price: 'Há produto sem preço de venda válido.',
-  missing_receipt: 'Nenhum comprovante foi anexado à venda.',
-  review: 'Há leitura inválida ou o total dos comprovantes difere da venda.',
+  missing_receipt: 'Há pagamento em Pix sem comprovante anexado.',
+  review:
+    'Há leitura inválida ou o total dos comprovantes difere do Pix informado.',
   reading: 'Há comprovante aguardando a conclusão da leitura.',
   pending_payment: 'O pagamento informado está abaixo do valor da venda.',
   overpaid: 'O pagamento informado está acima do valor da venda.',
   missing_photo: 'Falta foto em pelo menos um aparelho vendido.',
   reconciled:
-    'Preços preenchidos, fotos anexadas e venda, pagamento e comprovantes com valores iguais. Não confirma crédito bancário.',
+    'Preços e fotos preenchidos, Pix mais dinheiro igual à venda e comprovantes iguais ao Pix. Dinheiro informado manualmente; não confirma crédito bancário.',
 };
 
 export function isAutomaticStatusName(name: string) {
@@ -54,6 +59,7 @@ type StatusSale = Pick<
   SaleRecord,
   'status' | 'reconciliation' | 'productsTotalCents' | 'receivedTotalCents'
 > & {
+  payments: readonly { method: string; amountCents: number }[];
   orderStatus?: { id: string; name: string; color: OrderStatusColor } | null;
   items: { soldPriceCents: number; photos: readonly unknown[] }[];
   receipts: Pick<
@@ -63,6 +69,8 @@ type StatusSale = Pick<
 };
 export function saleIssues(sale: StatusSale) {
   if (sale.status === 'cancelled') return [];
+  const { pixCents } = paymentMethodTotals(sale.payments);
+  const reconciliation = deriveReceiptReconciliation(sale.receipts, pixCents);
   const failed = sale.receipts.some((receipt) =>
     receipt.receiptAmountCents !== null
       ? !Number.isSafeInteger(receipt.receiptAmountCents) ||
@@ -76,8 +84,8 @@ export function saleIssues(sale: StatusSale) {
       sale.productsTotalCents <= 0 ||
       sale.items.length === 0 ||
       sale.items.some((item) => item.soldPriceCents <= 0),
-    missing_receipt: sale.receipts.length === 0,
-    review: failed || sale.reconciliation.status === 'divergent',
+    missing_receipt: pixCents > 0 && sale.receipts.length === 0,
+    review: failed || reconciliation.status === 'divergent',
     reading:
       !failed &&
       sale.receipts.some((receipt) => receipt.receiptAmountCents === null),

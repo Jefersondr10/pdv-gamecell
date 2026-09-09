@@ -9,6 +9,7 @@ export type OverviewTotals = {
   saleCount: number;
   receivedCents: number;
   cashCents: number;
+  pixCents: number;
   receiptCents: number;
   receiptCount: number;
   pendingCount: number;
@@ -31,6 +32,7 @@ export type OverviewSale = {
   displayStatus: SaleDisplayStatus;
   issueKeys: SaleIssueKey[];
   cashCents: number;
+  pixCents: number;
   receiptCents: number;
   receiptCount: number;
   pendingCount: number;
@@ -62,16 +64,18 @@ export function overviewSaleComparison(
     | 'pendingCount'
     | 'receiptCents'
     | 'receivedCents'
+    | 'pixCents'
     | 'saleCents'
     | 'saleInvalid'
   >,
 ) {
-  if (!sale.receiptCount) return 'missing';
+  if (!sale.receiptCount && sale.pixCents > 0) return 'missing';
   if (sale.pendingCount) return 'pending';
   if (sale.saleInvalid) return 'missing_price';
-  if (sale.receiptCents < sale.receivedCents) return 'below';
-  if (sale.receiptCents > sale.receivedCents) return 'above';
-  if (sale.receiptCents !== sale.saleCents) return 'sale_difference';
+  if (sale.receiptCents < sale.pixCents) return 'below';
+  if (sale.receiptCents > sale.pixCents) return 'above';
+  if (sale.receivedCents !== sale.saleCents) return 'sale_difference';
+  if (!sale.receiptCount && sale.pixCents === 0) return 'not_required';
   return 'matched';
 }
 
@@ -80,7 +84,7 @@ export function overviewComparison(totals: OverviewTotals) {
   if (!totals.saleCount) return 'empty';
   if (totals.divergentCount) return 'review';
   if (totals.pendingCount || totals.missingCount) return 'pending';
-  if (totals.receiptCents !== totals.receivedCents || totals.divergentCount)
+  if (totals.receiptCents !== totals.pixCents || totals.divergentCount)
     return 'review';
   return 'matched';
 }

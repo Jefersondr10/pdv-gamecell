@@ -318,7 +318,7 @@ function saleDetails(
   if ((level === 'complete' || singleSale) && showFinancial) {
     layout.title('Conferência dos comprovantes');
     layout.paragraph(
-      'Compara os arquivos com o valor da venda; não confirma crédito bancário.',
+      'Compara comprovantes com o Pix. Dinheiro informado manualmente; não confirma crédito bancário.',
       { size: 9, muted: true },
     );
     layout.row(
@@ -328,19 +328,19 @@ function saleDetails(
     const pending = sale.reconciliation.pendingReceiptCount;
     const diff = sale.reconciliation.differenceCents;
     layout.paragraph(
-      !sale.receipts.length
-        ? 'Sem comprovante anexado.'
-        : sale.productsTotalCents <= 0
-          ? 'Venda sem valor definido: conciliação indisponível até definir o valor.'
+      sale.reconciliation.status === 'not_required'
+        ? 'Sem Pix — comprovante não exigido; dinheiro informado manualmente.'
+        : !sale.receipts.length
+          ? 'Sem comprovante anexado.'
           : pending || sale.reconciliation.status === 'pending'
             ? pending
               ? `Leitura/conferência pendente: ${pending} comprovante(s).`
               : 'Conferência dos comprovantes pendente.'
             : diff === 0
-              ? 'Comprovantes conferem com o valor da venda.'
+              ? 'Comprovantes conferem com o Pix informado.'
               : diff === null
                 ? 'Conferência pendente.'
-                : `Comprovantes ${diff < 0 ? 'abaixo' : 'acima'} da venda: diferença de ${money(Math.abs(diff))}.`,
+                : `Comprovantes ${diff < 0 ? 'abaixo' : 'acima'} do Pix informado: diferença de ${money(Math.abs(diff))}.`,
       { size: 9, bold: true },
     );
   }

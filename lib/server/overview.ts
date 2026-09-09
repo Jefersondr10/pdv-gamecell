@@ -5,6 +5,7 @@ import {
   SALE_AUTO_STATUS_SQL,
   SALE_ISSUE_SQL,
   SALE_ISSUE_KEYS_SQL,
+  SALE_PIX_TOTAL_SQL,
   validReceiptAmountSql,
 } from './sale-status-sql.ts';
 import {
@@ -35,13 +36,13 @@ export async function readOverview(
   const comparisonWhere: Record<OverviewFilter, string> = {
     all: '1 = 1',
     review:
-      'receiptCount = 0 OR pendingCount > 0 OR saleInvalid = 1 OR receiptCents != receivedCents OR receiptCents != saleCents',
+      '(pixCents > 0 AND receiptCount = 0) OR pendingCount > 0 OR saleInvalid = 1 OR receiptCents != pixCents OR receivedCents != saleCents',
     matched:
-      'receiptCount > 0 AND pendingCount = 0 AND saleInvalid = 0 AND receiptCents = receivedCents AND receiptCents = saleCents',
+      '(receiptCount > 0 OR pixCents = 0) AND pendingCount = 0 AND saleInvalid = 0 AND receiptCents = pixCents AND receivedCents = saleCents',
     divergent:
-      'receiptCount > 0 AND pendingCount = 0 AND (saleInvalid = 1 OR receiptCents != receivedCents OR receiptCents != saleCents)',
+      'saleInvalid = 1 OR receivedCents != saleCents OR (receiptCount > 0 AND pendingCount = 0 AND receiptCents != pixCents)',
     pending: 'receiptCount > 0 AND pendingCount > 0',
-    missing: 'receiptCount = 0',
+    missing: 'receiptCount = 0 AND pixCents > 0',
   };
   const rawCursor = url.searchParams.get('cursor');
   let cursor: [number, string] | null = null;
@@ -91,6 +92,7 @@ export async function readOverview(
   ), compared AS (
     SELECT s.id, s.number, s.customer_name AS customerName, s.created_at AS createdAt,
       s.received_total_cents AS receivedCents, s.products_total_cents AS saleCents,
+      ${SALE_PIX_TOTAL_SQL} AS pixCents,
       ${SALE_AUTO_STATUS_SQL} AS automaticStatus, CASE WHEN ${SALE_ISSUE_SQL.missing_price} THEN 1 ELSE 0 END AS saleInvalid, s.store_id AS storeId,
       ${SALE_ISSUE_KEYS_SQL} AS issueKeysJson, os.id AS orderStatusId, os.name AS orderStatusName, os.color AS orderStatusColor,
       COALESCE(c.cashCents, 0) AS cashCents, COALESCE(r.receiptCount, 0) AS receiptCount,
@@ -102,12 +104,13 @@ export async function readOverview(
   ), summary AS (
     SELECT COUNT(*) AS totalSales, COALESCE(SUM(receivedCents), 0) AS totalReceived,
       COALESCE(SUM(cashCents), 0) AS totalCash, COALESCE(SUM(receiptCents), 0) AS totalReceipts,
+      COALESCE(SUM(pixCents), 0) AS totalPix,
       COALESCE(SUM(receiptCount), 0) AS totalFiles, COALESCE(SUM(pendingCount), 0) AS totalPending,
-      COALESCE(SUM(CASE WHEN receiptCount = 0 THEN 1 ELSE 0 END), 0) AS totalMissing,
-      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND (saleInvalid = 1 OR receiptCents != receivedCents OR receiptCents != saleCents) THEN 1 ELSE 0 END), 0) AS totalDivergent,
-      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND (saleInvalid = 1 OR receiptCents != saleCents) THEN 1 ELSE 0 END), 0) AS saleDifferenceCount,
-      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents < receivedCents THEN receivedCents - receiptCents ELSE 0 END), 0) AS totalShortfall,
-      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents > receivedCents THEN receiptCents - receivedCents ELSE 0 END), 0) AS totalSurplus
+      COALESCE(SUM(CASE WHEN receiptCount = 0 AND pixCents > 0 THEN 1 ELSE 0 END), 0) AS totalMissing,
+      COALESCE(SUM(CASE WHEN ${comparisonWhere.divergent} THEN 1 ELSE 0 END), 0) AS totalDivergent,
+      COALESCE(SUM(CASE WHEN saleInvalid = 1 OR receivedCents != saleCents THEN 1 ELSE 0 END), 0) AS saleDifferenceCount,
+      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents < pixCents THEN pixCents - receiptCents ELSE 0 END), 0) AS totalShortfall,
+      COALESCE(SUM(CASE WHEN receiptCount > 0 AND pendingCount = 0 AND receiptCents > pixCents THEN receiptCents - pixCents ELSE 0 END), 0) AS totalSurplus
     FROM selected
   ), page AS (SELECT * FROM selected ${cursor ? 'WHERE createdAt < ? OR (createdAt = ? AND id < ?)' : ''} ORDER BY createdAt DESC, id DESC LIMIT ?)
   SELECT summary.*, page.*, (SELECT COALESCE(SUM(pendingCount), 0) FROM compared) AS pendingInPeriod,
@@ -133,6 +136,7 @@ export async function readOverview(
     totalSales: number;
     totalReceived: number;
     totalCash: number;
+    totalPix: number;
     totalReceipts: number;
     totalFiles: number;
     totalPending: number;
@@ -157,6 +161,7 @@ export async function readOverview(
     saleCount: Number(first?.totalSales ?? 0),
     receivedCents: Number(first?.totalReceived ?? 0),
     cashCents: Number(first?.totalCash ?? 0),
+    pixCents: Number(first?.totalPix ?? 0),
     receiptCents: Number(first?.totalReceipts ?? 0),
     receiptCount: Number(first?.totalFiles ?? 0),
     pendingCount: Number(first?.totalPending ?? 0),
@@ -176,6 +181,7 @@ export async function readOverview(
         customerName: row.customerName,
         createdAt: row.createdAt,
         receivedCents: row.receivedCents,
+        pixCents: row.pixCents,
         saleCents: row.saleCents,
         saleInvalid: row.saleInvalid,
         automaticStatus: row.automaticStatus,

@@ -6,18 +6,31 @@ export type ReceiptValueInput = {
 };
 
 export type ReceiptReconciliation = {
-  status: 'pending' | 'reconciled' | 'divergent';
+  status: 'pending' | 'reconciled' | 'divergent' | 'not_required';
   confirmedTotalCents: number;
   differenceCents: number | null;
   pendingReceiptCount: number;
 };
+
+export function paymentMethodTotals(
+  payments: readonly { method: string; amountCents: number }[],
+) {
+  return payments.reduce(
+    (totals, payment) => {
+      if (payment.method === 'pix') totals.pixCents += payment.amountCents;
+      if (payment.method === 'cash') totals.cashCents += payment.amountCents;
+      return totals;
+    },
+    { pixCents: 0, cashCents: 0 },
+  );
+}
 
 export function deriveReceiptReconciliation(
   receipts: Array<{
     amountCents?: number | null;
     receiptAmountCents?: number | null;
   }>,
-  productsTotalCents: number,
+  pixTotalCents: number,
 ): ReceiptReconciliation {
   const values = receipts.map(
     (receipt) => receipt.receiptAmountCents ?? receipt.amountCents ?? null,
@@ -32,7 +45,7 @@ export function deriveReceiptReconciliation(
     0,
   );
 
-  if (productsTotalCents <= 0) {
+  if (!Number.isSafeInteger(pixTotalCents) || pixTotalCents < 0) {
     return {
       status: 'pending',
       confirmedTotalCents,
@@ -40,6 +53,14 @@ export function deriveReceiptReconciliation(
       pendingReceiptCount,
     };
   }
+
+  if (pixTotalCents === 0 && receipts.length === 0)
+    return {
+      status: 'not_required',
+      confirmedTotalCents: 0,
+      differenceCents: 0,
+      pendingReceiptCount: 0,
+    };
 
   if (receipts.length === 0 || pendingReceiptCount > 0) {
     return {
@@ -50,7 +71,7 @@ export function deriveReceiptReconciliation(
     };
   }
 
-  const differenceCents = confirmedTotalCents - productsTotalCents;
+  const differenceCents = confirmedTotalCents - pixTotalCents;
   return {
     status: differenceCents === 0 ? 'reconciled' : 'divergent',
     confirmedTotalCents,

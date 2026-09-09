@@ -73,6 +73,7 @@ import { parseMoneyInput } from '@/lib/money';
 import { ReceiptReconciliationEditor } from '@/components/pdv/receipt-reconciliation-editor';
 import {
   deriveReceiptReconciliation,
+  paymentMethodTotals,
   type ReceiptValueInput,
 } from '@/lib/receipt-reconciliation';
 import { normalizeCandidate, type ScanCandidate } from '@/lib/scanner';
@@ -910,7 +911,14 @@ export function SellWizard({
           receiptBytes={sumFileBytes(receiptFiles)}
           receiptError={receiptError}
           receiptValues={receiptValues}
-          targetCents={total}
+          targetCents={
+            paymentMethodTotals(
+              payments.map((payment) => ({
+                method: payment.method,
+                amountCents: parseMoneyInput(payment.amount),
+              })),
+            ).pixCents
+          }
           onReceiptValueChange={(index, value) =>
             setReceiptValues((current) =>
               receiptFiles.map((_, candidateIndex) =>
@@ -2186,7 +2194,15 @@ function SaleReview({
   onConfirm: () => void;
   saving: boolean;
 }) {
-  const reconciliation = deriveReceiptReconciliation(receiptValues, total);
+  const reconciliation = deriveReceiptReconciliation(
+    receiptValues,
+    paymentMethodTotals(
+      payments.map((payment) => ({
+        method: payment.method,
+        amountCents: parseMoneyInput(payment.amount),
+      })),
+    ).pixCents,
+  );
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
@@ -2344,7 +2360,9 @@ function SaleReview({
                 <strong>
                   {receiptCount > 0
                     ? `${receiptCount} ${receiptCount === 1 ? 'anexado' : 'anexados'}`
-                    : 'Pulado'}
+                    : reconciliation.status === 'not_required'
+                      ? 'Não exigido (sem Pix)'
+                      : 'Pulado'}
                 </strong>
               </div>
               {receiptCount > 0 && (
@@ -2358,7 +2376,7 @@ function SaleReview({
                   }`}
                 >
                   {reconciliation.status === 'reconciled'
-                    ? 'Conciliado com o total da venda'
+                    ? 'Comprovantes conferem com o Pix informado'
                     : reconciliation.status === 'divergent'
                       ? `${(reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} nos comprovantes · verificar venda`
                       : 'Leitura em andamento · você já pode salvar a venda'}

@@ -163,12 +163,7 @@ export type SaleRecord = {
   items: SaleItemRecord[];
   payments: SalePaymentRecord[];
   receipts: ReceiptAttachmentRecord[];
-  reconciliation: {
-    status: 'pending' | 'reconciled' | 'divergent';
-    confirmedTotalCents: number;
-    differenceCents: number | null;
-    pendingReceiptCount: number;
-  };
+  reconciliation: import('./receipt-reconciliation').ReceiptReconciliation;
 };
 
 export type SalesGroupRecord = {

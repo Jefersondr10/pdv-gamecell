@@ -284,21 +284,21 @@ export function ReconciliationSummary({
       role={divergent ? 'alert' : 'status'}
     >
       <p className="font-extrabold">
-        {targetCents <= 0
-          ? 'Venda sem valor definido'
+        {reconciliation.status === 'not_required'
+          ? 'Sem Pix — comprovante não exigido'
           : reconciled
-            ? 'Comprovantes iguais ao valor da venda'
+            ? 'Comprovantes iguais ao Pix informado'
             : divergent
               ? 'Comprovantes não conferem'
               : 'Conferência dos comprovantes pendente'}
       </p>
       <p className="mt-0.5">
-        {targetCents <= 0
-          ? 'A conciliação ficará pendente até a venda possuir um valor.'
+        {reconciliation.status === 'not_required'
+          ? 'Dinheiro é considerado pelo valor informado manualmente.'
           : reconciled
-            ? `Comprovantes: ${formatMoney(reconciliation.confirmedTotalCents)} · venda: ${formatMoney(targetCents)}.`
+            ? `Comprovantes: ${formatMoney(reconciliation.confirmedTotalCents)} · Pix: ${formatMoney(targetCents)}.`
             : divergent
-              ? `Os comprovantes estão ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} ${(reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do valor da venda.`
+              ? `Os comprovantes estão ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} ${(reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado. Dinheiro não entra nesta comparação.`
               : `${reconciliation.pendingReceiptCount} comprovante(s) ainda sem valor confirmado.`}
       </p>
     </div>

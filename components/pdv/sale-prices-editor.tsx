@@ -9,7 +9,10 @@ import { createOperationId } from '@/lib/client-operation-id';
 import { cn } from '@/lib/utils';
 import type { SaleRecord } from '@/lib/pdv-types';
 import { parseSalePriceInput, type SalePrices } from '@/lib/sale-prices';
-import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
+import {
+  deriveReceiptReconciliation,
+  paymentMethodTotals,
+} from '@/lib/receipt-reconciliation';
 
 const money = (cents: number) =>
   (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -60,7 +63,10 @@ export function SalePricesEditor({
   );
   const newTotal = items.reduce((total, item) => total + item.priceCents, 0);
   const difference = sale.receivedTotalCents - newTotal;
-  const receiptCheck = deriveReceiptReconciliation(sale.receipts, newTotal);
+  const receiptCheck = deriveReceiptReconciliation(
+    sale.receipts,
+    paymentMethodTotals(sale.payments).pixCents,
+  );
   const headers = {
     'content-type': 'application/json',
     'x-csrf-token': csrfToken,
@@ -220,11 +226,13 @@ export function SalePricesEditor({
             </p>
             {!invalid && (
               <p className="mt-1 text-xs text-muted-foreground">
-                {receiptCheck.status === 'pending'
-                  ? `${receiptCheck.pendingReceiptCount} comprovante(s) pendente(s) de valor ou anexo. A conferência ainda não terminou.`
-                  : receiptCheck.differenceCents === 0
-                    ? 'Comprovantes conferem com o novo total.'
-                    : `Comprovantes ${receiptCheck.differenceCents! < 0 ? 'abaixo' : 'acima'} do novo total em ${money(Math.abs(receiptCheck.differenceCents!))}.`}
+                {receiptCheck.status === 'not_required'
+                  ? 'Sem Pix: dinheiro informado manualmente, sem exigência de comprovante.'
+                  : receiptCheck.status === 'pending'
+                    ? `${receiptCheck.pendingReceiptCount} comprovante(s) pendente(s) de valor ou anexo. A conferência ainda não terminou.`
+                    : receiptCheck.differenceCents === 0
+                      ? 'Comprovantes conferem com o Pix informado.'
+                      : `Comprovantes ${receiptCheck.differenceCents! < 0 ? 'abaixo' : 'acima'} do Pix informado em ${money(Math.abs(receiptCheck.differenceCents!))}.`}
               </p>
             )}
             {!invalid && (

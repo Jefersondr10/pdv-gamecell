@@ -1,4 +1,5 @@
 import { saleDisplayStatus } from './sale-display-status.ts';
+import { paymentMethodTotals } from './receipt-reconciliation.ts';
 
 type SummarySale = Parameters<typeof saleDisplayStatus>[0];
 const money = (cents: number) =>
@@ -7,6 +8,7 @@ const money = (cents: number) =>
 // A matching manually entered payment alone is not a reconciled sale.
 // Keep document evidence separate; displaying it must never change payments.
 export function saleFinancialSummary(sale: SummarySale) {
+  const { pixCents, cashCents } = paymentMethodTotals(sale.payments);
   const reconciled = saleDisplayStatus(sale).key === 'reconciled';
   const cancelled = sale.status === 'cancelled';
   const completeReceipts =
@@ -23,9 +25,7 @@ export function saleFinancialSummary(sale: SummarySale) {
       )
     : null;
   const receiptDifferenceCents =
-    receiptTotalCents !== null && sale.productsTotalCents > 0
-      ? receiptTotalCents - sale.productsTotalCents
-      : null;
+    receiptTotalCents !== null ? receiptTotalCents - pixCents : null;
   const receiptWarning =
     !cancelled &&
     receiptDifferenceCents !== null &&
@@ -35,11 +35,13 @@ export function saleFinancialSummary(sale: SummarySale) {
       ? null
       : `Comprovantes ${money(receiptTotalCents)}${
           receiptWarning
-            ? ` · ${money(Math.abs(receiptDifferenceCents!))} ${receiptDifferenceCents! < 0 ? 'abaixo' : 'acima'} da venda`
+            ? ` · ${money(Math.abs(receiptDifferenceCents!))} ${receiptDifferenceCents! < 0 ? 'abaixo' : 'acima'} do Pix informado`
             : ''
         }`;
   return {
     reconciled,
+    pixCents,
+    cashCents,
     receiptTotalCents,
     receiptDifferenceCents,
     receiptWarning,

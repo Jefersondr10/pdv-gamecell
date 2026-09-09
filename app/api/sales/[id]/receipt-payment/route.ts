@@ -31,6 +31,8 @@ function publicState(
     receivedTotalCents: state.sale.receivedTotalCents,
     productsTotalCents: state.sale.productsTotalCents,
     receiptTotalCents: state.total,
+    pixCents: state.pixCents,
+    cashCents: state.cashCents,
     complete: state.complete,
     payments: state.payments,
     expectedPayments: state.sale.paymentsJson,
@@ -145,21 +147,22 @@ export async function POST(request: Request, context: Context) {
         'Aguarde a leitura ou corrija os comprovantes sem valor.',
         'RECEIPTS_PENDING',
       );
+    const pixPayments = state.payments.filter((p) => p.method === 'pix');
     const target = targetPaymentId
-      ? state.payments.find((p) => p.id === targetPaymentId)
-      : state.payments.length === 1
-        ? state.payments[0]
+      ? pixPayments.find((p) => p.id === targetPaymentId)
+      : pixPayments.length === 1
+        ? pixPayments[0]
         : undefined;
     const nextAmount = target
       ? state.total -
-        state.payments
+        pixPayments
           .filter((p) => p.id !== target.id)
           .reduce((sum, p) => sum + p.amountCents, 0)
       : 0;
     if (!target || nextAmount < 1 || nextAmount > 1_000_000_000)
       throw new HttpError(
         400,
-        'Escolha um pagamento que possa receber a diferença. Se precisar distribuir entre vários, use Alterar pagamentos.',
+        'Escolha um pagamento Pix que possa receber a diferença. Dinheiro só pode ser alterado manualmente.',
         'INVALID_TARGET_PAYMENT',
       );
     const now = Date.now();

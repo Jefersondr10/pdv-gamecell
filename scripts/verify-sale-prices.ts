@@ -24,7 +24,7 @@ const saleFixture = {
   receivedDifferenceCents: 0,
   items: [{ id: 'item', soldPriceCents: 3473000, photos: [{}] }],
   receipts: [{ receiptAmountCents: 1500000 }, { receiptAmountCents: 1965000 }],
-  payments: [{ amountCents: 3473000 }],
+  payments: [{ method: 'pix', amountCents: 3473000 }],
   reconciliation: deriveReceiptReconciliation(
     [{ amountCents: 3465000 }],
     3473000,
@@ -41,13 +41,12 @@ const applyFixture = (total: number, paid = 3473000) =>
     items: [{ id: 'item', soldPriceCents: total }],
   });
 assert.equal(saleDisplayStatus(applyFixture(3465000)).key, 'none');
-assert.equal(saleIssues(applyFixture(3465000))[0].key, 'overpaid');
-assert.equal(saleIssues(applyFixture(3500000))[0].key, 'review');
-assert.equal(
-  saleDisplayStatus(applyFixture(3465000, 3465000)).key,
-  'reconciled',
+assert.ok(
+  saleIssues(applyFixture(3465000)).some((issue) => issue.key === 'overpaid'),
 );
-assert.equal(applyFixture(3500000).reconciliation.differenceCents, -35000);
+assert.equal(saleIssues(applyFixture(3500000))[0].key, 'review');
+assert.equal(saleDisplayStatus(applyFixture(3465000, 3465000)).key, 'none');
+assert.equal(applyFixture(3500000).reconciliation.differenceCents, -8000);
 assert.equal(applyFixture(3500000).payments, saleFixture.payments);
 assert.equal(applyFixture(3500000).receipts, saleFixture.receipts);
 assert.equal(saleFixture.items[0].soldPriceCents, 3473000);

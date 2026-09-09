@@ -23,12 +23,16 @@ CREATE TABLE sale_items (id TEXT, sale_id TEXT, store_id TEXT, sold_price_cents 
 CREATE TABLE attachments (id TEXT, sale_id TEXT, store_id TEXT, sale_item_id TEXT, kind TEXT, receipt_amount_cents INTEGER);
 CREATE TABLE receipt_ocr_jobs (attachment_id TEXT, status TEXT);`);
 db.database.exec(
+  'CREATE TABLE payments (id TEXT, sale_id TEXT, store_id TEXT, method TEXT, amount_cents INTEGER)',
+);
+db.database.exec(
   `CREATE TABLE order_statuses (id TEXT, store_id TEXT, name TEXT, name_normalized TEXT, active INTEGER)`,
 );
 type Fixture = {
   status: 'completed' | 'cancelled';
   productsTotalCents: number;
   receivedTotalCents: number;
+  payments: { method: string; amountCents: number }[];
   items: { soldPriceCents: number; photos: unknown[] }[];
   receipts: { receiptAmountCents: number | null; receiptOcrStatus?: string }[];
 };
@@ -36,6 +40,7 @@ const base = (): Fixture => ({
   status: 'completed',
   productsTotalCents: 10000,
   receivedTotalCents: 10000,
+  payments: [{ method: 'pix', amountCents: 10000 }],
   items: [
     { soldPriceCents: 6000, photos: [{}] },
     { soldPriceCents: 4000, photos: [{}] },
@@ -86,6 +91,14 @@ function add(key: string, change: (value: Fixture) => void = () => {}) {
       .prepare('INSERT INTO attachments VALUES (?, ?, ?, ?, ?, ?)')
       .run(`${itemId}-foreign`, id, 'b', itemId, 'item_photo', null);
   });
+  value.payments.forEach((payment, index) =>
+    db.database
+      .prepare('INSERT INTO payments VALUES (?, ?, ?, ?, ?)')
+      .run(`${id}-pay${index}`, id, 'a', payment.method, payment.amountCents),
+  );
+  db.database
+    .prepare('INSERT INTO payments VALUES (?, ?, ?, ?, ?)')
+    .run(`${id}-foreign-pay`, id, 'b', 'pix', 999999);
   value.receipts.forEach((r, i) => {
     const rid = `${id}-r${i}`;
     db.database
@@ -161,12 +174,47 @@ const multiple = add('missing_price', (v) => {
   v.productsTotalCents = 4000;
   v.receipts = [];
   v.receivedTotalCents = 0;
+  v.payments = [];
   v.items[1].photos = [];
 });
 assert.deepEqual(
   saleIssues(multiple).map((s) => s.key),
-  ['missing_price', 'missing_receipt', 'pending_payment', 'missing_photo'],
+  ['missing_price', 'pending_payment', 'missing_photo'],
 );
+const mixed = (v: Fixture) => {
+  v.productsTotalCents = v.receivedTotalCents = 710000;
+  v.items = [{ soldPriceCents: 710000, photos: [{}] }];
+  v.payments = [
+    { method: 'pix', amountCents: 410000 },
+    { method: 'cash', amountCents: 300000 },
+  ];
+  v.receipts = [{ receiptAmountCents: 410000 }];
+};
+add('reconciled', mixed);
+add('reconciled', (v) => {
+  mixed(v);
+  v.payments = [{ method: 'cash', amountCents: 710000 }];
+  v.receipts = [];
+});
+add('missing_receipt', (v) => {
+  mixed(v);
+  v.receipts = [];
+});
+add('review', (v) => {
+  mixed(v);
+  v.receipts[0].receiptAmountCents = 409999;
+});
+add('pending_payment', (v) => {
+  mixed(v);
+  v.payments[1].amountCents = 200000;
+  v.receivedTotalCents = 610000;
+});
+add('pending_payment', (v) => {
+  mixed(v);
+  v.payments = [{ method: 'cash', amountCents: 300000 }];
+  v.receivedTotalCents = 300000;
+  v.receipts = [];
+});
 for (const key of [
   ...SALE_CHECK_STATUSES.map((s) => s.key),
   'pending',
@@ -206,7 +254,7 @@ assert.deepEqual(
     ...repriced,
     reconciliation: deriveReceiptReconciliation(repriced.receipts, 11000),
   }).map((s) => s.key),
-  ['review', 'pending_payment'],
+  ['pending_payment'],
 );
 repriced.productsTotalCents = 10000;
 repriced.items[1].soldPriceCents = 4000;
@@ -234,7 +282,7 @@ const selected = {
 const withManual = { ...multiple, orderStatus: selected };
 assert.equal(saleDisplayStatus(withManual).label, selected.name);
 assert.equal(saleDisplayStatus(withManual).key, 'manual');
-assert.equal(saleIssues(withManual).length, 4);
+assert.equal(saleIssues(withManual).length, 3);
 const complete = {
   ...base(),
   orderStatus: selected,

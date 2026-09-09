@@ -149,10 +149,33 @@ assert.equal(paid(), 3473000);
 await settle();
 assert.equal(paid(), 3450000);
 
-// Never allocate silently between Pix accounts or between Pix and cash.
+// Never allocate silently between multiple Pix accounts.
 seed();
 db.database.exec(
-  "UPDATE payments SET amount_cents=3000000 WHERE id='p1'; INSERT INTO payments VALUES('p2','store','sale','cash',NULL,NULL,473000)",
+  "UPDATE payments SET amount_cents=3000000 WHERE id='p1'; INSERT INTO payments VALUES('p2','store','sale','pix','bank2','Bank2',465000); INSERT INTO payments VALUES('cash','store','sale','cash',NULL,NULL,8000)",
+);
+await enqueue('multiple-already-matched');
+await settle();
+assert.equal(paid(), 3473000);
+assert.equal(
+  (await readReceiptPaymentSync(database, 'store', 'sale'))!.request!.status,
+  'applied',
+);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='p1'").n,
+  3000000,
+);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='p2'").n,
+  465000,
+);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='cash'").n,
+  8000,
+);
+seed();
+db.database.exec(
+  "UPDATE payments SET amount_cents=3000000 WHERE id='p1'; INSERT INTO payments VALUES('p2','store','sale','pix','bank2','Bank2',473000)",
 );
 await enqueue('multiple');
 await settle();
@@ -178,11 +201,84 @@ assert.equal(paid(), 3465000);
 
 seed();
 db.database.exec(
-  "UPDATE attachments SET receipt_amount_cents=1 WHERE kind='receipt' AND store_id='store'; UPDATE payments SET amount_cents=3000000 WHERE id='p1'; INSERT INTO payments VALUES('p2','store','sale','cash',NULL,NULL,473000)",
+  "UPDATE attachments SET receipt_amount_cents=1 WHERE kind='receipt' AND store_id='store'; UPDATE payments SET amount_cents=3000000 WHERE id='p1'; INSERT INTO payments VALUES('p2','store','sale','pix','bank2','Bank2',473000)",
 );
 await enqueue('negative', 'p1');
 await settle();
 assert.equal(paid(), 3473000);
+
+seed();
+db.database
+  .exec(`UPDATE sales SET products_total_cents=710000, received_total_cents=710000 WHERE id='sale';
+  UPDATE payments SET amount_cents=410000 WHERE id='p1';
+  INSERT INTO payments VALUES('cash','store','sale','cash',NULL,NULL,300000);
+  DELETE FROM attachments WHERE id='r2'; UPDATE attachments SET receipt_amount_cents=410000 WHERE id='r1'`);
+await enqueue('mixed-matched');
+await settle();
+assert.equal(paid(), 710000);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='cash'").n,
+  300000,
+);
+db.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=400000 WHERE id='r1'",
+);
+await enqueue('mixed-new-proof');
+await settle();
+assert.equal(paid(), 700000);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='p1'").n,
+  400000,
+);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='cash'").n,
+  300000,
+);
+await settle();
+assert.equal(paid(), 700000);
+// Explicit/legacy cash targets must never change cash, even when the Pix already matches.
+await enqueue('legacy-cash', 'cash');
+await settle();
+assert.equal(
+  (await readReceiptPaymentSync(database, 'store', 'sale'))!.request!.status,
+  'review',
+);
+assert.equal(paid(), 700000);
+await enqueue('cash-race');
+const cashRace = {
+  prepare: db.prepare.bind(db),
+  batch: async (statements: unknown[]) => {
+    if (statements.length === 4)
+      db.database.exec(
+        "UPDATE payments SET amount_cents=290000 WHERE id='cash'; UPDATE sales SET received_total_cents=690000 WHERE id='sale'",
+      );
+    return db.batch(statements);
+  },
+} as unknown as D1Database;
+await settleReceiptPaymentSync(cashRace, 'store', 'sale');
+assert.equal(paid(), 690000);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='cash'").n,
+  290000,
+);
+assert.equal(
+  get(
+    "SELECT COUNT(*) AS n FROM audit_events WHERE id='receipt-payment:cash-race'",
+  ).n,
+  0,
+);
+seed();
+db.database.exec(
+  "UPDATE payments SET method='cash',pix_account_id=NULL,account_name=NULL WHERE id='p1'",
+);
+await enqueue('cash-only');
+await settle();
+assert.equal(paid(), 3473000);
+assert.equal(
+  get("SELECT amount_cents AS n FROM payments WHERE id='p1'").n,
+  3473000,
+);
+assert.equal(get('SELECT COUNT(*) AS n FROM audit_events').n, 0);
 seed();
 db.database.exec("UPDATE sales SET status='cancelled' WHERE id='sale'");
 await enqueue('cancelled');
