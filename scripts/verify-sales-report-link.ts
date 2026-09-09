@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import {
+  SALE_ISSUES,
+  SALE_CHECK_STATUSES,
+} from '../lib/sale-display-status.ts';
+import {
   parseSalesReportLink,
   salesReportPath,
   safeReportReturnTo,
@@ -44,6 +48,38 @@ for (const level of ['simple', 'detailed', 'complete'] as const) {
   assert.equal(restored?.period, 'all');
 }
 assert.equal(parseSalesReportLink('?period=all'), null);
+for (const key of [
+  ...SALE_CHECK_STATUSES.map((status) => status.key),
+  'pending',
+]) {
+  const restored = parseSalesReportLink(
+    salesReportPath(store, 'complete', `period=all&saleStatus=${key}`).slice(1),
+  );
+  assert.equal(restored?.orderStatus, `auto_${key}`);
+}
+for (const { key } of SALE_ISSUES) {
+  const restored = parseSalesReportLink(
+    salesReportPath(store, 'complete', `period=all&issue=${key}`).slice(1),
+  );
+  assert.equal(restored?.issue, key);
+}
+for (const scope of ['saved', 'display'] as const) {
+  const restored = parseSalesReportLink(
+    salesReportPath(
+      store,
+      'complete',
+      `period=all&orderStatus=${seller}&statusScope=${scope}`,
+    ).slice(1),
+  );
+  assert.equal(restored?.statusScope, scope);
+  assert.equal(restored?.orderStatus, seller);
+}
+assert.equal(parsed?.statusScope, 'saved');
+assert.equal(safeReportReturnTo(`${path}&statusScope=invalid`), '/');
+assert.equal(
+  safeReportReturnTo(`${path}&statusScope=saved&statusScope=display`),
+  '/',
+);
 console.log(
   'Report links: exact filters/level/store, safe internal login return and rejected external destinations verified.',
 );

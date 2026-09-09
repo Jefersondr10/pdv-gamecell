@@ -33,13 +33,19 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
-import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
+import {
+  SaleStatusBadge,
+  SaleIssuesNotice,
+} from '@/components/pdv/sale-status-badge';
 import { saleFinancialSummary } from '@/lib/sale-financial-summary';
 import { replaceGuardedUrl } from '@/lib/app-back';
 import { salesReportPath, type SalesReportLink } from '@/lib/sales-report-link';
 import {
   SYSTEM_SALE_STATUSES,
+  SALE_ISSUES,
+  SALE_CHECK_STATUSES,
+  type SaleIssueKey,
+  automaticSaleStatus,
   isAutomaticStatusName,
   saleDisplayStatus,
   saleIssues,
@@ -131,7 +137,7 @@ type PeriodFilter =
 type Grouping = 'sale' | SalesGrouping;
 type ReportLevel = 'simple' | 'detailed' | 'complete';
 type SellerRanking = 'items' | 'value';
-type IssueFilter = 'all' | 'missing_receipt' | 'pending_payment';
+type IssueFilter = 'all' | SaleIssueKey;
 type QueuedPayment = {
   operationId: string;
   method: 'pix' | 'cash';
@@ -160,16 +166,11 @@ const ISSUE_OPTIONS: Array<FilterOption<IssueFilter>> = [
     label: 'Qualquer pendência',
     value: 'all',
   },
-  {
-    detail: 'Inclui vendas com outras pendências prioritárias',
-    label: 'Falta comprovante',
-    value: 'missing_receipt',
-  },
-  {
-    detail: 'Pagamento informado abaixo da venda, mesmo com outros avisos',
-    label: 'Tem saldo a receber',
-    value: 'pending_payment',
-  },
+  ...SALE_ISSUES.map((issue) => ({
+    detail: 'Aviso de conferência, independente do status escolhido',
+    label: issue.label,
+    value: issue.key,
+  })),
 ];
 const ANALYTICS_CACHE_MS = 5 * 60 * 1000;
 const PERIOD_REPORT_SALES_LIMIT = 250;
@@ -223,6 +224,9 @@ export function SalesProductionView({
   );
   const [orderStatusFilter, setOrderStatusFilter] = useState(
     initialReport?.orderStatus ?? 'all',
+  );
+  const [statusScope, setStatusScope] = useState<'saved' | 'display'>(
+    initialReport?.statusScope ?? 'display',
   );
   const [sellerFilter, setSellerFilter] = useState(
     initialReport?.seller ?? 'all',
@@ -354,7 +358,10 @@ export function SalesProductionView({
     if (orderStatusFilter !== 'all') {
       if (orderStatusFilter.startsWith('auto_'))
         params.set('saleStatus', orderStatusFilter.slice(5));
-      else params.set('orderStatus', orderStatusFilter);
+      else {
+        params.set('orderStatus', orderStatusFilter);
+        params.set('statusScope', statusScope);
+      }
     }
     return params.toString();
   }, [
@@ -362,6 +369,7 @@ export function SalesProductionView({
     issueFilter,
     openSaleId,
     orderStatusFilter,
+    statusScope,
     period,
     query,
     selectedDay,
@@ -555,21 +563,30 @@ export function SalesProductionView({
         `Vendedor: ${sellerOptions.find((seller) => seller.id === sellerFilter)?.name ?? 'selecionado'}`,
       );
     if (alertOnly) pieces.push('Somente vendas com avisos');
-    if (issueFilter === 'missing_receipt') pieces.push('Sem comprovante');
-    if (issueFilter === 'pending_payment') pieces.push('Pagamento pendente');
+    if (issueFilter !== 'all')
+      pieces.push(
+        `Conferência: ${SALE_ISSUES.find((issue) => issue.key === issueFilter)?.label}`,
+      );
     if (orderStatusFilter.startsWith('auto_'))
       pieces.push(
-        SYSTEM_SALE_STATUSES.find(
+        SALE_CHECK_STATUSES.find(
           (status) => status.key === orderStatusFilter.slice(5),
         )?.label ?? 'Com pendências',
       );
     else if (orderStatusFilter === 'none')
-      pieces.push('Sem acompanhamento adicional');
+      pieces.push(
+        statusScope === 'saved'
+          ? 'Sem status salvo (filtro do link anterior)'
+          : 'Sem status',
+      );
     else if (orderStatusFilter !== 'all') {
       const status = data.orderStatuses.find(
         (candidate) => candidate.id === orderStatusFilter,
       );
-      if (status) pieces.push(`Acompanhamento manual: ${status.name}`);
+      if (status)
+        pieces.push(
+          `Status ${statusScope === 'saved' ? 'salvo (filtro do link anterior)' : 'da venda'}: ${status.name}`,
+        );
     }
     return pieces.join(' · ');
   }, [
@@ -583,6 +600,7 @@ export function SalesProductionView({
     query,
     selectedDay,
     selectedMonth,
+    statusScope,
   ]);
   const activeCount =
     grouping === 'sale' ? page.items.length : groupRows.length;
@@ -796,17 +814,23 @@ export function SalesProductionView({
                   principal
                 </span>
                 <SalesFilterSelect
-                  aria-label="Status da venda ou acompanhamento"
-                  onValueChange={setOrderStatusFilter}
+                  aria-label="Status da venda"
+                  onValueChange={(next) => {
+                    setStatusScope('display');
+                    setOrderStatusFilter(next);
+                  }}
                   options={[
                     {
-                      detail: 'Exibe qualquer acompanhamento',
+                      detail: 'Status automáticos e cadastrados',
                       label: 'Todos os status',
                       value: 'all',
                     },
                     {
-                      detail: 'Sem acompanhamento manual adicional',
-                      label: 'Sem acompanhamento adicional',
+                      detail:
+                        statusScope === 'saved'
+                          ? 'Sem cadastro salvo; filtro do link anterior'
+                          : 'Venda ainda sem um status',
+                      label: 'Sem status',
                       value: 'none',
                     },
                     ...SYSTEM_SALE_STATUSES.map((status) => ({
@@ -820,12 +844,21 @@ export function SalesProductionView({
                         'Qualquer pendência de valor, pagamento, foto ou comprovante',
                       value: 'auto_pending',
                     },
-                    ...data.orderStatuses.map((status) => ({
-                      detail: status.active
-                        ? 'Status cadastrado pela loja'
-                        : 'Status inativo',
-                      label: `${isAutomaticStatusName(status.name) ? 'Manual antigo' : 'Acompanhamento'}: ${status.name}${status.active ? '' : ' (inativo)'}`,
-                      value: status.id,
+                    ...data.orderStatuses
+                      .filter((status) => !isAutomaticStatusName(status.name))
+                      .map((status) => ({
+                        detail: status.active
+                          ? 'Status cadastrado pela loja'
+                          : 'Status inativo',
+                        label: `${status.name}${status.active ? '' : ' (inativo)'}`,
+                        value: status.id,
+                      })),
+                    ...SALE_ISSUES.filter(
+                      (issue) => orderStatusFilter === `auto_${issue.key}`,
+                    ).map((issue) => ({
+                      label: `Conferência: ${issue.label}`,
+                      detail: 'Filtro preservado do link anterior',
+                      value: `auto_${issue.key}`,
                     })),
                   ]}
                   value={orderStatusFilter}
@@ -1192,10 +1225,20 @@ function SaleList({
                 <p className="truncate text-base font-bold">
                   {sale.customerName}
                 </p>
-                <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                <p
+                  className="mt-0.5 line-clamp-2 text-sm text-muted-foreground"
+                  title={sale.items
+                    .map(
+                      (item) => `${item.productName} · ${item.productDetail}`,
+                    )
+                    .join('; ')}
+                >
                   {sale.items.length}{' '}
                   {sale.items.length === 1 ? 'aparelho' : 'aparelhos'} ·{' '}
                   {sale.items[0]?.productName ?? 'Produto'}
+                  {sale.items[0]?.productDetail
+                    ? ` · ${sale.items[0].productDetail}`
+                    : ''}
                   {sale.items.length > 1 ? ` +${sale.items.length - 1}` : ''}
                 </p>
               </div>
@@ -1220,19 +1263,12 @@ function SaleList({
               </p>
               <span className="flex items-center gap-1.5">
                 <SaleStatusBadge sale={sale} />
-                {saleIssues(sale).length > 1 && (
-                  <span
-                    className="text-xs text-muted-foreground"
-                    title={saleIssues(sale)
-                      .slice(1)
-                      .map((issue) => issue.label)
-                      .join(' · ')}
-                  >
-                    +{saleIssues(sale).length - 1}
-                  </span>
-                )}
               </span>
             </div>
+            <SaleIssuesNotice
+              issueKeys={saleIssues(sale).map((issue) => issue.key)}
+              compact
+            />
             {!financial.reconciled && financial.receiptText && (
               <p
                 className={cn(
@@ -1385,7 +1421,10 @@ function EditSaleDialog({
     canParticipants,
     data.csrfToken,
   );
-  const initialStatusId = sale?.orderStatus?.id ?? '';
+  const initialStatusId =
+    sale?.orderStatus && !isAutomaticStatusName(sale.orderStatus.name)
+      ? sale.orderStatus.id
+      : '';
   const [selectedStatusId, setSelectedStatusId] = useState(initialStatusId);
   const [currentStatusId, setCurrentStatusId] = useState(initialStatusId);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
@@ -1495,7 +1534,9 @@ function EditSaleDialog({
     MEDIA_LIMITS.maxOperationBytes - existingAttachmentBytes,
   );
   const availableStatuses = data.orderStatuses.filter(
-    (status) => status.active || status.id === currentStatusId,
+    (status) =>
+      (status.active || status.id === currentStatusId) &&
+      !isAutomaticStatusName(status.name),
   );
   const activePixAccounts = data.pixAccounts.filter(
     (account) => account.active,
@@ -1712,26 +1753,18 @@ function EditSaleDialog({
                     <FileCheck2 className="size-5" />
                   </span>
                   <div>
-                    <h3 className="font-extrabold">
-                      Status automático do pedido
-                    </h3>
+                    <h3 className="font-extrabold">Status da venda</h3>
                     <p className="text-xs text-muted-foreground">
-                      Atualiza ao salvar preços, pagamentos, fotos e
-                      comprovantes.
+                      Conciliado e Cancelado são automáticos. Os demais são
+                      escolhidos pela equipe.
                     </p>
                   </div>
                 </div>
                 <div className="mt-3 space-y-3">
                   <SaleStatusBadge sale={sale} />
-                  {saleIssues(sale).length > 1 && (
-                    <p className="text-sm text-muted-foreground">
-                      Outras pendências:{' '}
-                      {saleIssues(sale)
-                        .slice(1)
-                        .map((issue) => issue.label)
-                        .join(' · ')}
-                    </p>
-                  )}
+                  <SaleIssuesNotice
+                    issueKeys={saleIssues(sale).map((issue) => issue.key)}
+                  />
                   <p className="text-xs text-muted-foreground">
                     Conciliação compara os valores cadastrados; não confirma o
                     crédito no banco.
@@ -1740,11 +1773,11 @@ function EditSaleDialog({
                     className="block text-sm font-semibold"
                     htmlFor="sale-custom-status"
                   >
-                    Acompanhamento personalizado (opcional)
+                    Status cadastrado
                   </label>
                   <NativeSelect
                     id="sale-custom-status"
-                    aria-label="Acompanhamento personalizado desta venda"
+                    aria-label="Status cadastrado desta venda"
                     disabled={!can(data.user, 'sales.status') || uploadBusy}
                     className="h-11 w-full [&_select]:h-11"
                     onChange={(event) =>
@@ -1753,28 +1786,31 @@ function EditSaleDialog({
                     value={selectedStatusId}
                   >
                     <NativeSelectOption value="">
-                      Sem acompanhamento adicional
+                      Sem status escolhido
                     </NativeSelectOption>
                     {availableStatuses.map((status) => (
                       <NativeSelectOption key={status.id} value={status.id}>
-                        {isAutomaticStatusName(status.name)
-                          ? 'Manual antigo · '
-                          : ''}
                         {status.name}
                         {status.active ? '' : ' (inativo)'}
                       </NativeSelectOption>
                     ))}
                   </NativeSelect>
+                  {automaticSaleStatus(sale) && (
+                    <p className="text-sm text-muted-foreground">
+                      {automaticSaleStatus(sale)!.label} prevalece enquanto a
+                      conferência estiver completa. O status escolhido fica
+                      guardado, sem alterar pagamentos.
+                    </p>
+                  )}
                 </div>
                 {selectedStatusId !== currentStatusId && (
                   <p className="mt-2 text-xs font-semibold text-primary">
-                    O acompanhamento será aplicado ao salvar as alterações.
+                    O status escolhido será salvo ao confirmar as alterações.
                   </p>
                 )}
                 {data.orderStatuses.length === 0 && (
                   <p className="mt-2 text-xs font-semibold text-amber-800">
-                    Os status automáticos já estão disponíveis. Acompanhamentos
-                    adicionais podem ser criados em Ajustes › Financeiro ›
+                    Cadastre os demais status em Configurações › Financeiro ›
                     Status do pedido.
                   </p>
                 )}
@@ -2954,11 +2990,12 @@ function SaleReport({
                     {formatDateTime(sale.createdAt)} ·{' '}
                     {sale.status === 'cancelled' ? 'Cancelada' : 'Concluída'}
                   </p>
-                  {sale.orderStatus && (
-                    <div className="mt-2">
-                      <OrderStatusBadge status={sale.orderStatus} />
-                    </div>
-                  )}
+                  <div className="mt-2">
+                    <SaleStatusBadge sale={sale} />
+                    <SaleIssuesNotice
+                      issueKeys={saleIssues(sale).map((issue) => issue.key)}
+                    />
+                  </div>
                 </header>
                 <div className="report-section mt-4 grid grid-cols-3 gap-2">
                   <ReportMetric
@@ -3201,8 +3238,6 @@ function SaleReport({
                     <p>
                       <strong>Status do pedido:</strong>{' '}
                       {saleDisplayStatus(sale).label}
-                      {sale.orderStatus &&
-                        ` · Acompanhamento: ${sale.orderStatus.name}`}
                     </p>
                     <p>
                       <strong>Total cadastrado:</strong>{' '}
@@ -3651,6 +3686,11 @@ function SalesPeriodReport({
                                   </p>
                                   <div className="mt-2">
                                     <SaleStatusBadge sale={sale} />
+                                    <SaleIssuesNotice
+                                      issueKeys={saleIssues(sale).map(
+                                        (issue) => issue.key,
+                                      )}
+                                    />
                                   </div>
                                   {saleFinancialSummary(sale).receiptText && (
                                     <p

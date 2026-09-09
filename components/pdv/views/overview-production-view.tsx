@@ -1,7 +1,10 @@
 'use client';
 
 import Image from 'next/image';
-import { SystemSaleStatusBadge } from '@/components/pdv/sale-status-badge';
+import {
+  SaleDisplayStatusBadge,
+  SaleIssuesNotice,
+} from '@/components/pdv/sale-status-badge';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -546,7 +549,8 @@ export function OverviewProductionView({
                       <ArrowRight className="size-3.5" />
                     </Button>
                   </div>
-                  <SystemSaleStatusBadge statusKey={sale.automaticStatus} />
+                  <SaleDisplayStatusBadge status={sale.displayStatus} />
+                  <SaleIssuesNotice issueKeys={sale.issueKeys} />
                   <SaleComparison sale={sale} />
                   {sale.cashCents > 0 && (
                     <p className="text-xs text-muted-foreground">

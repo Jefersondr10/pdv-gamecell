@@ -23,7 +23,7 @@ assert.equal(
     receipts: [],
     reconciliation: deriveReceiptReconciliation([], 100),
   }).key,
-  'missing_receipt',
+  'none',
 );
 
 assert.deepEqual(deriveReceiptReconciliation([], 620_000), {

@@ -1,4 +1,8 @@
-import { SYSTEM_SALE_STATUSES } from './sale-display-status.ts';
+import {
+  SALE_CHECK_STATUSES,
+  SALE_ISSUES,
+  type SaleIssueKey,
+} from './sale-display-status.ts';
 
 export type SalesReportLink = {
   storeId: string;
@@ -8,9 +12,10 @@ export type SalesReportLink = {
   month: string;
   query: string;
   alertOnly: boolean;
-  issue: 'all' | 'missing_receipt' | 'pending_payment';
+  issue: 'all' | SaleIssueKey;
   seller: string;
   orderStatus: string;
+  statusScope: 'saved' | 'display';
 };
 const periods = ['today', 'yesterday', '7d', '15d', 'day', 'month', 'all'];
 const levels = ['simple', 'detailed', 'complete'];
@@ -32,6 +37,7 @@ export function parseSalesReportLink(search: string): SalesReportLink | null {
     'sellerId',
     'saleStatus',
     'orderStatus',
+    'statusScope',
   ])
     if (params.getAll(key).length > 1) return null;
   if (params.get('report') !== 'sales') return null;
@@ -67,14 +73,20 @@ export function parseSalesReportLink(search: string): SalesReportLink | null {
   const query = (params.get('q') ?? '').trim();
   if (new TextEncoder().encode(query).length > 48) return null;
   const issue = params.get('issue') ?? 'all';
-  if (!['all', 'missing_receipt', 'pending_payment'].includes(issue))
+  if (issue !== 'all' && !SALE_ISSUES.some((item) => item.key === issue))
     return null;
   const seller = params.get('sellerId') ?? 'all';
   if (seller !== 'all' && !idPattern.test(seller)) return null;
   const automatic = params.get('saleStatus');
   const custom = params.get('orderStatus');
+  const statusScope = params.get('statusScope') ?? 'saved';
+  if (!['saved', 'display'].includes(statusScope)) return null;
   if (automatic && custom) return null;
-  if (automatic && !SYSTEM_SALE_STATUSES.some((item) => item.key === automatic))
+  if (
+    automatic &&
+    automatic !== 'pending' &&
+    !SALE_CHECK_STATUSES.some((item) => item.key === automatic)
+  )
     return null;
   if (custom && custom !== 'none' && !idPattern.test(custom)) return null;
   if (params.has('alert') && params.get('alert') !== '1') return null;
@@ -89,6 +101,7 @@ export function parseSalesReportLink(search: string): SalesReportLink | null {
     issue: issue as SalesReportLink['issue'],
     seller,
     orderStatus: automatic ? `auto_${automatic}` : (custom ?? 'all'),
+    statusScope: statusScope as SalesReportLink['statusScope'],
   };
 }
 
@@ -120,8 +133,10 @@ export function salesReportPath(
   if (parsed.seller !== 'all') safe.set('sellerId', parsed.seller);
   if (parsed.orderStatus.startsWith('auto_'))
     safe.set('saleStatus', parsed.orderStatus.slice(5));
-  else if (parsed.orderStatus !== 'all')
+  else if (parsed.orderStatus !== 'all') {
     safe.set('orderStatus', parsed.orderStatus);
+    if (parsed.statusScope === 'display') safe.set('statusScope', 'display');
+  }
   return `/?${safe.toString()}`;
 }
 

@@ -1,7 +1,17 @@
 import { HttpError } from './http.ts';
 import { parseSalesFilters } from './sales-filters.ts';
 import { overviewFilters, type OverviewFilter } from '../overview.ts';
-import { SALE_AUTO_STATUS_SQL, SALE_ISSUE_SQL } from './sale-status-sql.ts';
+import {
+  SALE_AUTO_STATUS_SQL,
+  SALE_ISSUE_SQL,
+  SALE_ISSUE_KEYS_SQL,
+  validReceiptAmountSql,
+} from './sale-status-sql.ts';
+import {
+  resolveSaleDisplayStatus,
+  type SaleIssueKey,
+} from '../sale-display-status.ts';
+import type { OrderStatusColor } from '../pdv-types.ts';
 import type {
   OverviewPage,
   OverviewSale,
@@ -70,8 +80,8 @@ export async function readOverview(
     SELECT s.* FROM sales s WHERE ${where.join(' AND ')} AND s.status = 'completed'
   ), receipts AS (
     SELECT a.sale_id, COUNT(*) AS receiptCount,
-      COALESCE(SUM(a.receipt_amount_cents), 0) AS receiptCents,
-      SUM(CASE WHEN a.receipt_amount_cents IS NULL OR a.receipt_amount_cents <= 0 THEN 1 ELSE 0 END) AS pendingCount
+      COALESCE(SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN a.receipt_amount_cents ELSE 0 END), 0) AS receiptCents,
+      SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN 0 ELSE 1 END) AS pendingCount
     FROM attachments a JOIN filtered s ON s.id = a.sale_id AND s.store_id = a.store_id
     WHERE a.kind = 'receipt' GROUP BY a.sale_id
   ), cash AS (
@@ -82,9 +92,11 @@ export async function readOverview(
     SELECT s.id, s.number, s.customer_name AS customerName, s.created_at AS createdAt,
       s.received_total_cents AS receivedCents, s.products_total_cents AS saleCents,
       ${SALE_AUTO_STATUS_SQL} AS automaticStatus, CASE WHEN ${SALE_ISSUE_SQL.missing_price} THEN 1 ELSE 0 END AS saleInvalid, s.store_id AS storeId,
+      ${SALE_ISSUE_KEYS_SQL} AS issueKeysJson, os.id AS orderStatusId, os.name AS orderStatusName, os.color AS orderStatusColor,
       COALESCE(c.cashCents, 0) AS cashCents, COALESCE(r.receiptCount, 0) AS receiptCount,
       COALESCE(r.receiptCents, 0) AS receiptCents, COALESCE(r.pendingCount, 0) AS pendingCount
     FROM filtered s LEFT JOIN receipts r ON r.sale_id = s.id LEFT JOIN cash c ON c.sale_id = s.id
+    LEFT JOIN order_statuses os ON os.id = s.order_status_id AND os.store_id = s.store_id
   ), selected AS (
     SELECT * FROM compared WHERE ${comparisonWhere[comparison as OverviewFilter]}
   ), summary AS (
@@ -114,6 +126,10 @@ export async function readOverview(
     )
     .all();
   type Row = OverviewSale & {
+    issueKeysJson: string;
+    orderStatusId: string | null;
+    orderStatusName: string | null;
+    orderStatusColor: OrderStatusColor | null;
     totalSales: number;
     totalReceived: number;
     totalCash: number;
@@ -163,6 +179,19 @@ export async function readOverview(
         saleCents: row.saleCents,
         saleInvalid: row.saleInvalid,
         automaticStatus: row.automaticStatus,
+        displayStatus: resolveSaleDisplayStatus(
+          row.automaticStatus,
+          row.orderStatusId && row.orderStatusName && row.orderStatusColor
+            ? {
+                id: row.orderStatusId,
+                name: row.orderStatusName,
+                color: row.orderStatusColor,
+              }
+            : null,
+        ),
+        issueKeys: (
+          JSON.parse(row.issueKeysJson) as (SaleIssueKey | null)[]
+        ).filter((key): key is SaleIssueKey => key !== null),
         cashCents: row.cashCents,
         receiptCents: row.receiptCents,
         receiptCount: row.receiptCount,

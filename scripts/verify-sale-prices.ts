@@ -7,7 +7,7 @@ import {
   applySalePrices,
 } from '../lib/sale-prices.ts';
 import type { SaleRecord } from '../lib/pdv-types.ts';
-import { saleDisplayStatus } from '../lib/sale-display-status.ts';
+import { saleDisplayStatus, saleIssues } from '../lib/sale-display-status.ts';
 import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
 
 for (const text of ['-10,00', '−10,00', '(10,00)', 'abc10', '+10', '', '0'])
@@ -40,8 +40,9 @@ const applyFixture = (total: number, paid = 3473000) =>
     priceDifferenceCents: 0,
     items: [{ id: 'item', soldPriceCents: total }],
   });
-assert.equal(saleDisplayStatus(applyFixture(3465000)).key, 'overpaid');
-assert.equal(saleDisplayStatus(applyFixture(3500000)).key, 'review');
+assert.equal(saleDisplayStatus(applyFixture(3465000)).key, 'none');
+assert.equal(saleIssues(applyFixture(3465000))[0].key, 'overpaid');
+assert.equal(saleIssues(applyFixture(3500000))[0].key, 'review');
 assert.equal(
   saleDisplayStatus(applyFixture(3465000, 3465000)).key,
   'reconciled',

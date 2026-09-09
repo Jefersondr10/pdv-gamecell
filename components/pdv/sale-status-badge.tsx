@@ -3,12 +3,55 @@ import {
   saleDisplayStatus,
   SYSTEM_SALE_STATUSES,
   type SystemSaleStatusKey,
+  type SaleDisplayStatus,
+  type SaleIssueKey,
+  SALE_ISSUES,
 } from '@/lib/sale-display-status';
 import { cn } from '@/lib/utils';
+import { OrderStatusBadge } from './order-status-badge';
 
 export function SaleStatusBadge({ sale }: { sale: SaleRecord }) {
   const status = saleDisplayStatus(sale);
-  return <SystemSaleStatusBadge statusKey={status.key} />;
+  return <SaleDisplayStatusBadge status={status} />;
+}
+
+export function SaleDisplayStatusBadge({
+  status,
+}: {
+  status: SaleDisplayStatus;
+}) {
+  if (status.key === 'manual' && status.color)
+    return (
+      <OrderStatusBadge status={{ name: status.label, color: status.color }} />
+    );
+  if (status.key === 'none')
+    return (
+      <span className="rounded-full bg-muted px-2 py-0.5 text-sm text-muted-foreground">
+        Sem status
+      </span>
+    );
+  return (
+    <SystemSaleStatusBadge statusKey={status.key as SystemSaleStatusKey} />
+  );
+}
+
+export function SaleIssuesNotice({
+  issueKeys,
+  compact = false,
+}: {
+  issueKeys: SaleIssueKey[];
+  compact?: boolean;
+}) {
+  const issues = SALE_ISSUES.filter((issue) => issueKeys.includes(issue.key));
+  if (!issues.length) return null;
+  return (
+    <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+      Conferência:{' '}
+      {compact
+        ? `${issues[0].label}${issues.length > 1 ? ` · +${issues.length - 1} aviso(s)` : ''}`
+        : issues.map((issue) => issue.label).join(' · ')}
+    </p>
+  );
 }
 
 export function SystemSaleStatusBadge({
@@ -24,9 +67,7 @@ export function SystemSaleStatusBadge({
         'inline-flex max-w-full items-center gap-1.5 rounded-full px-2 py-0.5 text-sm font-semibold leading-5',
         status.tone === 'success'
           ? 'bg-success/10 text-success'
-          : status.tone === 'warning'
-            ? 'bg-amber-500/10 text-amber-800 dark:text-amber-200'
-            : 'bg-muted text-muted-foreground',
+          : 'bg-muted text-muted-foreground',
       )}
       title={
         status.key === 'reconciled'

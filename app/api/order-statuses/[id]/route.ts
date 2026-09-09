@@ -34,15 +34,16 @@ export async function PATCH(
 
     const exists = await db
       .prepare(
-        'SELECT 1 FROM order_statuses WHERE id = ? AND store_id = ? LIMIT 1',
+        'SELECT name FROM order_statuses WHERE id = ? AND store_id = ? LIMIT 1',
       )
       .bind(id, session.storeId)
-      .first();
+      .first<{ name: string }>();
     if (!exists) {
       throw new HttpError(404, 'Status de pedido não encontrado.', 'NOT_FOUND');
     }
 
     const updates: string[] = [];
+    if (body.active === true) orderStatusName(body.name ?? exists.name);
     const bindings: unknown[] = [];
     const changed: Record<string, unknown> = {};
     if (body.name !== undefined) {
@@ -82,28 +83,29 @@ export async function PATCH(
     try {
       const results = await db.batch([
         db
-          .prepare(
-            `UPDATE order_statuses SET ${updates.join(', ')}
-             WHERE id = ? AND store_id = ?`,
-          )
-          .bind(...bindings),
-        db
-          .prepare(
-            `INSERT INTO audit_events
-             (id, store_id, actor_user_id, action, entity_type, entity_id,
-              details_json, created_at)
-             VALUES (?, ?, ?, 'order_status.updated', 'order_status', ?, ?, ?)`,
-          )
+          .prepare(`INSERT INTO audit_events
+          (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
+          SELECT ?, ?, ?, 'order_status.updated', 'order_status',
+            CASE WHEN EXISTS (SELECT 1 FROM order_statuses WHERE id = ? AND store_id = ? AND name = ?) THEN ? ELSE NULL END, ?, ?`)
           .bind(
             crypto.randomUUID(),
             session.storeId,
             session.id,
             id,
+            session.storeId,
+            exists.name,
+            id,
             JSON.stringify(changed),
             now,
           ),
+        db
+          .prepare(
+            `UPDATE order_statuses SET ${updates.join(', ')}
+             WHERE id = ? AND store_id = ?`,
+          )
+          .bind(...bindings),
       ]);
-      if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
+      if (Number(results[1]?.meta?.changes ?? 0) !== 1) {
         throw new HttpError(
           404,
           'Status de pedido não encontrado.',
@@ -111,6 +113,17 @@ export async function PATCH(
         );
       }
     } catch (error) {
+      if (
+        error instanceof Error &&
+        /NOT NULL constraint failed:\s*audit_events\.entity_id/i.test(
+          error.message,
+        )
+      )
+        throw new HttpError(
+          409,
+          'Este cadastro mudou em outra tela. Atualize e tente novamente.',
+          'ORDER_STATUS_CHANGED',
+        );
       if (
         error instanceof Error &&
         /UNIQUE constraint failed:.*order_statuses.*(?:store_id|name_normalized)/i.test(

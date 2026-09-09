@@ -10,6 +10,7 @@ import {
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import type { OrderStatusColor } from '@/lib/pdv-types';
+import { orderStatusName } from '@/lib/server/order-status';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,14 +74,15 @@ export async function PATCH(
       });
     }
 
+    let targetName: string | null = null;
     if (orderStatusId) {
       const target = await db
         .prepare(
-          `SELECT 1 FROM order_statuses
+          `SELECT name FROM order_statuses
            WHERE id = ? AND store_id = ? AND active = 1 LIMIT 1`,
         )
         .bind(orderStatusId, session.storeId)
-        .first();
+        .first<{ name: string }>();
       if (!target) {
         throw new HttpError(
           409,
@@ -88,6 +90,8 @@ export async function PATCH(
           'ORDER_STATUS_INVALID',
         );
       }
+      orderStatusName(target.name);
+      targetName = target.name;
     }
 
     const auditId = crypto.randomUUID();
@@ -106,7 +110,7 @@ export async function PATCH(
                     ) AND (
                       ? IS NULL OR EXISTS (
                         SELECT 1 FROM order_statuses
-                        WHERE id = ? AND store_id = ? AND active = 1
+                        WHERE id = ? AND store_id = ? AND active = 1 AND name = ?
                       )
                     ) THEN ? ELSE NULL END,
                     ?, ?`,
@@ -121,6 +125,7 @@ export async function PATCH(
             orderStatusId,
             orderStatusId,
             session.storeId,
+            targetName,
             saleId,
             JSON.stringify({
               previousOrderStatusId: current.orderStatusId,

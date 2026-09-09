@@ -9,7 +9,10 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { SystemSaleStatusBadge } from '@/components/pdv/sale-status-badge';
+import {
+  SaleDisplayStatusBadge,
+  SaleIssuesNotice,
+} from '@/components/pdv/sale-status-badge';
 import { messageOf, requestJson } from '@/lib/client-api';
 import type { ClientRecord, ClientHistoryPage } from '@/lib/pdv-types';
 
@@ -151,7 +154,7 @@ export function ClientPurchaseHistory({
                 <span className="text-xs text-muted-foreground">
                   {date(sale.createdAt)}
                 </span>
-                <SystemSaleStatusBadge statusKey={sale.automaticStatus} />
+                <SaleDisplayStatusBadge status={sale.displayStatus} />
               </div>
               <Button
                 disabled={!onOpenSale}
@@ -164,6 +167,7 @@ export function ClientPurchaseHistory({
                 Ver venda <ArrowUpRight className="size-4" />
               </Button>
             </header>
+            <SaleIssuesNotice issueKeys={sale.issueKeys} compact />
             <p className="mt-2 text-sm text-muted-foreground">
               Vendedor: {sale.sellerName}
             </p>

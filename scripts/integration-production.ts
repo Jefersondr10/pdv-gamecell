@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import type { SaleRecord } from '../lib/pdv-types.ts';
 import type { SalePrices } from '../lib/sale-prices.ts';
-import { saleDisplayStatus } from '../lib/sale-display-status.ts';
+import {
+  automaticSaleStatus,
+  saleDisplayStatus,
+  saleIssues,
+  SALE_ISSUES,
+  type SaleDisplayStatus,
+  type SaleIssueKey,
+} from '../lib/sale-display-status.ts';
 import { defaultPermissions, type Permission } from '../lib/permissions.ts';
 import { prepareUploadForm } from '../lib/client-upload.ts';
 import { productEditorPayload } from '../lib/product-editor.ts';
@@ -403,6 +410,34 @@ const orderStatuses = await call('/api/order-statuses', {
   cookie: ownerCookie,
 });
 assert.equal((orderStatuses.body.items as unknown[]).length, 1);
+// Only the two automatic outcomes are reserved; warning names are normal store registrations.
+for (const { label } of SALE_ISSUES) {
+  const created = await call('/api/order-statuses', {
+    method: 'POST',
+    cookie: ownerCookie,
+    expected: 201,
+    headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: label, color: 'amber' }),
+  });
+  const id = String((created.body.item as { id: string }).id);
+  for (const active of [false, true])
+    await call(`/api/order-statuses/${id}`, {
+      method: 'PATCH',
+      cookie: ownerCookie,
+      headers: {
+        'x-csrf-token': ownerCsrf,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ active }),
+    });
+  await call(`/api/order-statuses/${id}`, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    expected: 400,
+    headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Cancelado' }),
+  });
+}
 
 const entryOperationId = crypto.randomUUID();
 const entryPayload = {
@@ -1048,6 +1083,21 @@ await call(`/api/sales/${saleId}/order-status`, {
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
   body: JSON.stringify({ orderStatusId: pendingStatusId }),
 });
+const manualSale = (
+  await call(`/api/sales?period=all&saleId=${saleId}`, { cookie: ownerCookie })
+).body.items as SaleRecord[];
+assert.equal(saleDisplayStatus(manualSale[0]).key, 'manual');
+assert.equal(saleDisplayStatus(manualSale[0]).label, 'Aguardando retirada');
+assert.ok(saleIssues(manualSale[0]).length > 0);
+assert.equal(
+  (
+    await call(
+      `/api/sales?period=all&saleId=${saleId}&orderStatus=${pendingStatusId}&statusScope=display`,
+      { cookie: ownerCookie },
+    )
+  ).body.total,
+  1,
+);
 const disguisedAttachment = new FormData();
 disguisedAttachment.set('operationId', crypto.randomUUID());
 disguisedAttachment.append(
@@ -1221,6 +1271,28 @@ assert.equal(editedSale.orderStatus?.color, 'orange');
 assert.equal(editedSale.receipts.length, 1);
 assert.equal(editedSale.receipts[0].receiptAmountCents, 900_000);
 assert.equal(editedSale.receipts[0].receiptAmountSource, 'manual');
+assert.equal(
+  saleDisplayStatus(editedSale as unknown as SaleRecord).key,
+  'reconciled',
+);
+assert.equal(
+  (
+    await call(
+      `/api/sales?period=all&saleId=${saleId}&orderStatus=${pendingStatusId}&statusScope=display`,
+      { cookie: ownerCookie },
+    )
+  ).body.total,
+  0,
+);
+assert.equal(
+  (
+    await call(
+      `/api/sales?period=all&saleId=${saleId}&orderStatus=${pendingStatusId}`,
+      { cookie: ownerCookie },
+    )
+  ).body.total,
+  1,
+);
 assert.equal(
   (editedSales.body.aggregates as { alertCount: number }).alertCount,
   0,
@@ -2697,21 +2769,34 @@ const restrictedHistory = (
 ).body.items as {
   id: string;
   customerId: string;
-  automaticStatus: string;
+  automaticStatus: string | null;
+  displayStatus: SaleDisplayStatus;
+  issueKeys: SaleIssueKey[];
   items: object[];
 }[];
 const fullHistory = (
   await call(`/api/sales?period=all&customerId=${staffClientId}`, {
     cookie: ownerCookie,
   })
-).body.items as (SaleRecord & { automaticStatus: string })[];
+).body.items as (SaleRecord & {
+  automaticStatus: string | null;
+  displayStatus: SaleDisplayStatus;
+  issueKeys: SaleIssueKey[];
+})[];
 assert.ok(restrictedHistory.length);
 for (const row of restrictedHistory) {
   assert.equal(row.customerId, staffClientId);
   const full = fullHistory.find((sale) => sale.id === row.id);
   assert.ok(full);
-  assert.equal(row.automaticStatus, saleDisplayStatus(full).key);
+  assert.equal(row.automaticStatus, automaticSaleStatus(full)?.key ?? null);
   assert.equal(row.automaticStatus, full.automaticStatus);
+  assert.deepEqual(row.displayStatus, saleDisplayStatus(full));
+  assert.deepEqual(row.displayStatus, full.displayStatus);
+  assert.deepEqual(
+    row.issueKeys,
+    saleIssues(full).map((issue) => issue.key),
+  );
+  assert.deepEqual(row.issueKeys, full.issueKeys);
   for (const key of ['payments', 'receipts', 'reconciliation'])
     assert.ok(!(key in row));
   assert.ok(row.items.every((item) => !('photos' in item)));

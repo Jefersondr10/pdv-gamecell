@@ -15,9 +15,13 @@
 
 Em Vendas → abrir venda → Produtos → **Editar preços**, quem possui `sales.prices` pode alterar cada preço por SN diretamente nos detalhes. O acesso anterior em Editar → Preços desta venda continua disponível. O total vendido é recalculado sem alterar pagamentos, estoque ou preço padrão. A prévia compara o novo total com pagamentos e comprovantes; salvar atualiza o status. A edição destaca os itens modificados, impede sair enquanto salva e exige salvar ou cancelar antes de outra ação. Valores negativos digitados são rejeitados, não convertidos para positivos.
 
-Os status automáticos são padrão para todas as lojas, não são registros editáveis em `order_statuses`. A prioridade é: Cancelado, Sem valor de venda, Sem comprovante, Verificar comprovante, Comprovante em leitura, Pagamento pendente, Pagamento acima da venda, Sem foto do aparelho, Conciliado. Outras pendências continuam visíveis nos detalhes. Conciliação completa requer preços válidos, pagamentos e comprovantes coincidentes e foto em cada aparelho. Um valor manual válido prevalece sobre o estado de uma leitura antiga.
+Somente **Cancelado** e **Conciliado** são automáticos, padrão para todas as lojas, sem edição ou desativação. Conciliação completa requer preços válidos, pagamentos e comprovantes coincidentes e foto em cada aparelho. Um valor de comprovante corrigido manualmente prevalece sobre o estado de uma leitura antiga. Escolher um nome ou cor de status nunca conclui a conferência financeira.
 
-Os acompanhamentos personalizados existentes são preservados e identificados separadamente. Não substituem o status automático. O filtro legado `pending` continua abrangendo todas as pendências. SQL e interface usam a mesma prioridade, verificada por testes.
+Os demais status são cadastrados, editados, ativados/desativados e escolhidos pela loja. Cadastros existentes como Pagamento pendente voltam a ser apresentados pelo próprio nome, sem prefixo “Manual antigo”. Nenhum vínculo histórico é excluído. A precedência existente é mantida: Cancelado, depois Conciliado quando a conferência estiver completa, depois o status escolhido, ou Sem status. O status escolhido fica guardado e reaparece se uma mudança posterior gerar pendência.
+
+Preço ausente, comprovante ausente/inválido/em leitura, pagamento abaixo/acima da venda e foto ausente são **avisos de conferência separados**, não status atribuídos automaticamente. Todos continuam impedindo conciliação completa. São mostrados em Vendas, detalhes, edição, histórico de clientes, Comprovantes e relatórios.
+
+Os novos filtros de status usam `statusScope=display` e correspondem ao status visível. Links antigos, sem esse parâmetro, continuam filtrando o cadastro salvo (`saved`), inclusive quando a venda já foi conciliada ou cancelada. Cadastros inativos associados permanecem visíveis; referências reservadas, inexistentes ou de outra loja não viram status manual. Filtros antigos por avisos e `pending` continuam funcionando. SQL e interface usam a mesma regra, verificada por testes.
 
 ## Publicação
 
@@ -27,16 +31,17 @@ Validações: `test:receipt-payment-sync`, `test:sale-status`, `test:original-sa
 
 ## Revisão de 09/09/2026
 
-- Os nove status automáticos aparecem individualmente em Configurações, sempre obrigatórios, sem edição ou desativação. Novos acompanhamentos manuais não podem usar os nomes reservados. Registros legados homônimos continuam preservados e sinalizados como manuais antigos.
+- Conciliado e Cancelado aparecem individualmente em Configurações, sempre obrigatórios, sem edição ou desativação. Só esses dois nomes são reservados. Registros legados homônimos são preservados e podem ser renomeados; não podem ser reativados ou atribuídos novamente com nome reservado. A normalização é compartilhada com a chave persistida do cadastro.
 - Vendas, detalhes e relatórios só usam apresentação de conciliação completa quando a regra automática inteira é satisfeita. Pago informado e comprovantes são apresentados separadamente; igualdade manual não encobre divergência documental.
-- Comprovantes compara venda, pagamento informado e documentos. O filtro amplo **Pendências de conferência** inclui diferenças e ausência de valores/arquivos; **Sem valor válido / em leitura** é o subconjunto sem leitura válida. Esse conjunto é diferente do status principal **Verificar comprovante** de Vendas. Diferenças entre pedidos não se compensam.
+- Comprovantes compara venda, pagamento informado e documentos. O filtro amplo **Pendências de conferência** inclui diferenças e ausência de valores/arquivos; **Sem valor válido / em leitura** é o subconjunto sem leitura válida. Esse filtro financeiro é independente do status escolhido na venda. Diferenças entre pedidos não se compensam.
 - Caso de regressão: venda de R$34.730,00 e comprovantes de R$34.650,00 continuam em revisão tanto antes quanto depois de o pagamento informado ser ajustado para R$34.650,00. O aviso mostra R$80,00 abaixo da venda.
 - Não há atualização retroativa silenciosa de pagamentos. Comprovantes antigos, sem solicitação de sincronização, podem ser aplicados com **Usar total dos comprovantes**, com permissão, conferência de concorrência e auditoria.
 - O aviso de aplicação usa o preço atual do pedido imediatamente após editar preços, sem depender da próxima consulta periódica.
 - Os produtos nos detalhes usam cartões compactos em colunas conforme a largura disponível. Fotos continuam vinculadas ao SN e podem ser abertas.
 - **Conciliado** é reservado ao status completo; o resumo parcial usa **Comprovantes iguais ao valor da venda**. Recibos zerados, negativos ou sem valor inteiro válido não concluem a conferência documental.
-- Histórico do cliente recebe o mesmo status automático calculado no servidor, inclusive para perfis com acesso apenas ao histórico, sem liberar fotos ou comprovantes.
-- Vendas distingue **Status principal** de **Contém pendência**. A decisão de manter ou remover o acompanhamento manual está aguardando definição do usuário; nenhum cadastro ou vínculo histórico foi excluído nesta revisão.
+- Histórico do cliente recebe o mesmo status efetivo e avisos calculados no servidor, inclusive para perfis com acesso apenas ao histórico, sem liberar fotos ou comprovantes.
+- Vendas separa o filtro de status dos avisos de conferência. O cadastro manual continua disponível por decisão do usuário; nenhum cadastro ou vínculo histórico foi excluído nesta revisão.
+- O resumo dos produtos na lista de vendas inclui modelo, cor e memória. Mantém duas linhas no máximo e o resumo de aparelhos adicionais; o título completo lista todas as variações.
 
 ## Relatório por link
 

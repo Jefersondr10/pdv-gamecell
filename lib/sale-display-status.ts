@@ -1,8 +1,19 @@
-import type { ReceiptAttachmentRecord, SaleRecord } from './pdv-types.ts';
+import type {
+  ReceiptAttachmentRecord,
+  SaleRecord,
+  OrderStatusColor,
+} from './pdv-types.ts';
+import { normalizeOrderStatusName } from './order-status-names.ts';
 
-// Priority is shared with server filters; optional manual follow-up never overrides it.
+// Only these outcomes are automatic. All other order statuses belong to the store.
 export const SYSTEM_SALE_STATUSES = [
   { key: 'cancelled', label: 'Cancelado', tone: 'muted' },
+  { key: 'reconciled', label: 'Conciliado', tone: 'success' },
+] as const;
+export type SystemSaleStatusKey = (typeof SYSTEM_SALE_STATUSES)[number]['key'];
+
+// Mandatory checks remain independent of the status selected by the operator.
+export const SALE_ISSUES = [
   { key: 'missing_price', label: 'Sem valor de venda', tone: 'warning' },
   { key: 'missing_receipt', label: 'Sem comprovante', tone: 'warning' },
   { key: 'review', label: 'Verificar comprovante', tone: 'warning' },
@@ -10,14 +21,16 @@ export const SYSTEM_SALE_STATUSES = [
   { key: 'pending_payment', label: 'Pagamento pendente', tone: 'warning' },
   { key: 'overpaid', label: 'Pagamento acima da venda', tone: 'warning' },
   { key: 'missing_photo', label: 'Sem foto do aparelho', tone: 'warning' },
-  { key: 'reconciled', label: 'Conciliado', tone: 'success' },
 ] as const;
-export type SystemSaleStatusKey = (typeof SYSTEM_SALE_STATUSES)[number]['key'];
+export type SaleIssueKey = (typeof SALE_ISSUES)[number]['key'];
+export const SALE_CHECK_STATUSES = [
+  SYSTEM_SALE_STATUSES[0],
+  ...SALE_ISSUES,
+  SYSTEM_SALE_STATUSES[1],
+] as const;
+export type SaleCheckKey = (typeof SALE_CHECK_STATUSES)[number]['key'];
 
-export const SYSTEM_SALE_STATUS_DESCRIPTIONS: Record<
-  SystemSaleStatusKey,
-  string
-> = {
+export const SYSTEM_SALE_STATUS_DESCRIPTIONS: Record<SaleCheckKey, string> = {
   cancelled:
     'A venda foi cancelada e não entra nos totais de vendas concluídas.',
   missing_price: 'Há produto sem preço de venda válido.',
@@ -32,21 +45,16 @@ export const SYSTEM_SALE_STATUS_DESCRIPTIONS: Record<
 };
 
 export function isAutomaticStatusName(name: string) {
-  const normalize = (value: string) =>
-    value
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .trim()
-      .replace(/\s+/g, ' ')
-      .toLowerCase();
   return SYSTEM_SALE_STATUSES.some(
-    (status) => normalize(status.label) === normalize(name),
+    (status) =>
+      normalizeOrderStatusName(status.label) === normalizeOrderStatusName(name),
   );
 }
 type StatusSale = Pick<
   SaleRecord,
   'status' | 'reconciliation' | 'productsTotalCents' | 'receivedTotalCents'
 > & {
+  orderStatus?: { id: string; name: string; color: OrderStatusColor } | null;
   items: { soldPriceCents: number; photos: readonly unknown[] }[];
   receipts: Pick<
     ReceiptAttachmentRecord,
@@ -57,12 +65,13 @@ export function saleIssues(sale: StatusSale) {
   if (sale.status === 'cancelled') return [];
   const failed = sale.receipts.some((receipt) =>
     receipt.receiptAmountCents !== null
-      ? receipt.receiptAmountCents <= 0
+      ? !Number.isSafeInteger(receipt.receiptAmountCents) ||
+        receipt.receiptAmountCents <= 0
       : !['pending', 'processing', 'retry'].includes(
           receipt.receiptOcrStatus ?? '',
         ),
   );
-  const conditions: Partial<Record<SystemSaleStatusKey, boolean>> = {
+  const conditions: Partial<Record<SaleIssueKey, boolean>> = {
     missing_price:
       sale.productsTotalCents <= 0 ||
       sale.items.length === 0 ||
@@ -76,9 +85,43 @@ export function saleIssues(sale: StatusSale) {
     overpaid: sale.receivedTotalCents > sale.productsTotalCents,
     missing_photo: sale.items.some((item) => item.photos.length === 0),
   };
-  return SYSTEM_SALE_STATUSES.filter((status) => conditions[status.key]);
+  return SALE_ISSUES.filter((status) => conditions[status.key]);
+}
+// Kept for old report links which filtered by the first warning.
+export function saleCheckStatus(sale: StatusSale) {
+  if (sale.status === 'cancelled') return SYSTEM_SALE_STATUSES[0];
+  return saleIssues(sale)[0] ?? SYSTEM_SALE_STATUSES[1];
+}
+export function automaticSaleStatus(sale: StatusSale) {
+  if (sale.status === 'cancelled') return SYSTEM_SALE_STATUSES[0];
+  return saleIssues(sale).length === 0 ? SYSTEM_SALE_STATUSES[1] : null;
+}
+export type SaleDisplayStatus = {
+  key: SystemSaleStatusKey | 'manual' | 'none';
+  label: string;
+  tone: 'muted' | 'success' | 'neutral';
+  color?: OrderStatusColor;
+};
+export function resolveSaleDisplayStatus(
+  automatic: SystemSaleStatusKey | null,
+  manual: StatusSale['orderStatus'],
+): SaleDisplayStatus {
+  const system = SYSTEM_SALE_STATUSES.find(
+    (status) => status.key === automatic,
+  );
+  if (system) return system;
+  if (manual && !isAutomaticStatusName(manual.name))
+    return {
+      key: 'manual',
+      label: manual.name,
+      tone: 'neutral',
+      color: manual.color,
+    };
+  return { key: 'none', label: 'Sem status', tone: 'muted' };
 }
 export function saleDisplayStatus(sale: StatusSale) {
-  if (sale.status === 'cancelled') return SYSTEM_SALE_STATUSES[0];
-  return saleIssues(sale)[0] ?? SYSTEM_SALE_STATUSES[8];
+  return resolveSaleDisplayStatus(
+    automaticSaleStatus(sale)?.key ?? null,
+    sale.orderStatus,
+  );
 }

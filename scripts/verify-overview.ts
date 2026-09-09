@@ -11,6 +11,8 @@ db.database.exec(`
   CREATE TABLE receipt_ocr_jobs (attachment_id TEXT PRIMARY KEY, status TEXT);
   CREATE TABLE sale_items (id TEXT, sale_id TEXT, store_id TEXT, sold_price_cents INTEGER);
   ALTER TABLE attachments ADD COLUMN sale_item_id TEXT;
+  ALTER TABLE sales ADD COLUMN order_status_id TEXT;
+  CREATE TABLE order_statuses (id TEXT, store_id TEXT, name TEXT, color TEXT);
 `);
 const midnight = Date.parse('2026-09-05T00:00:00-03:00');
 const sale = (
@@ -21,7 +23,9 @@ const sale = (
   status = 'completed',
 ) => {
   db.database
-    .prepare('INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .prepare(
+      'INSERT INTO sales(id,store_id,number,customer_name,created_at,status,received_total_cents,products_total_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    )
     .run(id, store, 1, `Cliente ${id}`, time, status, paid, paid);
   db.database
     .prepare('INSERT INTO sale_items VALUES (?, ?, ?, ?)')
@@ -190,7 +194,8 @@ try {
   );
   const lumora = await read('lumora', 'comparison=review');
   assert.equal(lumora.items.length, 1);
-  assert.equal(lumora.items[0].automaticStatus, 'review');
+  assert.equal(lumora.items[0].automaticStatus, null);
+  assert.ok(lumora.items[0].issueKeys.includes('review'));
   assert.equal(overviewSaleComparison(lumora.items[0]), 'sale_difference');
   assert.equal(overviewComparison(lumora.totals), 'review');
   assert.equal(
@@ -202,7 +207,7 @@ try {
     1,
   );
   assert.equal(lumora.totals.saleDifferenceCount, 1);
-  for (const invalidAmount of [0, -1]) {
+  for (const invalidAmount of [0, -1, 0.5]) {
     const fixture = `invalid-${invalidAmount}`;
     sale(fixture, 100, fixture);
     receipt(`${fixture}-r`, fixture, invalidAmount, fixture);
@@ -225,7 +230,8 @@ try {
     "UPDATE sale_items SET sold_price_cents=0 WHERE sale_id='no-price'",
   );
   const noPrice = await read('no-price', 'comparison=divergent');
-  assert.equal(noPrice.items[0].automaticStatus, 'missing_price');
+  assert.equal(noPrice.items[0].automaticStatus, null);
+  assert.ok(noPrice.items[0].issueKeys.includes('missing_price'));
   assert.equal(overviewSaleComparison(noPrice.items[0]), 'missing_price');
   assert.equal(
     (await read('no-price', 'comparison=matched')).totals.saleCount,
@@ -246,7 +252,8 @@ try {
     "UPDATE sales SET products_total_cents=100 WHERE id='paid-gap'; UPDATE sale_items SET sold_price_cents=100 WHERE sale_id='paid-gap'",
   );
   const paidGap = await read('paid-gap', 'comparison=review');
-  assert.equal(paidGap.items[0].automaticStatus, 'pending_payment');
+  assert.equal(paidGap.items[0].automaticStatus, null);
+  assert.ok(paidGap.items[0].issueKeys.includes('pending_payment'));
   assert.equal(paidGap.totals.saleCount, 1);
   assert.equal(
     (await read('paid-gap', 'comparison=matched')).totals.saleCount,
@@ -353,6 +360,39 @@ try {
       'a',
     ),
   );
+  sale('manual-warning', 10000, 'statuses');
+  receipt('manual-receipt', 'manual-warning', 10000, 'statuses');
+  db.database
+    .exec(`INSERT INTO order_statuses VALUES ('manual', 'statuses', 'Pagamento pendente', 'amber');
+    UPDATE sales SET order_status_id='manual' WHERE id='manual-warning'`);
+  let manualOverview = (await read('statuses')).items[0];
+  assert.equal(manualOverview.displayStatus.key, 'manual');
+  assert.equal(manualOverview.displayStatus.label, 'Pagamento pendente');
+  assert.deepEqual(manualOverview.issueKeys, ['missing_photo']);
+  receipt(
+    'manual-photo',
+    'manual-warning',
+    null,
+    'statuses',
+    'ocr',
+    'item_photo',
+  );
+  db.database.exec(
+    "UPDATE attachments SET sale_item_id='manual-warning-item' WHERE id='manual-photo'",
+  );
+  manualOverview = (await read('statuses')).items[0];
+  assert.equal(manualOverview.displayStatus.key, 'reconciled');
+  assert.deepEqual(manualOverview.issueKeys, []);
+  db.database.exec(
+    "UPDATE sales SET received_total_cents=9000 WHERE id='manual-warning'",
+  );
+  manualOverview = (await read('statuses')).items[0];
+  assert.equal(manualOverview.displayStatus.key, 'manual');
+  assert.deepEqual(manualOverview.issueKeys, ['pending_payment']);
+  db.database.exec(
+    "UPDATE order_statuses SET store_id='foreign' WHERE id='manual'",
+  );
+  assert.equal((await read('statuses')).items[0].displayStatus.key, 'none');
   console.log(
     'Overview passed: payment/receipt comparison, no multiplication, partial/missing values, cancelling differences, cash, manual/OCR, date boundaries, metadata-only pagination and tenant isolation.',
   );

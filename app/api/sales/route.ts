@@ -40,7 +40,11 @@ import {
 } from '@/lib/server/security';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 import { deriveReceiptReconciliation } from '@/lib/receipt-reconciliation';
-import { saleDisplayStatus } from '@/lib/sale-display-status';
+import {
+  saleDisplayStatus,
+  automaticSaleStatus,
+  saleIssues,
+} from '@/lib/sale-display-status';
 import type {
   AttachmentRecord,
   ClientHistoryPage,
@@ -243,7 +247,9 @@ export async function GET(request: Request) {
     const page = {
       items: sales.map((sale) => ({
         ...sale,
-        automaticStatus: saleDisplayStatus(sale).key,
+        automaticStatus: automaticSaleStatus(sale)?.key ?? null,
+        displayStatus: saleDisplayStatus(sale),
+        issueKeys: saleIssues(sale).map((issue) => issue.key),
       })),
       groups: [],
       nextCursor:
@@ -262,7 +268,9 @@ export async function GET(request: Request) {
           customerName: sale.customerName,
           sellerName: sale.sellerName,
           orderStatus: sale.orderStatus,
-          automaticStatus: saleDisplayStatus(sale).key,
+          automaticStatus: automaticSaleStatus(sale)?.key ?? null,
+          displayStatus: saleDisplayStatus(sale),
+          issueKeys: saleIssues(sale).map((issue) => issue.key),
           productsTotalCents: sale.productsTotalCents,
           receivedTotalCents: sale.receivedTotalCents,
           status: sale.status,

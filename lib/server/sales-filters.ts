@@ -1,11 +1,14 @@
 import { HttpError, utf8Prefix } from './http.ts';
 import {
   SALE_ALERT_SQL,
-  SALE_AUTO_STATUS_SQL,
+  SALE_CHECK_STATUS_SQL,
   SALE_RECONCILED_SQL,
-  isSystemSaleStatus,
+  SALE_HAS_MANUAL_STATUS_SQL,
+  isSaleCheckStatus,
 } from './sale-status-sql.ts';
-import type { SystemSaleStatusKey } from '../sale-display-status.ts';
+import type { SaleCheckKey, SaleIssueKey } from '../sale-display-status.ts';
+import { SALE_ISSUES } from '../sale-display-status.ts';
+import { SALE_ISSUE_SQL } from './sale-status-sql.ts';
 export { SALE_ALERT_SQL, SALE_RECONCILED_SQL } from './sale-status-sql.ts';
 
 export type SalesPeriod =
@@ -17,8 +20,8 @@ export type SalesPeriod =
   | 'month'
   | 'all';
 
-export type SalesIssue = 'missing_receipt' | 'pending_payment';
-export type SalesAutoStatus = SystemSaleStatusKey | 'pending';
+export type SalesIssue = SaleIssueKey;
+export type SalesAutoStatus = SaleCheckKey | 'pending';
 
 export type ParsedSalesFilters = {
   alertOnly: boolean;
@@ -91,11 +94,18 @@ export function parseSalesFilters(
   const alertOnly = alertValue === '1';
   const issue = parseIssue(url.searchParams.get('issue'));
   const orderStatusId = parseOrderStatus(url.searchParams.get('orderStatus'));
+  const statusScope = url.searchParams.get('statusScope') ?? 'saved';
+  if (!['saved', 'display'].includes(statusScope))
+    throw new HttpError(
+      400,
+      'Filtro de status inválido.',
+      'INVALID_STATUS_SCOPE',
+    );
   const saleStatusInput = url.searchParams.get('saleStatus');
   if (
     saleStatusInput &&
     saleStatusInput !== 'pending' &&
-    !isSystemSaleStatus(saleStatusInput)
+    !isSaleCheckStatus(saleStatusInput)
   )
     throw new HttpError(
       400,
@@ -116,6 +126,7 @@ export function parseSalesFilters(
     throw new HttpError(400, 'Venda inválida.', 'INVALID_SALE');
   }
   const current = buildFilterClauses({
+    statusScope,
     sellerId,
     saleStatus,
     customerId,
@@ -133,6 +144,7 @@ export function parseSalesFilters(
     previous && !saleId
       ? {
           ...buildFilterClauses({
+            statusScope,
             sellerId,
             saleStatus,
             customerId,
@@ -170,6 +182,7 @@ export function parseSalesFilters(
 }
 
 function buildFilterClauses({
+  statusScope,
   sellerId,
   saleStatus,
   customerId,
@@ -182,6 +195,7 @@ function buildFilterClauses({
   storeId,
   to,
 }: {
+  statusScope: string;
   sellerId: string | null;
   saleStatus: SalesAutoStatus | null;
   customerId: string | null;
@@ -203,7 +217,7 @@ function buildFilterClauses({
   if (saleStatus === 'pending')
     where.push(`s.status = 'completed' AND NOT ${SALE_RECONCILED_SQL}`);
   else if (saleStatus) {
-    where.push(`${SALE_AUTO_STATUS_SQL} = ?`);
+    where.push(`${SALE_CHECK_STATUS_SQL} = ?`);
     bindings.push(saleStatus);
   }
   if (customerId) {
@@ -235,26 +249,21 @@ function buildFilterClauses({
   if (alertOnly) {
     where.push(`(s.status = 'completed' AND ${SALE_ALERT_SQL})`);
   }
-  if (issue === 'missing_receipt') {
-    where.push(`(
-      s.status = 'completed' AND NOT EXISTS (
-        SELECT 1 FROM attachments missing_receipt
-        WHERE missing_receipt.store_id = s.store_id
-          AND missing_receipt.sale_id = s.id
-          AND missing_receipt.kind = 'receipt'
-      )
-    )`);
-  }
-  if (issue === 'pending_payment') {
-    where.push(
-      "s.status = 'completed' AND s.received_total_cents < s.products_total_cents",
-    );
-  }
+  if (issue)
+    where.push(`(s.status = 'completed' AND ${SALE_ISSUE_SQL[issue]})`);
   if (orderStatusId === 'none') {
-    where.push('s.order_status_id IS NULL');
+    where.push(
+      statusScope === 'display'
+        ? `NOT ${SALE_HAS_MANUAL_STATUS_SQL}`
+        : 's.order_status_id IS NULL',
+    );
   } else if (orderStatusId) {
     where.push('s.order_status_id = ?');
     bindings.push(orderStatusId);
+  }
+  if (orderStatusId && statusScope === 'display') {
+    where.push(`s.status = 'completed' AND NOT ${SALE_RECONCILED_SQL}`);
+    if (orderStatusId !== 'none') where.push(SALE_HAS_MANUAL_STATUS_SQL);
   }
   if (saleId) {
     where.push('s.id = ?');
@@ -265,7 +274,8 @@ function buildFilterClauses({
 
 function parseIssue(value: string | null): SalesIssue | null {
   if (value === null || value === '') return null;
-  if (value === 'missing_receipt' || value === 'pending_payment') return value;
+  if (SALE_ISSUES.some((issue) => issue.key === value))
+    return value as SalesIssue;
   throw new HttpError(400, 'Filtro de pendência inválido.', 'INVALID_ISSUE');
 }
 

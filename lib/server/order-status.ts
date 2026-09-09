@@ -1,23 +1,19 @@
 import { ORDER_STATUS_COLORS, type OrderStatusColor } from '@/lib/pdv-types';
 import { HttpError, stringField } from '@/lib/server/http';
 import { isAutomaticStatusName } from '../sale-display-status';
+export { normalizeOrderStatusName } from '../order-status-names.ts';
 
 export function orderStatusName(value: unknown) {
-  const name = stringField(value, 'Nome do status', { max: 60 }).replace(
-    /\s+/gu,
-    ' ',
-  );
+  const name = stringField(value, 'Nome do status', { max: 60 })
+    .normalize('NFKC')
+    .replace(/\s+/gu, ' ');
   if (isAutomaticStatusName(name))
     throw new HttpError(
       400,
-      'Este nome já pertence a um status automático obrigatório. Escolha um nome de acompanhamento, como Aguardando retirada.',
+      'Conciliado e Cancelado são exclusivos do sistema. Escolha outro nome para cadastrar.',
       'SYSTEM_STATUS_NAME',
     );
   return name;
-}
-
-export function normalizeOrderStatusName(value: string) {
-  return value.normalize('NFKC').toLocaleLowerCase('pt-BR');
 }
 
 export function orderStatusColor(

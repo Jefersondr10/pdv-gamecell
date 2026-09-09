@@ -187,8 +187,8 @@ export function SettingsProductionView({
           <SettingsCard
             icon={ListChecks}
             title="Status do pedido"
-            detail={`${SYSTEM_SALE_STATUSES.length} automáticos · ${data.orderStatuses.length} de 30 manuais`}
-            description="Confira os status obrigatórios e crie acompanhamentos como Aguardando retirada ou Entregue."
+            detail={`${SYSTEM_SALE_STATUSES.length} automáticos · ${data.orderStatuses.length} de 30 cadastrados`}
+            description="Conciliado e Cancelado são automáticos. Cadastre os demais status da loja."
             disabled={!can(data.user, 'finance.manage')}
             onManage={() => setManager('order-statuses')}
           />
@@ -786,8 +786,8 @@ function OrderStatusesDialog({
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
           <DialogTitle>Status do pedido</DialogTitle>
           <DialogDescription>
-            Os status automáticos são padrão do sistema. Crie acompanhamentos
-            adicionais para a rotina da loja.
+            Conciliado e Cancelado são automáticos. Os demais status são
+            cadastrados e escolhidos por você.
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain">
@@ -797,9 +797,9 @@ function OrderStatusesDialog({
               Status automáticos · obrigatórios
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              Sempre ativos. Não podem ser alterados manualmente nem
-              desativados. Se houver mais de uma pendência, a venda mostra a
-              prioritária e mantém as demais nos detalhes.
+              Sempre ativos, sem edição ou desativação. Conciliado aparece
+              apenas quando toda a conferência estiver completa; Cancelado exige
+              o cancelamento da venda.
             </p>
             <ul className="mt-3 divide-y">
               {SYSTEM_SALE_STATUSES.map((status) => (
@@ -819,7 +819,7 @@ function OrderStatusesDialog({
               ))}
             </ul>
           </section>
-          <h3 className="mb-2 font-bold">Acompanhamentos manuais da loja</h3>
+          <h3 className="mb-2 font-bold">Status cadastrados pela loja</h3>
           <form
             className="grid gap-3 rounded-2xl border bg-muted/25 p-4 sm:grid-cols-[minmax(0,1fr)_11rem_auto] sm:items-end"
             onSubmit={async (event) => {
@@ -841,7 +841,7 @@ function OrderStatusesDialog({
               }
             }}
           >
-            <Field label="Acompanhamento personalizado">
+            <Field label="Nome do status">
               <Input
                 maxLength={60}
                 onChange={(event) => setName(event.target.value)}
@@ -958,7 +958,7 @@ function OrderStatusesDialog({
                       <OrderStatusBadge status={status} />
                       <p className="mt-1 text-xs text-muted-foreground">
                         {isAutomaticStatusName(status.name)
-                          ? 'Cadastro manual antigo com nome de status automático. Renomeie ou desative para evitar confusão; isso não desativa a conferência do sistema.'
+                          ? 'Nome reservado ao sistema. Renomeie este cadastro para usá-lo novamente; o histórico permanece guardado.'
                           : status.active
                             ? 'Disponível para usar nas vendas.'
                             : 'Inativo; permanece no histórico antigo.'}
@@ -978,7 +978,10 @@ function OrderStatusesDialog({
                       <Button
                         aria-label={`${status.active ? 'Desativar' : 'Ativar'} ${status.name}`}
                         className="min-h-11"
-                        disabled={busy}
+                        disabled={
+                          busy ||
+                          (!status.active && isAutomaticStatusName(status.name))
+                        }
                         onClick={async () => {
                           setBusy(true);
                           setError('');
@@ -1011,9 +1014,10 @@ function OrderStatusesDialog({
             )}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            Use acompanhamentos como Aguardando retirada ou Entregue. Valores,
-            pagamentos, fotos e comprovantes são conferidos pelo status
-            automático.
+            Você pode cadastrar Pagamento pendente, Aguardando retirada ou
+            outros nomes da sua rotina. Avisos de preço, pagamento, foto e
+            comprovante continuam visíveis independentemente do status
+            escolhido.
           </p>
         </div>
         <DialogFooter className="m-0 shrink-0 rounded-none border-t p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]">

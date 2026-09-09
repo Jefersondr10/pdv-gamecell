@@ -1,5 +1,9 @@
 import type { ReceiptAttachmentRecord } from './pdv-types.ts';
-import type { SystemSaleStatusKey } from './sale-display-status.ts';
+import type {
+  SystemSaleStatusKey,
+  SaleDisplayStatus,
+  SaleIssueKey,
+} from './sale-display-status.ts';
 
 export type OverviewTotals = {
   saleCount: number;
@@ -23,7 +27,9 @@ export type OverviewSale = {
   receivedCents: number;
   saleCents: number;
   saleInvalid: number;
-  automaticStatus: SystemSaleStatusKey;
+  automaticStatus: SystemSaleStatusKey | null;
+  displayStatus: SaleDisplayStatus;
+  issueKeys: SaleIssueKey[];
   cashCents: number;
   receiptCents: number;
   receiptCount: number;

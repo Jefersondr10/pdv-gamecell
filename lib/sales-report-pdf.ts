@@ -252,16 +252,13 @@ function saleDetails(
     { size: 9, muted: true },
   );
   layout.paragraph(`Status: ${saleDisplayStatus(sale).label}`, { size: 9 });
-  if (saleIssues(sale).length > 1)
+  if (saleIssues(sale).length > 0)
     layout.paragraph(
-      `Outras pendências: ${saleIssues(sale)
-        .slice(1)
+      `Conferência: ${saleIssues(sale)
         .map((issue) => issue.label)
         .join(' · ')}`,
       { size: 9 },
     );
-  if (sale.orderStatus)
-    layout.paragraph(`Acompanhamento: ${sale.orderStatus.name}`, { size: 9 });
   layout.y += 8;
   layout.row('Valor da venda', money(sale.productsTotalCents), { bold: true });
   if ((detailed || singleSale) && showFinancial) {

@@ -10,8 +10,10 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
-import { OrderStatusBadge } from '@/components/pdv/order-status-badge';
+import {
+  SaleStatusBadge,
+  SaleIssuesNotice,
+} from '@/components/pdv/sale-status-badge';
 import type { SaleRecord } from '@/lib/pdv-types';
 import { saleIssues } from '@/lib/sale-display-status';
 import { saleFinancialSummary } from '@/lib/sale-financial-summary';
@@ -82,9 +84,7 @@ export function SaleDetailsDialog({
             </DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 overscroll-contain">
               {notice && (
-                <output
-                  className="block rounded-xl bg-success/10 p-3 text-sm font-semibold text-success"
-                >
+                <output className="block rounded-xl bg-success/10 p-3 text-sm font-semibold text-success">
                   {notice}
                 </output>
               )}
@@ -92,15 +92,9 @@ export function SaleDetailsDialog({
                 <h2 className="text-lg font-bold">{sale.customerName}</h2>
                 <SaleStatusBadge sale={sale} />
               </div>
-              {saleIssues(sale).length > 1 && (
-                <p className="text-sm text-muted-foreground">
-                  Outras pendências:{' '}
-                  {saleIssues(sale)
-                    .slice(1)
-                    .map((issue) => issue.label)
-                    .join(' · ')}
-                </p>
-              )}
+              <SaleIssuesNotice
+                issueKeys={saleIssues(sale).map((issue) => issue.key)}
+              />
               <dl className="grid grid-cols-2 gap-3 rounded-xl bg-muted/50 p-3">
                 <div>
                   <dt className="text-sm text-muted-foreground">
@@ -147,14 +141,7 @@ export function SaleDetailsDialog({
                   <br />
                   Motivo: {sale.cancellationReason || 'Não informado'}
                 </p>
-              ) : (
-                sale.orderStatus && (
-                  <div className="flex items-center gap-2 text-sm">
-                    <span>Acompanhamento da loja:</span>
-                    <OrderStatusBadge status={sale.orderStatus} />
-                  </div>
-                )
-              )}
+              ) : null}
               <SalePricesEditor
                 sale={sale}
                 csrfToken={csrfToken}
@@ -286,9 +273,7 @@ export function SaleDetailsDialog({
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-background p-3">
               {locked && (
-                <output
-                  className="block w-full text-sm text-muted-foreground"
-                >
+                <output className="block w-full text-sm text-muted-foreground">
                   {pricesBusy
                     ? 'Aguarde a confirmação do servidor.'
                     : 'Salve ou cancele a edição dos preços para continuar.'}
