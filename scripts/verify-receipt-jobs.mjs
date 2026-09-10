@@ -5,7 +5,7 @@ import { processReceiptJob } from '../lib/server/node/receipt-jobs.mjs';
 
 const db = new SqliteDatabase(':memory:');
 db.database.exec(
-  `CREATE TABLE sales(id TEXT PRIMARY KEY, store_id TEXT, status TEXT); CREATE TABLE attachments(id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT REFERENCES sales(id), kind TEXT, r2_key TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_by TEXT, receipt_amount_confirmed_at INTEGER);`,
+  `CREATE TABLE sales(id TEXT PRIMARY KEY, store_id TEXT, status TEXT); CREATE TABLE attachments(id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT REFERENCES sales(id), kind TEXT, r2_key TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_by TEXT, receipt_amount_confirmed_at INTEGER,receipt_details_json TEXT,receipt_review_reason TEXT);`,
 );
 db.database.exec(
   await readFile(

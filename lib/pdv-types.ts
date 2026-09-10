@@ -25,6 +25,9 @@ export type AttachmentRecord = {
 };
 
 export type ReceiptAttachmentRecord = AttachmentRecord & {
+  receiptDetails?: import('./receipt-document').ReceiptDocument | null;
+  receiptReviewReason?: string | null;
+  receiptPaymentId?: string | null;
   receiptOcrStatus?: string | null;
   receiptAmountCents: number | null;
   receiptAmountSource: 'ocr' | 'manual' | null;
@@ -102,6 +105,8 @@ export type PixAccountRecord = {
   id: string;
   name: string;
   details: string | null;
+  receiptBank?: string | null;
+  receiptRecipientDocument?: string | null;
   active: boolean;
 };
 

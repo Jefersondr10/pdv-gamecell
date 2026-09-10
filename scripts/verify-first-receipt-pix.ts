@@ -14,14 +14,15 @@ const db = adapter as unknown as D1Database;
 const sql = adapter.database;
 sql.exec(`
 CREATE TABLE users(id TEXT PRIMARY KEY,store_id TEXT,role TEXT,permissions_json TEXT,active INTEGER);
-CREATE TABLE pix_accounts(id TEXT PRIMARY KEY,store_id TEXT,name TEXT,active INTEGER);
+CREATE TABLE pix_accounts(id TEXT PRIMARY KEY,store_id TEXT,name TEXT,active INTEGER,receipt_bank TEXT,receipt_recipient_document TEXT);
 CREATE TABLE sales(id TEXT PRIMARY KEY,store_id TEXT,status TEXT,products_total_cents INTEGER,received_total_cents INTEGER,received_difference_cents INTEGER);
 CREATE TABLE payments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,method TEXT,pix_account_id TEXT,account_name TEXT,amount_cents INTEGER,created_at INTEGER);
-CREATE TABLE attachments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,kind TEXT,receipt_amount_cents INTEGER,receipt_amount_source TEXT,receipt_amount_confirmed_at INTEGER);
+CREATE TABLE attachments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,kind TEXT,receipt_amount_cents INTEGER,receipt_amount_source TEXT,receipt_amount_confirmed_at INTEGER,receipt_details_json TEXT,receipt_review_reason TEXT);
+CREATE TABLE receipt_payment_links(attachment_id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,payment_id TEXT,transaction_id TEXT,created_at INTEGER);
 CREATE TABLE audit_events(id TEXT PRIMARY KEY,store_id TEXT,actor_user_id TEXT,action TEXT,entity_type TEXT,entity_id TEXT NOT NULL,details_json TEXT,created_at INTEGER);
 CREATE TABLE sale_receipt_payment_sync(sale_id TEXT PRIMARY KEY,store_id TEXT,request_id TEXT,requested_by TEXT,target_payment_id TEXT,status TEXT,updated_at INTEGER);
 INSERT INTO users VALUES('owner','shop','owner',NULL,1);
-INSERT INTO pix_accounts VALUES('bank','shop','Escolhida',1),('foreign','elsewhere','Outra loja',1),('inactive','shop','Inativa',0);
+INSERT INTO pix_accounts(id,store_id,name,active) VALUES('bank','shop','Escolhida',1),('foreign','elsewhere','Outra loja',1),('inactive','shop','Inativa',0);
 `);
 const scope = {
   storeId: 'shop',
@@ -34,7 +35,7 @@ function seed() {
     UPDATE users SET active=1; UPDATE pix_accounts SET active=1 WHERE id='bank';
     INSERT INTO sales VALUES('sale','shop','completed',710000,300000,-410000);
     INSERT INTO payments VALUES('cash','shop','sale','cash',NULL,NULL,300000,1);
-    INSERT INTO attachments VALUES('receipt','shop','sale','receipt',410000,'ocr',1);`);
+    INSERT INTO attachments(id,store_id,sale_id,kind,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at) VALUES('receipt','shop','sale','receipt',410000,'ocr',1);`);
 }
 const state = async () => (await readReceiptPaymentSync(db, 'shop', 'sale'))!;
 const input = (operationId: string, pixAccountId = 'bank') => ({
@@ -68,7 +69,7 @@ assert.equal(
   current.payments.find((p) => p.method === 'pix')!.pixAccountId,
   'bank',
 );
-assert.equal(audits(), 2);
+assert.equal(audits(), 3);
 assert.deepEqual(
   (await originalSalePayments(db, 'shop', 'sale')).results.map((row) => ({
     ...row,
@@ -76,7 +77,7 @@ assert.deepEqual(
   [{ method: 'cash', pixAccountId: null, amountCents: 300000 }],
 );
 await assert.rejects(register('second-pix'), /venda mudou/i);
-assert.equal(audits(), 2);
+assert.equal(audits(), 3);
 sql.exec(
   "UPDATE attachments SET receipt_amount_cents=400000 WHERE id='receipt'",
 );
@@ -195,7 +196,12 @@ for (const mutate of [
   const raced = {
     prepare: adapter.prepare.bind(adapter),
     batch: async (statements: unknown[]) => {
-      if (statements.length === 5) sql.exec(mutate);
+      if (
+        (statements as { sql: string }[]).some((statement) =>
+          statement.sql.includes('INSERT INTO payments('),
+        )
+      )
+        sql.exec(mutate);
       return adapter.batch(statements);
     },
   } as unknown as D1Database;

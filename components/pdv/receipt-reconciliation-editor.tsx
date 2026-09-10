@@ -334,6 +334,8 @@ export function SavedReceiptValueEditor({
   const receiptIdentityRef = useRef(receiptIdentity);
   const valueRef = useRef(value);
   const reading = state?.status === 'reading';
+  const [confirmReread, setConfirmReread] = useState(false);
+  const [requestingReread, setRequestingReread] = useState(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -492,21 +494,62 @@ export function SavedReceiptValueEditor({
           >
             {receipt.name}
           </a>
-          {serverJob?.status === 'needs_review' &&
-            value.amountCents === null && (
+          {serverJob &&
+            !['pending', 'processing', 'retry'].includes(
+              serverJob.status ?? '',
+            ) &&
+            onServerRetry && (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={disabled}
-                onClick={() => void onServerRetry?.()}
+                disabled={disabled || requestingReread}
+                onClick={() => setConfirmReread(true)}
               >
                 <FileSearch />
-                Tentar leitura
+                Reler comprovante
               </Button>
             )}
           {receiptAction}
         </div>
+        {confirmReread && (
+          <div className="my-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <p>
+              A nova leitura substituirá o valor salvo deste comprovante e
+              voltará a atualizar o Pix. Dinheiro não será alterado. Uma
+              correção manual feita depois continua protegida.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                disabled={disabled || requestingReread}
+                onClick={async () => {
+                  setRequestingReread(true);
+                  try {
+                    await onServerRetry?.();
+                    setConfirmReread(false);
+                  } finally {
+                    setRequestingReread(false);
+                  }
+                }}
+              >
+                Confirmar releitura
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setConfirmReread(false)}
+              >
+                Agora não
+              </Button>
+            </div>
+          </div>
+        )}
+        {receipt.receiptReviewReason && (
+          <p role="alert" className="mt-2 text-sm text-amber-800">
+            {receipt.receiptReviewReason}
+          </p>
+        )}
         <output className="mt-1 block text-xs text-muted-foreground">
           {value.amountCents !== null
             ? value.source === 'manual'

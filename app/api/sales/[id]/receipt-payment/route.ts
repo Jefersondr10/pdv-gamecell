@@ -14,6 +14,7 @@ import {
   requestReceiptPaymentSync,
   settleReceiptPaymentSync,
   registerFirstReceiptPix,
+  receiptSnapshot,
 } from '@/lib/server/receipt-payment-sync';
 import {
   consumeStoreReadBudget,
@@ -222,7 +223,7 @@ export async function POST(request: Request, context: Context) {
           .prepare(`INSERT INTO audit_events (id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
           SELECT ?,?,?,'sale.receipt_payment_requested','sale', CASE WHEN EXISTS(SELECT 1 FROM sales WHERE id=? AND store_id=? AND status='completed')
           AND (SELECT json_group_array(json_object('id',id,'method',method,'pixAccountId',pix_account_id,'accountName',account_name,'amountCents',amount_cents)) FROM (SELECT * FROM payments WHERE sale_id=? AND store_id=? ORDER BY id))=?
-          AND (SELECT json_group_array(json_object('id',id,'amountCents',receipt_amount_cents,'source',receipt_amount_source,'confirmedAt',receipt_amount_confirmed_at)) FROM (SELECT * FROM attachments WHERE sale_id=? AND store_id=? AND kind='receipt' ORDER BY id))=?
+          AND ${receiptSnapshot}=?
           AND (SELECT request_id FROM sale_receipt_payment_sync WHERE sale_id=? AND store_id=?) IS ?
           THEN ? ELSE NULL END,?,?`)
           .bind(

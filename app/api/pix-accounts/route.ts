@@ -10,6 +10,7 @@ import {
 } from '@/lib/server/http';
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { receiptAccountFields } from '@/lib/server/receipt-account-fields';
 
 export async function POST(request: Request) {
   try {
@@ -21,6 +22,8 @@ export async function POST(request: Request) {
     assertCsrf(request, session);
     const body = (await boundedJson(request)) as Record<string, unknown>;
     const name = stringField(body.name, 'Nome da conta', { max: 100 });
+    const { receiptBank, receiptRecipientDocument } =
+      receiptAccountFields(body);
     const details =
       body.details === undefined || body.details === null || body.details === ''
         ? null
@@ -48,8 +51,8 @@ export async function POST(request: Request) {
         db
           .prepare(
             `INSERT INTO pix_accounts
-             (id, store_id, name, details, active, created_by, created_at, updated_at)
-             SELECT ?, ?, ?, ?, 1, ?, ?, ?
+             (id, store_id, name, details, receipt_bank, receipt_recipient_document, active, created_by, created_at, updated_at)
+             SELECT ?, ?, ?, ?, ?, ?, 1, ?, ?, ?
              WHERE (
                SELECT COUNT(*) FROM pix_accounts WHERE store_id = ?
              ) < 100`,
@@ -59,6 +62,8 @@ export async function POST(request: Request) {
             session.storeId,
             name,
             details,
+            receiptBank,
+            receiptRecipientDocument,
             session.id,
             now,
             now,

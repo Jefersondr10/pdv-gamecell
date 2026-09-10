@@ -36,9 +36,9 @@ export async function readOverview(
   const comparisonWhere: Record<OverviewFilter, string> = {
     all: '1 = 1',
     review:
-      '(pixCents > 0 AND receiptCount = 0) OR pendingCount > 0 OR saleInvalid = 1 OR receiptCents != pixCents OR receivedCents != saleCents',
+      'receiptReviewCount > 0 OR (pixCents > 0 AND receiptCount = 0) OR pendingCount > 0 OR saleInvalid = 1 OR receiptCents != pixCents OR receivedCents != saleCents',
     matched:
-      '(receiptCount > 0 OR pixCents = 0) AND pendingCount = 0 AND saleInvalid = 0 AND receiptCents = pixCents AND receivedCents = saleCents',
+      'receiptReviewCount = 0 AND (receiptCount > 0 OR pixCents = 0) AND pendingCount = 0 AND saleInvalid = 0 AND receiptCents = pixCents AND receivedCents = saleCents',
     divergent:
       'saleInvalid = 1 OR receivedCents != saleCents OR (receiptCount > 0 AND pendingCount = 0 AND receiptCents != pixCents)',
     pending: 'receiptCount > 0 AND pendingCount > 0',
@@ -82,7 +82,8 @@ export async function readOverview(
   ), receipts AS (
     SELECT a.sale_id, COUNT(*) AS receiptCount,
       COALESCE(SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN a.receipt_amount_cents ELSE 0 END), 0) AS receiptCents,
-      SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN 0 ELSE 1 END) AS pendingCount
+      SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN 0 ELSE 1 END) AS pendingCount,
+      SUM(CASE WHEN a.receipt_review_reason IS NOT NULL THEN 1 ELSE 0 END) AS receiptReviewCount
     FROM attachments a JOIN filtered s ON s.id = a.sale_id AND s.store_id = a.store_id
     WHERE a.kind = 'receipt' GROUP BY a.sale_id
   ), cash AS (
@@ -96,7 +97,7 @@ export async function readOverview(
       ${SALE_AUTO_STATUS_SQL} AS automaticStatus, CASE WHEN ${SALE_ISSUE_SQL.missing_price} THEN 1 ELSE 0 END AS saleInvalid, s.store_id AS storeId,
       ${SALE_ISSUE_KEYS_SQL} AS issueKeysJson, os.id AS orderStatusId, os.name AS orderStatusName, os.color AS orderStatusColor,
       COALESCE(c.cashCents, 0) AS cashCents, COALESCE(r.receiptCount, 0) AS receiptCount,
-      COALESCE(r.receiptCents, 0) AS receiptCents, COALESCE(r.pendingCount, 0) AS pendingCount
+      COALESCE(r.receiptCents, 0) AS receiptCents, COALESCE(r.pendingCount, 0) AS pendingCount, COALESCE(r.receiptReviewCount, 0) AS receiptReviewCount
     FROM filtered s LEFT JOIN receipts r ON r.sale_id = s.id LEFT JOIN cash c ON c.sale_id = s.id
     LEFT JOIN order_statuses os ON os.id = s.order_status_id AND os.store_id = s.store_id
   ), selected AS (
@@ -106,6 +107,7 @@ export async function readOverview(
       COALESCE(SUM(cashCents), 0) AS totalCash, COALESCE(SUM(receiptCents), 0) AS totalReceipts,
       COALESCE(SUM(pixCents), 0) AS totalPix,
       COALESCE(SUM(receiptCount), 0) AS totalFiles, COALESCE(SUM(pendingCount), 0) AS totalPending,
+      COALESCE(SUM(receiptReviewCount), 0) AS totalReceiptReview,
       COALESCE(SUM(CASE WHEN receiptCount = 0 AND pixCents > 0 THEN 1 ELSE 0 END), 0) AS totalMissing,
       COALESCE(SUM(CASE WHEN ${comparisonWhere.divergent} THEN 1 ELSE 0 END), 0) AS totalDivergent,
       COALESCE(SUM(CASE WHEN saleInvalid = 1 OR receivedCents != saleCents THEN 1 ELSE 0 END), 0) AS saleDifferenceCount,
@@ -117,7 +119,7 @@ export async function readOverview(
     a.id AS attachmentId, a.file_name AS fileName,
     a.mime_type AS mimeType, a.size_bytes AS sizeBytes, a.receipt_amount_cents AS amountCents,
     a.receipt_amount_source AS amountSource, a.receipt_amount_confirmed_at AS confirmedAt,
-    j.status AS processingStatus
+    j.status AS processingStatus, a.receipt_review_reason AS receiptReviewReason
   FROM summary LEFT JOIN page ON 1 = 1
   LEFT JOIN attachments a ON a.sale_id = page.id AND a.store_id = page.storeId AND a.kind = 'receipt'
   LEFT JOIN receipt_ocr_jobs j ON j.attachment_id = a.id
@@ -140,6 +142,8 @@ export async function readOverview(
     totalReceipts: number;
     totalFiles: number;
     totalPending: number;
+    totalReceiptReview: number;
+    receiptReviewReason: string | null;
     totalMissing: number;
     totalDivergent: number;
     totalShortfall: number;
@@ -165,6 +169,7 @@ export async function readOverview(
     receiptCents: Number(first?.totalReceipts ?? 0),
     receiptCount: Number(first?.totalFiles ?? 0),
     pendingCount: Number(first?.totalPending ?? 0),
+    receiptReviewCount: Number(first?.totalReceiptReview ?? 0),
     missingCount: Number(first?.totalMissing ?? 0),
     divergentCount: Number(first?.totalDivergent ?? 0),
     shortfallCents: Number(first?.totalShortfall ?? 0),
@@ -202,6 +207,7 @@ export async function readOverview(
         receiptCents: row.receiptCents,
         receiptCount: row.receiptCount,
         pendingCount: row.pendingCount,
+        receiptReviewCount: row.receiptReviewCount,
         receipts: [],
       });
     if (row.attachmentId)
@@ -215,6 +221,7 @@ export async function readOverview(
         receiptAmountSource: row.amountSource,
         receiptAmountConfirmedAt: row.confirmedAt,
         processingStatus: row.processingStatus,
+        receiptReviewReason: row.receiptReviewReason,
       });
   }
   const items = [...sales.values()].slice(0, pageSize);

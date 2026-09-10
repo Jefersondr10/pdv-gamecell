@@ -133,21 +133,25 @@ export function ReceiptPaymentSync({
   return (
     <div className="mt-3 rounded-xl border bg-muted/30 p-3 text-sm">
       <p className="font-semibold">
-        {firstPix && state.complete
-          ? 'Comprovante lido · falta registrar o Pix'
-          : state.status === 'applied'
-            ? 'Pix atualizado pelos comprovantes'
-            : state.status === 'pending'
-              ? 'Atualização do Pix pendente'
-              : 'Pix e comprovantes'}
+        {firstPix && state.status === 'pending'
+          ? 'Identificando o Pix pelos comprovantes'
+          : firstPix && state.complete
+            ? 'Comprovante lido · falta registrar o Pix'
+            : state.status === 'applied'
+              ? 'Pix atualizado pelos comprovantes'
+              : state.status === 'pending'
+                ? 'Atualização do Pix pendente'
+                : 'Pix e comprovantes'}
       </p>
       <p className="mt-1 text-muted-foreground">
         {firstPix
-          ? state.complete
-            ? canUse
-              ? 'Escolha a conta que recebeu o Pix e registre o pagamento abaixo. O valor já foi lido; dinheiro não será alterado.'
-              : 'Um usuário com acesso a pagamentos e comprovantes precisa escolher a conta para registrar este Pix.'
-            : 'Após salvar e ler o comprovante, escolha a conta para registrar o primeiro Pix. Dinheiro é conferido manualmente.'
+          ? state.status === 'pending'
+            ? 'A venda já está salva. Após a leitura, o sistema identificará a conta recebedora e registrará o Pix. Se não conseguir identificar com segurança, você poderá conferir abaixo.'
+            : state.complete
+              ? canUse
+                ? 'Escolha a conta que recebeu o Pix e registre o pagamento abaixo. O valor já foi lido; dinheiro não será alterado.'
+                : 'Um usuário com acesso a pagamentos e comprovantes precisa escolher a conta para registrar este Pix.'
+              : 'Pode concluir sem comprovante. O recebido fica zerado ou apenas com o dinheiro informado, e o saldo fica pendente. Anexe ou releia um comprovante para identificar o Pix.'
           : state.status === 'pending'
             ? 'O Pix será atualizado quando todos os comprovantes tiverem valor. Dinheiro permanece como informado manualmente.'
             : state.status === 'applied'
@@ -166,7 +170,7 @@ export function ReceiptPaymentSync({
       {canUse &&
         state.complete &&
         difference !== 0 &&
-        (firstPix || state.status !== 'pending') && (
+        state.status !== 'pending' && (
           <div className="mt-3 space-y-2">
             <p className="text-sm">
               {firstPix ? 'Será registrado um Pix de ' : 'O Pix passará para '}
@@ -302,8 +306,9 @@ export function ReceiptPaymentSync({
         </p>
       )}
       <p className="mt-2 text-xs text-muted-foreground">
-        Ao substituir um arquivo, exclua o anterior para não somar o mesmo
-        comprovante duas vezes. Esta conferência não verifica crédito no banco.
+        Para tentar a leitura novamente, use Reler comprovante no arquivo já
+        anexado. Não anexe o mesmo Pix duas vezes. Esta conferência compara
+        documentos e valores; não confirma crédito no banco.
       </p>
     </div>
   );

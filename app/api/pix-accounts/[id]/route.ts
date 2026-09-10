@@ -10,6 +10,7 @@ import {
 } from '@/lib/server/http';
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { receiptAccountFields } from '@/lib/server/receipt-account-fields';
 
 export async function PATCH(
   request: Request,
@@ -40,6 +41,17 @@ export async function PATCH(
     const updates: string[] = [];
     const bindings: unknown[] = [];
     const changed: Record<string, unknown> = {};
+    const receiptFields = receiptAccountFields(body);
+    for (const [field, column] of [
+      ['receiptBank', 'receipt_bank'],
+      ['receiptRecipientDocument', 'receipt_recipient_document'],
+    ] as const) {
+      if (body[field] !== undefined) {
+        updates.push(`${column} = ?`);
+        bindings.push(receiptFields[field]);
+        changed[field] = receiptFields[field];
+      }
+    }
     if (body.name !== undefined) {
       const value = stringField(body.name, 'Nome da conta', { max: 100 });
       updates.push('name = ?');

@@ -1745,22 +1745,20 @@ function PaymentStage({
       <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
         <div className="mx-auto max-w-2xl space-y-2">
           <div className="payment-stage-summary rounded-xl bg-secondary px-3 py-2.5 sm:rounded-2xl sm:px-4 sm:py-3">
-            <p className="font-bold">Pagamento da venda inteira</p>
+            <p className="font-bold">Dinheiro recebido e Pix por comprovante</p>
             <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
-              As formas de pagamento cobrem{' '}
-              {itemCount === 1
-                ? 'o total do aparelho'
-                : `o total dos ${itemCount} aparelhos`}{' '}
-              desta venda.
+              Informe dinheiro somente se já recebeu. O Pix dos {itemCount}{' '}
+              aparelho(s) será preenchido após ler e identificar os
+              comprovantes, que podem ser anexados agora ou depois em Vendas.
             </p>
           </div>
 
           {payments.length === 0 && (
             <div className="rounded-xl border border-amber-500/35 bg-amber-50 p-3 text-center text-amber-950 dark:bg-amber-500/10 dark:text-amber-100">
-              <p className="font-bold">Nenhum pagamento adicionado</p>
+              <p className="font-bold">Recebido até agora: R$ 0,00</p>
               <p className="flow-stage-support mt-1 text-sm">
-                Você pode continuar sem informar um valor. A venda ficará com
-                pagamento pendente e poderá ser completada depois.
+                Pode continuar sem banco, valor de Pix ou comprovante. O saldo
+                ficará pendente até registrar o recebimento.
               </p>
             </div>
           )}
@@ -1894,7 +1892,7 @@ function PaymentStage({
               onClick={() => setShowTypePicker(true)}
               variant="outline"
             >
-              <Plus /> Adicionar pagamento
+              <Plus /> Informar dinheiro ou Pix manual
             </Button>
           )}
 
@@ -2341,11 +2339,11 @@ function SaleReview({
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <div
-              className={`rounded-2xl p-4 text-sm ${payments.length === 0 ? 'bg-amber-500/10' : 'bg-success/10'}`}
+              className={`rounded-2xl p-4 text-sm ${paid !== total ? 'bg-amber-500/10' : 'bg-success/10'}`}
             >
               <div className="flex items-center justify-between gap-3">
                 <span
-                  className={`font-semibold ${payments.length === 0 ? 'text-amber-900 dark:text-amber-100' : 'text-success'}`}
+                  className={`font-semibold ${paid !== total ? 'text-amber-900 dark:text-amber-100' : 'text-success'}`}
                 >
                   {payments.length === 0
                     ? 'Pagamento pendente'
@@ -2361,7 +2359,7 @@ function SaleReview({
                   {receiptCount > 0
                     ? `${receiptCount} ${receiptCount === 1 ? 'anexado' : 'anexados'}`
                     : reconciliation.status === 'not_required'
-                      ? 'Não exigido (sem Pix)'
+                      ? 'Anexar depois em Vendas'
                       : 'Pulado'}
                 </strong>
               </div>
@@ -2507,11 +2505,15 @@ function SaleCompletion({
           Cliente {customer} · produtos de {formatMoney(productsTotal)}.
         </p>
         <p
-          className={`mt-3 rounded-xl px-4 py-3 text-sm font-semibold ${receivedTotal === 0 ? 'bg-amber-500/10 text-amber-900 dark:text-amber-100' : 'bg-success/10 text-success'}`}
+          className={`mt-3 rounded-xl px-4 py-3 text-sm font-semibold ${receivedTotal !== productsTotal || receivedTotal === 0 ? 'bg-amber-500/10 text-amber-900 dark:text-amber-100' : 'bg-success/10 text-success'}`}
         >
           {receivedTotal === 0
             ? 'A venda foi salva com pagamento pendente e o estoque foi atualizado.'
-            : `Recebimento de ${formatMoney(receivedTotal)} registrado e estoque atualizado.`}
+            : receivedTotal < productsTotal
+              ? `Recebido ${formatMoney(receivedTotal)}. Falta receber ${formatMoney(productsTotal - receivedTotal)}; anexe o comprovante depois em Vendas. O estoque foi atualizado.`
+              : receivedTotal > productsTotal
+                ? `Recebido ${formatMoney(receivedTotal)}. Confira o valor excedente de ${formatMoney(receivedTotal - productsTotal)}. O estoque foi atualizado.`
+                : `Recebimento de ${formatMoney(receivedTotal)} registrado e estoque atualizado.`}
         </p>
         <Button className="mt-5 h-12 rounded-xl px-6" onClick={onReset}>
           <RotateCcw /> Fazer nova venda

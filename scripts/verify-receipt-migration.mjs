@@ -193,6 +193,46 @@ db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
   syncChecksum,
   '0014_receipt_payment_sync',
 );
+db.close();
+const migrateIdentification = () =>
+  execFileSync(
+    process.execPath,
+    [
+      resolve('scripts/hostinger/apply-receipt-identification-migration.mjs'),
+      path,
+    ],
+    { stdio: 'pipe' },
+  );
+migrateIdentification();
+migrateIdentification();
+db = new DatabaseSync(path);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM pdv_release_migrations').get().n,
+  7,
+);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM receipt_payment_links').get().n,
+  0,
+);
+assert.equal(
+  db.prepare('SELECT value FROM fixture_preservation').get().value,
+  'synthetic-record',
+);
+assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
+const identificationChecksum = db
+  .prepare('SELECT checksum FROM pdv_release_migrations WHERE name=?')
+  .get('0015_receipt_identified_payments').checksum;
+db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
+  'changed',
+  '0015_receipt_identified_payments',
+);
+db.close();
+assert.throws(migrateIdentification, /Migration checksum mismatch/);
+db = new DatabaseSync(path);
+db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
+  identificationChecksum,
+  '0015_receipt_identified_payments',
+);
 db.prepare('UPDATE pdv_release_migrations SET checksum=?').run('changed');
 db.close();
 assert.throws(migrate, /Migration checksum mismatch/);

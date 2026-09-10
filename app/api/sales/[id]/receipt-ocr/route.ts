@@ -8,6 +8,7 @@ import {
   operationIdField,
 } from '@/lib/server/http';
 import { runtime } from '@/lib/server/runtime';
+import { retryReceipt } from '@/lib/server/retry-receipt';
 import {
   consumeStoreReadBudget,
   consumeStoreWriteBudget,
@@ -23,7 +24,7 @@ export async function GET(
     const env = runtime();
     await consumeStoreReadBudget(env.DB, Date.now(), session.storeId!, 2);
     const rows =
-      await env.DB.prepare(`SELECT a.id, a.receipt_amount_cents AS amountCents, a.receipt_amount_source AS source, j.status, j.error_code AS errorCode, j.updated_at AS updatedAt
+      await env.DB.prepare(`SELECT a.id, a.receipt_amount_cents AS amountCents, a.receipt_amount_source AS source, a.receipt_amount_confirmed_at AS confirmedAt, j.generation, j.status, j.error_code AS errorCode, j.updated_at AS updatedAt
       FROM attachments a LEFT JOIN receipt_ocr_jobs j ON j.attachment_id=a.id WHERE a.store_id=? AND a.sale_id=? AND a.kind='receipt' ORDER BY a.created_at, a.id`)
         .bind(session.storeId, id)
         .all();
@@ -56,19 +57,42 @@ export async function POST(
       );
     const now = Date.now();
     await consumeStoreWriteBudget(env.DB, now, session.storeId!, 3);
-    if (Object.keys(body).some((name) => name !== 'attachmentId'))
+    if (
+      Object.keys(body).some(
+        (name) =>
+          ![
+            'attachmentId',
+            'operationId',
+            'expectedAmount',
+            'expectedConfirmedAt',
+            'expectedGeneration',
+          ].includes(name),
+      ) ||
+      (body.expectedAmount !== null &&
+        !Number.isSafeInteger(body.expectedAmount)) ||
+      (body.expectedConfirmedAt !== null &&
+        !Number.isSafeInteger(body.expectedConfirmedAt)) ||
+      (body.expectedGeneration !== null &&
+        !Number.isSafeInteger(body.expectedGeneration))
+    )
       throw new HttpError(400, 'Dados inválidos.', 'INVALID_FIELDS');
-    const result =
-      await env.DB.prepare(`UPDATE receipt_ocr_jobs SET status='pending', generation=generation+1, attempts=0, next_attempt_at=?, lease_token=NULL, lease_until=NULL, error_code=NULL, confidence=NULL, updated_at=?
-      WHERE attachment_id=? AND status='needs_review' AND EXISTS(SELECT 1 FROM attachments a JOIN sales s ON s.id=a.sale_id AND s.store_id=a.store_id WHERE a.id=attachment_id AND a.store_id=? AND a.sale_id=? AND a.receipt_amount_cents IS NULL AND s.status='completed')`)
-        .bind(now, now, attachmentId, session.storeId, id)
-        .run();
-    if (result.meta.changes !== 1)
-      throw new HttpError(
-        409,
-        'Este comprovante já está em leitura, possui valor ou não está disponível para nova leitura.',
-        'OCR_NOT_RETRYABLE',
-      );
+    await retryReceipt(
+      env.DB,
+      {
+        storeId: session.storeId!,
+        saleId: id,
+        actorId: session.id,
+        subject: session,
+      },
+      {
+        attachmentId,
+        operationId: operationIdField(body.operationId),
+        expectedAmount: body.expectedAmount as number | null,
+        expectedConfirmedAt: body.expectedConfirmedAt as number | null,
+        expectedGeneration: body.expectedGeneration as number | null,
+      },
+      now,
+    );
     return json({ ok: true });
   } catch (error) {
     return apiError(error);

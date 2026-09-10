@@ -30,6 +30,8 @@ import {
 import { runtime } from '@/lib/server/runtime';
 import { parseReceiptValues } from '@/lib/server/receipt-values';
 import { queueSaleReceipts } from '@/lib/server/receipt-ocr-jobs';
+import { requestReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
+import { parseReceiptDocument } from '@/lib/receipt-document';
 import { parseSalesFilters, SALE_ALERT_SQL } from '@/lib/server/sales-filters';
 import {
   isValidAppleSerial,
@@ -771,6 +773,19 @@ export async function POST(request: Request) {
         ),
       ...attachmentStatements,
       queueSaleReceipts(db, session.storeId!, saleId, now),
+      ...(receiptFiles.length
+        ? requestReceiptPaymentSync(
+            db,
+            {
+              storeId: session.storeId!,
+              saleId,
+              actorId: session.id,
+              subject: session,
+            },
+            `sale:${saleId}`,
+            now,
+          )
+        : []),
     ];
     statements.push(
       db
@@ -1417,6 +1432,8 @@ async function hydrateSales(
                  receipt_amount_cents AS receiptAmountCents,
                  receipt_amount_source AS receiptAmountSource,
                  receipt_amount_confirmed_at AS receiptAmountConfirmedAt,
+                 receipt_details_json AS receiptDetailsJson, receipt_review_reason AS receiptReviewReason,
+                 (SELECT rp.payment_id FROM receipt_payment_links rp WHERE rp.attachment_id=attachments.id AND rp.sale_id=attachments.sale_id AND rp.store_id=attachments.store_id) AS receiptPaymentId,
                  (SELECT j.status FROM receipt_ocr_jobs j WHERE j.attachment_id = attachments.id) AS receiptOcrStatus
          FROM attachments
          WHERE store_id = ? AND sale_id IN (${placeholders})
@@ -1501,7 +1518,9 @@ async function hydrateSales(
 }
 
 function attachmentRecord(
-  file: Omit<ReceiptAttachmentRecord, 'url'>,
+  file: Omit<ReceiptAttachmentRecord, 'url'> & {
+    receiptDetailsJson?: string | null;
+  },
 ): ReceiptAttachmentRecord {
   return {
     id: file.id,
@@ -1511,6 +1530,19 @@ function attachmentRecord(
     receiptAmountCents:
       file.receiptAmountCents === null ? null : Number(file.receiptAmountCents),
     receiptOcrStatus: file.receiptOcrStatus ?? null,
+    receiptDetails: (() => {
+      const doc = parseReceiptDocument(file.receiptDetailsJson);
+      return doc
+        ? {
+            ...doc,
+            recipientDocument: doc.recipientDocument
+              ? `***${doc.recipientDocument.slice(-4)}`
+              : null,
+          }
+        : null;
+    })(),
+    receiptReviewReason: file.receiptReviewReason ?? null,
+    receiptPaymentId: file.receiptPaymentId ?? null,
     receiptAmountSource: file.receiptAmountSource,
     receiptAmountConfirmedAt:
       file.receiptAmountConfirmedAt === null

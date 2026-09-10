@@ -4,7 +4,18 @@ import {
   type PermissionSubject,
 } from '../permissions.ts';
 import { paymentMethodTotals } from '../receipt-reconciliation.ts';
+import {
+  normalizeReceiptIdentity,
+  parseReceiptDocument,
+} from '../receipt-document.ts';
 import { HttpError } from './http.ts';
+import { settleAutomaticReceiptPayments } from './receipt-auto-payment.ts';
+import {
+  receiptEvidenceProblem,
+  receiptConflictSql,
+  receiptClaimStatements,
+  receiptAllocationProblem,
+} from './receipt-evidence-safety.ts';
 
 type Payment = {
   id: string;
@@ -18,6 +29,8 @@ type Receipt = {
   amountCents: number | null;
   source: string | null;
   confirmedAt: number | null;
+  details?: string | null;
+  review?: string | null;
 };
 type RequestRow = {
   requestId: string;
@@ -75,7 +88,7 @@ export function stopReceiptPaymentSync(
 }
 
 const paymentSnapshot = `(SELECT json_group_array(json_object('id',id,'method',method,'pixAccountId',pix_account_id,'accountName',account_name,'amountCents',amount_cents)) FROM (SELECT * FROM payments WHERE sale_id=? AND store_id=? ORDER BY id))`;
-const receiptSnapshot = `(SELECT json_group_array(json_object('id',id,'amountCents',receipt_amount_cents,'source',receipt_amount_source,'confirmedAt',receipt_amount_confirmed_at)) FROM (SELECT * FROM attachments WHERE sale_id=? AND store_id=? AND kind='receipt' ORDER BY id))`;
+export const receiptSnapshot = `(SELECT json_group_array(json_object('id',id,'amountCents',receipt_amount_cents,'source',receipt_amount_source,'confirmedAt',receipt_amount_confirmed_at,'details',receipt_details_json,'review',receipt_review_reason)) FROM (SELECT * FROM attachments WHERE sale_id=? AND store_id=? AND kind='receipt' ORDER BY id))`;
 
 export async function readReceiptPaymentSync(
   db: D1Database,
@@ -157,6 +170,23 @@ export async function registerFirstReceiptPix(
       'SALE_CHANGED',
     );
   const receivedAfter = state.cashCents + state.total;
+  const evidenceProblem = await receiptEvidenceProblem(
+    db,
+    storeId,
+    saleId,
+    state.receipts,
+  );
+  if (evidenceProblem)
+    throw new HttpError(409, evidenceProblem, 'RECEIPT_REVIEW_REQUIRED');
+  const allocationProblem = await receiptAllocationProblem(
+    db,
+    storeId,
+    saleId,
+    state.receipts,
+    state.payments,
+  );
+  if (allocationProblem)
+    throw new HttpError(409, allocationProblem, 'RECEIPT_REVIEW_REQUIRED');
   if (
     !state.complete ||
     !Number.isSafeInteger(state.total) ||
@@ -172,16 +202,33 @@ export async function registerFirstReceiptPix(
     );
   const account = await db
     .prepare(
-      'SELECT name FROM pix_accounts WHERE id=? AND store_id=? AND active=1',
+      'SELECT name,receipt_bank AS bank,receipt_recipient_document AS document FROM pix_accounts WHERE id=? AND store_id=? AND active=1',
     )
     .bind(input.pixAccountId, storeId)
-    .first<{ name: string }>();
+    .first<{ name: string; bank: string | null; document: string | null }>();
   if (!account)
     throw new HttpError(
       409,
       'Selecione uma conta Pix ativa desta loja.',
       'PIX_ACCOUNT_INVALID',
     );
+  for (const receipt of state.receipts) {
+    const doc = parseReceiptDocument(receipt.details);
+    if (
+      (doc?.recipientBank &&
+        account.bank &&
+        normalizeReceiptIdentity(doc.recipientBank) !==
+          normalizeReceiptIdentity(account.bank)) ||
+      (doc?.recipientDocument &&
+        account.document &&
+        doc.recipientDocument !== account.document)
+    )
+      throw new HttpError(
+        409,
+        'A conta escolhida não corresponde ao banco/recebedor identificado no comprovante.',
+        'RECEIPT_ACCOUNT_MISMATCH',
+      );
+  }
   const actor = await db
     .prepare(
       'SELECT role,permissions_json AS permissionsJson,active FROM users WHERE id=? AND store_id=?',
@@ -227,9 +274,10 @@ export async function registerFirstReceiptPix(
         VALUES(?,?,?,'sale.receipt_payment_requested','sale',CASE WHEN
         EXISTS(SELECT 1 FROM sales WHERE id=? AND store_id=? AND status='completed' AND received_total_cents=?)
         AND ${paymentSnapshot}=? AND ${receiptSnapshot}=?
+        AND ${receiptConflictSql}
         AND NOT EXISTS(SELECT 1 FROM payments WHERE sale_id=? AND store_id=? AND method='pix')
         AND (SELECT request_id FROM sale_receipt_payment_sync WHERE sale_id=? AND store_id=?) IS ?
-        AND EXISTS(SELECT 1 FROM pix_accounts WHERE id=? AND store_id=? AND active=1 AND name=?)
+        AND EXISTS(SELECT 1 FROM pix_accounts WHERE id=? AND store_id=? AND active=1 AND name=? AND receipt_bank IS ? AND receipt_recipient_document IS ?)
         AND EXISTS(SELECT 1 FROM users WHERE id=? AND store_id=? AND active=1 AND role=? AND permissions_json IS ?)
         THEN ? ELSE NULL END,?,?)`)
         .bind(
@@ -245,6 +293,10 @@ export async function registerFirstReceiptPix(
           saleId,
           storeId,
           state.sale.receiptsJson,
+          storeId,
+          saleId,
+          storeId,
+          saleId,
           saleId,
           storeId,
           saleId,
@@ -253,6 +305,8 @@ export async function registerFirstReceiptPix(
           input.pixAccountId,
           storeId,
           account.name,
+          account.bank,
+          account.document,
           actorId,
           storeId,
           actor.role,
@@ -261,6 +315,14 @@ export async function registerFirstReceiptPix(
           input.requestDetails,
           now,
         ),
+      ...receiptClaimStatements(
+        db,
+        { ...scope, paymentIds: [paymentId] },
+        state.receipts,
+        input.operationId,
+        input.requestDetails,
+        now,
+      ),
       db
         .prepare(`INSERT INTO payments(id,store_id,sale_id,method,pix_account_id,account_name,amount_cents,created_at)
         VALUES(?,?,?,'pix',?,?,?,?)`)
@@ -287,6 +349,11 @@ export async function registerFirstReceiptPix(
         VALUES(?,?,?,?,?,'applied',?) ON CONFLICT(sale_id) DO UPDATE SET request_id=excluded.request_id,
         requested_by=excluded.requested_by,target_payment_id=excluded.target_payment_id,status='applied',updated_at=excluded.updated_at`)
         .bind(saleId, storeId, input.operationId, actorId, paymentId, now),
+      db
+        .prepare(
+          "UPDATE attachments SET receipt_review_reason=NULL WHERE sale_id=? AND store_id=? AND kind='receipt'",
+        )
+        .bind(saleId, storeId),
     ]);
   } catch (error) {
     if (error instanceof Error && /constraint failed/i.test(error.message))
@@ -332,6 +399,12 @@ export async function settleReceiptPaymentSync(
       'sales.payments',
     );
   const pixPayments = payments.filter((p) => p.method === 'pix');
+  if (
+    allowed &&
+    actor &&
+    (await settleAutomaticReceiptPayments(db, storeId, saleId, current, actor))
+  )
+    return;
   const target = request.targetPaymentId
     ? pixPayments.find((p) => p.id === request.targetPaymentId)
     : pixPayments.length === 1
@@ -387,7 +460,7 @@ export async function settleReceiptPaymentSync(
       EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending')
       AND EXISTS(SELECT 1 FROM sales WHERE id=? AND store_id=? AND status='completed' AND received_total_cents=?)
       AND EXISTS(SELECT 1 FROM users WHERE id=? AND store_id=? AND active=1 AND role=? AND permissions_json IS ?)
-      AND ${paymentSnapshot}=? AND ${receiptSnapshot}=?`)
+      AND ${paymentSnapshot}=? AND ${receiptSnapshot}=? AND ${receiptConflictSql}`)
       .bind(
         auditId,
         storeId,
@@ -411,7 +484,24 @@ export async function settleReceiptPaymentSync(
         saleId,
         storeId,
         sale.receiptsJson,
+        storeId,
+        saleId,
+        storeId,
+        saleId,
       ),
+    ...receiptClaimStatements(
+      db,
+      {
+        storeId,
+        saleId,
+        actorId: request.requestedBy,
+        paymentIds: pixPayments.map((p) => p.id),
+      },
+      receipts,
+      auditId,
+      details,
+      now,
+    ),
     db
       .prepare(`UPDATE payments SET amount_cents=? WHERE id=? AND sale_id=? AND store_id=? AND method='pix'
       AND EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND request_id=? AND status='pending')
@@ -440,6 +530,11 @@ export async function settleReceiptPaymentSync(
         auditId,
         details,
       ),
+    db
+      .prepare(`UPDATE attachments SET receipt_review_reason=NULL WHERE sale_id=? AND store_id=? AND kind='receipt'
+      AND EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND request_id=? AND status='pending')
+      AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND details_json=?)`)
+      .bind(saleId, storeId, saleId, request.requestId, auditId, details),
     db
       .prepare(`UPDATE sale_receipt_payment_sync SET status='applied', updated_at=? WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending'
       AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND details_json=?)`)

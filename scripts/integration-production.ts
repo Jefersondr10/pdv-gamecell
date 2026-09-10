@@ -3636,7 +3636,17 @@ await call(`/api/sales/${attributionId}/receipt-values`, {
 });
 assert.equal(
   ((await saleForCorrection()) as unknown as SaleRecord).reconciliation.status,
-  'divergent',
+  'pending',
+);
+// Amount alone cannot create the first Pix without an identified receiving account.
+assert.ok(
+  ((await saleForCorrection()) as unknown as SaleRecord).receipts.every(
+    (receipt) => receipt.receiptReviewReason,
+  ),
+);
+assert.equal(
+  ((await saleForCorrection()) as unknown as SaleRecord).receivedTotalCents,
+  0,
 );
 const deletePath = `/api/sales/${attributionId}/receipts/${newReceipts[0].id}`;
 const deleteBody = JSON.stringify({ operationId: crypto.randomUUID() });
@@ -3706,7 +3716,8 @@ assert.equal(
 const saleAfterDelete = (await saleForCorrection()) as unknown as SaleRecord;
 assert.equal(saleAfterDelete.receipts.length, 1);
 assert.equal(saleAfterDelete.receipts[0].id, newReceipts[1].id);
-assert.equal(saleAfterDelete.reconciliation.status, 'divergent');
+assert.equal(saleAfterDelete.reconciliation.status, 'pending');
+assert.ok(saleAfterDelete.receipts[0].receiptReviewReason);
 assert.deepEqual(saleAfterDelete.payments, saleBeforePriceCorrection.payments);
 assert.equal(saleAfterDelete.productsTotalCents, 128400);
 console.log(

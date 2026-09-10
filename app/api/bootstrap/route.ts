@@ -72,7 +72,7 @@ export async function GET(request: Request) {
         .bind(storeId),
       db
         .prepare(
-          `SELECT id, name, details, active
+          `SELECT id, name, details, active, receipt_bank AS receiptBank, receipt_recipient_document AS receiptRecipientDocument
            FROM pix_accounts WHERE store_id = ? ORDER BY active DESC, name`,
         )
         .bind(storeId),
@@ -202,7 +202,12 @@ export async function GET(request: Request) {
         : canAny(session, ['sell', 'sales.payments'])
           ? pixAccounts
               .filter((account) => account.active)
-              .map((account) => ({ ...account, details: null }))
+              .map((account) => ({
+                ...account,
+                details: null,
+                receiptBank: null,
+                receiptRecipientDocument: null,
+              }))
           : [],
       orderStatuses: canAny(session, ['finance', 'sales']) ? orderStatuses : [],
       metrics: {

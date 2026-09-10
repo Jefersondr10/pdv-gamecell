@@ -65,7 +65,7 @@ test "$(systemctl show atacadoapple-backup.service -p Result --value)" = success
 docker exec atacadoapple-app node --input-type=module -e 'import fs from "node:fs"; const s=JSON.parse(fs.readFileSync("/data/backups/last-success.json")); const t=s.completedAt??s.capturedAt; if(!Number.isFinite(t)||t<=0||t>Date.now()+60000||Date.now()-t>=5400000)process.exit(1); console.log("Existing scheduled backup is recent. No backup initiated.");'
 cp -p .env ".env.pre-$release"
 # First makes an on-server online SQLite safety copy, then additive migrations.
-docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-receipt-payment-migration.mjs /data/pdv.sqlite
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-receipt-identification-migration.mjs /data/pdv.sqlite
 rollback_needed=1
 sed -i "s/^PDV_IMAGE=.*/PDV_IMAGE=atacadoapple:$release/; s/^PDV_OCR_IMAGE=.*/PDV_OCR_IMAGE=atacadoapple-ocr:$release/" .env
 docker compose -p atacadoapple --env-file .env up -d --no-deps receipt-engine app

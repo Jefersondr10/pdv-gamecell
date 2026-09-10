@@ -23,6 +23,7 @@
     "test:receipt-jobs": "node scripts/verify-receipt-jobs.mjs",
     "test:receipt-delete": "node --experimental-transform-types scripts/verify-receipt-delete.ts",
     "test:receipt-payment-sync": "node --experimental-transform-types scripts/verify-receipt-payment-sync.ts",
+    "test:receipt-auto-payment": "node --experimental-transform-types scripts/verify-receipt-auto-payment.ts",
     "test:sale-prices": "node --experimental-transform-types scripts/verify-sale-prices.ts",
     "test:backup": "node --experimental-strip-types scripts/verify-backup-status.ts",
     "test:backup-reader": "node scripts/verify-backup-reader.mjs",

@@ -67,7 +67,7 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
     <div
       className={cn(
         'rounded-xl border p-3',
-        divergent
+        divergent || state === 'review'
           ? 'border-amber-300 border-l-4 bg-amber-50'
           : reconciled
             ? 'border-emerald-200 bg-emerald-50/70'
@@ -107,21 +107,28 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
       <p
         className={cn(
           'mt-2 flex flex-wrap items-center gap-1.5 text-xs font-semibold',
-          divergent
+          divergent || state === 'review'
             ? 'text-amber-950'
             : state === 'matched'
               ? 'text-emerald-800'
               : 'text-muted-foreground',
         )}
       >
-        {divergent ? (
+        {divergent || state === 'review' ? (
           <TriangleAlert className="size-4 shrink-0" />
         ) : state === 'matched' ? (
           <Check className="size-4 shrink-0" />
         ) : (
           <FileText className="size-4 shrink-0" />
         )}
-        {divergent ? (
+        {state === 'review' ? (
+          <span>
+            Verificar comprovante:{' '}
+            {sale.receipts.find((receipt) => receipt.receiptReviewReason)
+              ?.receiptReviewReason ||
+              'Há dados da transação que precisam de conferência.'}
+          </span>
+        ) : divergent ? (
           <>
             {state === 'missing_price' ? (
               <span>Verificar preços dos produtos da venda.</span>
@@ -165,6 +172,7 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
 
 type Receipt = OverviewSale['receipts'][number];
 function receiptState(receipt: Receipt) {
+  if (receipt.receiptReviewReason) return receipt.receiptReviewReason;
   if (receipt.receiptAmountCents !== null && receipt.receiptAmountCents <= 0)
     return 'Valor inválido · conferir na venda';
   if (receipt.receiptAmountCents !== null)
@@ -451,7 +459,9 @@ export function OverviewProductionView({
                     ? 'Valores conferem'
                     : comparison === 'pending'
                       ? 'Conferência incompleta'
-                      : `${totals.divergentCount} venda(s) com diferença`}
+                      : totals.receiptReviewCount
+                        ? `${totals.receiptReviewCount} comprovante(s) para conferir`
+                        : `${totals.divergentCount} venda(s) com diferença`}
                 </p>
                 {comparison === 'review' && (
                   <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">

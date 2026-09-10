@@ -1,4 +1,5 @@
 'use client';
+import { ReceiptPaymentDetails } from '@/components/pdv/receipt-payment-details';
 
 /* oxlint-disable next/no-img-element, jsx-a11y/label-has-associated-control -- report media is authenticated and the custom textarea is wrapped by its label */
 
@@ -2308,7 +2309,13 @@ function EditSaleDialog({
                           ) : undefined
                         }
                         serverJob={serverReceipts.jobs[receipt.id]}
-                        onServerRetry={() => serverReceipts.retry(receipt.id)}
+                        onServerRetry={
+                          dirtyReceipts.has(receipt.id) ||
+                          hasPaymentCorrections ||
+                          queuedPayments.length > 0
+                            ? undefined
+                            : () => serverReceipts.retry(receipt.id)
+                        }
                         disabled={!canReceipts || preparing || uploadBusy}
                         key={receipt.id}
                         onAutoValueFound={async (value) => {
@@ -2942,7 +2949,6 @@ function SaleReport({
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState('');
   const reportRef = useRef<HTMLElement | null>(null);
-  const modelGroups = useMemo(() => groupModels(sale), [sale]);
   const paymentSummary = useMemo(
     () => summarizeSalesPayments(sale ? [sale] : []),
     [sale],
@@ -3034,17 +3040,80 @@ function SaleReport({
                     />
                   </div>
                 </header>
-                <div className="report-section mt-4 grid grid-cols-3 gap-2">
-                  <ReportMetric
-                    label="Montante vendido"
-                    value={formatMoney(sale.productsTotalCents)}
-                  />
-                  <ReportMetric
-                    label="Aparelhos"
-                    value={String(sale.items.length)}
-                  />
-                  <ReportMetric label="Cliente" value={sale.customerName} />
-                </div>
+                <section className="report-section mt-4">
+                  <h3 className="font-extrabold">Cliente</h3>
+                  <p>{sale.customerName}</p>
+                  <p className="text-sm text-slate-600">
+                    Vendedor: {sale.sellerName}
+                  </p>
+                </section>
+                <section className="report-section mt-5">
+                  <h3 className="font-extrabold">Produtos e valores</h3>
+                  <div className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200">
+                    {sale.items.map((item) => (
+                      <div className="report-row p-3" key={item.id}>
+                        <div className="flex justify-between gap-3">
+                          <div>
+                            <p className="font-bold">{item.productName}</p>
+                            <p className="text-sm text-slate-600">
+                              {item.productDetail}
+                              {level !== 'simple' ? ` · SN ${item.serial}` : ''}
+                            </p>
+                          </div>
+                          <strong>{formatMoney(item.soldPriceCents)}</strong>
+                        </div>
+                        {includePhotos && item.photos.length > 0 && (
+                          <div className="mt-3 grid grid-cols-3 gap-2">
+                            {item.photos.map((photo) => (
+                              <a
+                                className="report-row"
+                                href={photo.url}
+                                key={photo.id}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                <img
+                                  alt={photo.name}
+                                  className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                  decoding="async"
+                                  loading="lazy"
+                                  src={photo.url}
+                                />
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                {
+                  <section className="report-section mt-5">
+                    <h3 className="font-extrabold">Pagamentos recebidos</h3>
+                    <div className="mt-2 space-y-2">
+                      {sale.payments.length === 0 ? (
+                        <div className="report-row rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-950">
+                          Pagamento não informado — pendente
+                        </div>
+                      ) : (
+                        sale.payments.map((payment) => (
+                          <div
+                            className="report-row flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            key={payment.id}
+                          >
+                            <span>
+                              {payment.method === 'pix'
+                                ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                : 'Dinheiro'}
+                            </span>
+                            <strong>{formatMoney(payment.amountCents)}</strong>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </section>
+                }
+                <ReceiptPaymentDetails receipts={sale.receipts} />
                 {sale.status === 'completed' && (
                   <SalesReportPayments summary={paymentSummary} />
                 )}
@@ -3107,105 +3176,6 @@ function SaleReport({
                       : ''}
                   </p>
                 </div>
-                <section className="report-section mt-5">
-                  <h3 className="font-extrabold">Quantidade por aparelho</h3>
-                  <div className="mt-2 space-y-2">
-                    {modelGroups.map((group) => (
-                      <div
-                        className="report-row rounded-lg border border-slate-200 p-3"
-                        key={group.key}
-                      >
-                        <div className="flex justify-between gap-3">
-                          <span>
-                            <strong>{group.name}</strong>
-                            <span className="block text-xs text-slate-600">
-                              {group.detail}
-                            </span>
-                          </span>
-                          <strong>{group.items.length}</strong>
-                        </div>
-                        {level !== 'simple' && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {group.items.map((item) => (
-                              <code
-                                className="rounded bg-slate-100 px-2 py-1 text-xs"
-                                key={item.serial}
-                              >
-                                {item.serial}
-                              </code>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-                <section className="report-section mt-5">
-                  <h3 className="font-extrabold">Produtos e valores</h3>
-                  <div className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200">
-                    {sale.items.map((item) => (
-                      <div className="report-row p-3" key={item.id}>
-                        <div className="flex justify-between gap-3">
-                          <div>
-                            <p className="font-bold">{item.productName}</p>
-                            <p className="text-sm text-slate-600">
-                              {item.productDetail}
-                              {level !== 'simple' ? ` · SN ${item.serial}` : ''}
-                            </p>
-                          </div>
-                          <strong>{formatMoney(item.soldPriceCents)}</strong>
-                        </div>
-                        {includePhotos && item.photos.length > 0 && (
-                          <div className="mt-3 grid grid-cols-3 gap-2">
-                            {item.photos.map((photo) => (
-                              <a
-                                className="report-row"
-                                href={photo.url}
-                                key={photo.id}
-                                rel="noreferrer"
-                                target="_blank"
-                              >
-                                <img
-                                  alt={photo.name}
-                                  className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
-                                  decoding="async"
-                                  loading="lazy"
-                                  src={photo.url}
-                                />
-                              </a>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-                {level !== 'simple' && (
-                  <section className="report-section mt-5">
-                    <h3 className="font-extrabold">Formas de pagamento</h3>
-                    <div className="mt-2 space-y-2">
-                      {sale.payments.length === 0 ? (
-                        <div className="report-row rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-950">
-                          Pagamento não informado — pendente
-                        </div>
-                      ) : (
-                        sale.payments.map((payment) => (
-                          <div
-                            className="report-row flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                            key={payment.id}
-                          >
-                            <span>
-                              {payment.method === 'pix'
-                                ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                                : 'Dinheiro'}
-                            </span>
-                            <strong>{formatMoney(payment.amountCents)}</strong>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </section>
-                )}
                 {includeReceipts && sale.receipts.length > 0 && (
                   <section className="report-section mt-5">
                     <h3 className="font-extrabold">
@@ -3854,6 +3824,9 @@ function SalesPeriodReport({
                                         </p>
                                       ))
                                     )}
+                                    <ReceiptPaymentDetails
+                                      receipts={sale.receipts}
+                                    />
                                   </div>
                                 )}
 
@@ -4500,25 +4473,6 @@ function ReportMetric({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-function groupModels(sale: SaleRecord | null) {
-  const groups = new Map<
-    string,
-    { key: string; name: string; detail: string; items: SaleRecord['items'] }
-  >();
-  sale?.items.forEach((item) => {
-    const key = `${item.productName}\u0000${item.productDetail}`;
-    const group = groups.get(key) ?? {
-      key,
-      name: item.productName,
-      detail: item.productDetail,
-      items: [],
-    };
-    group.items.push(item);
-    groups.set(key, group);
-  });
-  return Array.from(groups.values());
-}
-
 function groupModelsAcrossSales(sales: SaleRecord[]) {
   const groups = new Map<
     string,

@@ -64,7 +64,7 @@ type StatusSale = Pick<
   items: { soldPriceCents: number; photos: readonly unknown[] }[];
   receipts: Pick<
     ReceiptAttachmentRecord,
-    'receiptAmountCents' | 'receiptOcrStatus'
+    'receiptAmountCents' | 'receiptOcrStatus' | 'receiptReviewReason'
   >[];
 };
 export function saleIssues(sale: StatusSale) {
@@ -85,7 +85,10 @@ export function saleIssues(sale: StatusSale) {
       sale.items.length === 0 ||
       sale.items.some((item) => item.soldPriceCents <= 0),
     missing_receipt: pixCents > 0 && sale.receipts.length === 0,
-    review: failed || reconciliation.status === 'divergent',
+    review:
+      failed ||
+      reconciliation.status === 'divergent' ||
+      sale.receipts.some((receipt) => Boolean(receipt.receiptReviewReason)),
     reading:
       !failed &&
       sale.receipts.some((receipt) => receipt.receiptAmountCents === null),

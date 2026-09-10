@@ -1060,6 +1060,10 @@ function AccountEditor({
 }) {
   const [name, setName] = useState(account?.name ?? '');
   const [details, setDetails] = useState(account?.details ?? '');
+  const [receiptBank, setReceiptBank] = useState(account?.receiptBank ?? '');
+  const [receiptRecipientDocument, setReceiptRecipientDocument] = useState(
+    account?.receiptRecipientDocument ?? '',
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const toggleActive = async (active: boolean) => {
@@ -1083,7 +1087,12 @@ function AccountEditor({
         onSubmit={(event) => {
           event.preventDefault();
           void runAction(setBusy, setError, async () => {
-            const payload = { name, details };
+            const payload = {
+              name,
+              details,
+              receiptBank,
+              receiptRecipientDocument,
+            };
             if (account) {
               await patchJson(
                 `/api/pix-accounts/${account.id}`,
@@ -1107,6 +1116,30 @@ function AccountEditor({
             value={name}
           />
         </Field>
+        <Field label="Banco recebedor no comprovante (opcional)">
+          <Input
+            value={receiptBank}
+            maxLength={150}
+            onChange={(event) => setReceiptBank(event.target.value)}
+            placeholder="Nome da instituição como aparece no comprovante"
+          />
+        </Field>
+        <Field label="CPF/CNPJ do recebedor (opcional)">
+          <Input
+            value={receiptRecipientDocument}
+            inputMode="numeric"
+            maxLength={20}
+            onChange={(event) =>
+              setReceiptRecipientDocument(event.target.value)
+            }
+            placeholder="Documento do titular desta conta"
+          />
+        </Field>
+        <p className="text-sm text-muted-foreground">
+          Para identificar esta conta automaticamente, o banco e o CPF/CNPJ
+          precisam conferir com o recebedor do comprovante. Dados ausentes ou
+          ambíguos exigem conferência.
+        </p>
         <Field label="Titular ou identificação (opcional)">
           <Input
             className="h-11"

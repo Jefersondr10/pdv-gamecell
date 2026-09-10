@@ -6,6 +6,7 @@ import type {
 } from './sale-display-status.ts';
 
 export type OverviewTotals = {
+  receiptReviewCount?: number;
   saleCount: number;
   receivedCents: number;
   cashCents: number;
@@ -21,6 +22,7 @@ export type OverviewTotals = {
 };
 
 export type OverviewSale = {
+  receiptReviewCount?: number;
   id: string;
   number: number;
   customerName: string;
@@ -67,8 +69,10 @@ export function overviewSaleComparison(
     | 'pixCents'
     | 'saleCents'
     | 'saleInvalid'
+    | 'receiptReviewCount'
   >,
 ) {
+  if (sale.receiptReviewCount) return 'review';
   if (!sale.receiptCount && sale.pixCents > 0) return 'missing';
   if (sale.pendingCount) return 'pending';
   if (sale.saleInvalid) return 'missing_price';
@@ -82,7 +86,7 @@ export function overviewSaleComparison(
 // Equal aggregate sums can conceal opposite differences in individual sales.
 export function overviewComparison(totals: OverviewTotals) {
   if (!totals.saleCount) return 'empty';
-  if (totals.divergentCount) return 'review';
+  if (totals.divergentCount || totals.receiptReviewCount) return 'review';
   if (totals.pendingCount || totals.missingCount) return 'pending';
   if (totals.receiptCents !== totals.pixCents || totals.divergentCount)
     return 'review';

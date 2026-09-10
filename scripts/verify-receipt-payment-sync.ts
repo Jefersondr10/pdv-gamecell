@@ -12,10 +12,12 @@ import {
 const db = new SqliteDatabase(':memory:');
 db.database.exec(`
 CREATE TABLE stores(id TEXT PRIMARY KEY);
+CREATE TABLE pix_accounts(id TEXT PRIMARY KEY,store_id TEXT,name TEXT,active INTEGER,receipt_bank TEXT,receipt_recipient_document TEXT);
 CREATE TABLE users(id TEXT PRIMARY KEY,store_id TEXT,role TEXT,permissions_json TEXT,active INTEGER);
 CREATE TABLE sales(id TEXT PRIMARY KEY,store_id TEXT,status TEXT,products_total_cents INTEGER,received_total_cents INTEGER,received_difference_cents INTEGER);
 CREATE TABLE payments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,method TEXT,pix_account_id TEXT,account_name TEXT,amount_cents INTEGER);
-CREATE TABLE attachments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,kind TEXT,receipt_amount_cents INTEGER,receipt_amount_source TEXT,receipt_amount_confirmed_at INTEGER);
+CREATE TABLE attachments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,kind TEXT,receipt_amount_cents INTEGER,receipt_amount_source TEXT,receipt_amount_confirmed_at INTEGER,receipt_details_json TEXT,receipt_review_reason TEXT);
+CREATE TABLE receipt_payment_links(attachment_id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,payment_id TEXT,transaction_id TEXT,created_at INTEGER);
 CREATE TABLE audit_events(id TEXT PRIMARY KEY,store_id TEXT,actor_user_id TEXT,action TEXT,entity_type TEXT,entity_id TEXT NOT NULL,details_json TEXT,created_at INTEGER);
 INSERT INTO stores VALUES('store'),('other');
 INSERT INTO users VALUES('owner','store','owner',NULL,1),('staff','store','operator','["sales","sales.payments"]',1);`);
@@ -41,7 +43,7 @@ function seed() {
     UPDATE users SET active=1,permissions_json='["sales","sales.payments"]' WHERE id='staff';
     INSERT INTO sales VALUES('sale','store','completed',3473000,3473000,0),('foreign','other','completed',100,100,0);
     INSERT INTO payments VALUES('p1','store','sale','pix','bank1','Bank',3473000),('foreign-p','other','foreign','pix','bank2','Other',100);
-    INSERT INTO attachments VALUES('r1','store','sale','receipt',1500000,'ocr',1),('r2','store','sale','receipt',1965000,'ocr',2),('photo','store','sale','item_photo',99999999,'ocr',3),('foreign-r','other','foreign','receipt',99999999,'ocr',1);`);
+    INSERT INTO attachments(id,store_id,sale_id,kind,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at) VALUES('r1','store','sale','receipt',1500000,'ocr',1),('r2','store','sale','receipt',1965000,'ocr',2),('photo','store','sale','item_photo',99999999,'ocr',3),('foreign-r','other','foreign','receipt',99999999,'ocr',1);`);
 }
 const enqueue = (id: string, target: string | null = null, override = {}) =>
   db.batch(
@@ -78,14 +80,18 @@ assert.equal(
   100,
 );
 const audit = JSON.parse(
-  String(get('SELECT details_json AS d FROM audit_events').d),
+  String(
+    get(
+      "SELECT details_json AS d FROM audit_events WHERE action='sale.payment_from_receipts'",
+    ).d,
+  ),
 );
 assert.equal(audit.before[0].amountCents, 3473000);
 assert.equal(audit.after[0].amountCents, 3465000);
 assert.equal(audit.receipts.length, 2);
 await settle();
 await processReceiptPaymentSync(database);
-assert.equal(get('SELECT COUNT(*) AS n FROM audit_events').n, 1);
+assert.equal(get('SELECT COUNT(*) AS n FROM audit_events').n, 3);
 
 seed();
 db.database.exec(
@@ -121,8 +127,12 @@ seed();
 await enqueue('race');
 const raced = {
   prepare: db.prepare.bind(db),
-  batch: async (statements: unknown[]) => {
-    if (statements.length === 4)
+  batch: async (statements: { sql: string }[]) => {
+    if (
+      statements.some((statement) =>
+        statement.sql.includes("'sale.payment_from_receipts'"),
+      )
+    )
       await stopReceiptPaymentSync(database, 'store', 'sale', Date.now()).run();
     return db.batch(statements);
   },
@@ -136,8 +146,12 @@ seed();
 await enqueue('receipt-race');
 const changedReceipt = {
   prepare: db.prepare.bind(db),
-  batch: async (statements: unknown[]) => {
-    if (statements.length === 4)
+  batch: async (statements: { sql: string }[]) => {
+    if (
+      statements.some((statement) =>
+        statement.sql.includes("'sale.payment_from_receipts'"),
+      )
+    )
       db.database.exec(
         "UPDATE attachments SET receipt_amount_cents=1950000 WHERE id='r2'",
       );
@@ -247,8 +261,12 @@ assert.equal(paid(), 700000);
 await enqueue('cash-race');
 const cashRace = {
   prepare: db.prepare.bind(db),
-  batch: async (statements: unknown[]) => {
-    if (statements.length === 4)
+  batch: async (statements: { sql: string }[]) => {
+    if (
+      statements.some((statement) =>
+        statement.sql.includes("'sale.payment_from_receipts'"),
+      )
+    )
       db.database.exec(
         "UPDATE payments SET amount_cents=290000 WHERE id='cash'; UPDATE sales SET received_total_cents=690000 WHERE id='sale'",
       );
@@ -278,7 +296,18 @@ assert.equal(
   get("SELECT amount_cents AS n FROM payments WHERE id='p1'").n,
   3473000,
 );
-assert.equal(get('SELECT COUNT(*) AS n FROM audit_events').n, 0);
+assert.equal(
+  get(
+    "SELECT COUNT(*) AS n FROM audit_events WHERE action<>'sale.receipt_review'",
+  ).n,
+  0,
+);
+assert.equal(
+  get(
+    "SELECT COUNT(*) AS n FROM audit_events WHERE action='sale.receipt_review'",
+  ).n,
+  1,
+);
 seed();
 db.database.exec("UPDATE sales SET status='cancelled' WHERE id='sale'");
 await enqueue('cancelled');

@@ -6,7 +6,7 @@ import { overviewComparison, overviewSaleComparison } from '../lib/overview.ts';
 const db = new SqliteDatabase(':memory:');
 db.database.exec(`
   CREATE TABLE sales (id TEXT PRIMARY KEY, store_id TEXT, number INTEGER, customer_name TEXT, created_at INTEGER, status TEXT, received_total_cents INTEGER, products_total_cents INTEGER);
-  CREATE TABLE attachments (id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT, kind TEXT, file_name TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_at INTEGER, created_at INTEGER);
+  CREATE TABLE attachments (id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT, kind TEXT, file_name TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_at INTEGER, created_at INTEGER,receipt_review_reason TEXT);
   CREATE TABLE payments (id TEXT, store_id TEXT, sale_id TEXT, method TEXT, amount_cents INTEGER);
   CREATE TABLE receipt_ocr_jobs (attachment_id TEXT PRIMARY KEY, status TEXT);
   CREATE TABLE sale_items (id TEXT, sale_id TEXT, store_id TEXT, sold_price_cents INTEGER);
@@ -92,6 +92,7 @@ try {
   payment('foreign-pay', 'one', 999999, 'cash', 'b');
   let page = await read();
   assert.deepEqual(page.totals, {
+    receiptReviewCount: 0,
     saleCount: 1,
     receivedCents: 10000,
     cashCents: 4000,

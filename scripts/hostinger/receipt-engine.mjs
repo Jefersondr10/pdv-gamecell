@@ -3,7 +3,10 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, rm, access, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { extractReceiptAmount } from '../../lib/receipt-amount.ts';
+import {
+  extractReceiptDocument,
+  preferReceiptReading,
+} from '../../lib/receipt-document.ts';
 
 let busy = false;
 await Promise.all(
@@ -102,6 +105,15 @@ createServer(async (request, response) => {
     const input = join(directory, 'input');
     await writeFile(input, Buffer.concat(chunks), { mode: 0o600 });
     let suggestion = null;
+    const readings = [];
+    const needsDetails = () =>
+      !suggestion?.details?.automaticEligible ||
+      !suggestion?.details?.recipientBank ||
+      !suggestion?.details?.recipientDocument;
+    const remember = (text) => {
+      readings.push(extractReceiptDocument(text));
+      suggestion = preferReceiptReading(readings);
+    };
     let imagePath = input;
     if (mime === 'image/heic' || mime === 'image/heif') {
       await command(
@@ -126,8 +138,8 @@ createServer(async (request, response) => {
         ['-f', '1', '-l', '3', '-layout', input, '-'],
         abort.signal,
       );
-      suggestion = extractReceiptAmount(text);
-      if (!suggestion) {
+      remember(text);
+      if (needsDetails()) {
         await command(
           '/usr/bin/pdftoppm',
           [
@@ -147,16 +159,16 @@ createServer(async (request, response) => {
         imagePath = join(directory, 'page.png');
       }
     }
-    if (!suggestion)
-      suggestion = extractReceiptAmount(
+    if (needsDetails())
+      remember(
         await command(
           '/usr/bin/tesseract',
           [imagePath, 'stdout', '-l', 'por', '--oem', '1', '--psm', '6'],
           abort.signal,
         ),
       );
-    if (!suggestion && !abort.signal.aborted)
-      suggestion = extractReceiptAmount(
+    if (needsDetails() && !abort.signal.aborted)
+      remember(
         await command(
           '/usr/bin/tesseract',
           [imagePath, 'stdout', '-l', 'por', '--oem', '1', '--psm', '11'],
@@ -171,6 +183,7 @@ createServer(async (request, response) => {
       JSON.stringify({
         amountCents: suggestion?.amountCents ?? null,
         confidence: suggestion?.confidence ?? null,
+        details: suggestion?.details ?? null,
       }),
     );
   } catch {

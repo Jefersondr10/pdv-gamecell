@@ -1,4 +1,5 @@
 'use client';
+import { ReceiptPaymentDetails } from '@/components/pdv/receipt-payment-details';
 
 import { useState } from 'react';
 import { FileText, Pencil, XCircle, Paperclip } from 'lucide-react';
@@ -198,7 +199,7 @@ export function SaleDetailsDialog({
                 </div>
               </SalePricesEditor>
               <section>
-                <h3 className="mb-2 font-bold">Pagamentos informados</h3>
+                <h3 className="mb-2 font-bold">Pagamentos recebidos</h3>
                 <div className="divide-y rounded-xl border">
                   {sale.payments.length ? (
                     sale.payments.map((payment, i) => (
@@ -209,7 +210,7 @@ export function SaleDetailsDialog({
                         <span>
                           {payment.method === 'pix'
                             ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                            : 'Dinheiro'}
+                            : 'Dinheiro · informado manualmente'}
                         </span>
                         <strong className="shrink-0">
                           {money(payment.amountCents)}
@@ -218,10 +219,12 @@ export function SaleDetailsDialog({
                     ))
                   ) : (
                     <p className="p-3 text-sm text-muted-foreground">
-                      Nenhum pagamento informado.
+                      Nenhum recebimento registrado. Falta receber{' '}
+                      {money(sale.productsTotalCents)}.
                     </p>
                   )}
                 </div>
+                <ReceiptPaymentDetails receipts={sale.receipts} />
               </section>
               <section>
                 <h3 className="mb-2 font-bold">

@@ -6,6 +6,7 @@ import {
   jpegNeedsOrientation,
 } from '../lib/sales-report-pdf.ts';
 import type { SaleRecord, AttachmentRecord } from '../lib/pdv-types.ts';
+import { extractReceiptDocument } from '../lib/receipt-document.ts';
 
 const out = new URL('../outputs/pdf-review/', import.meta.url);
 for (let orientation = 1; orientation <= 8; orientation++) {
@@ -326,4 +327,87 @@ assert.doesNotMatch(textContent, /Quitado/);
 await textTask.destroy();
 console.log(
   'PASS: PDF shows automatic status and R$80 discrepancy, never false Quitado.',
+);
+
+const identified = sale(30);
+identified.productsTotalCents = 710000;
+identified.receivedTotalCents = 710000;
+identified.items[0].soldPriceCents = 710000;
+identified.items[0].photos = [asset('photo')];
+identified.payments = [
+  { ...identified.payments[0], amountCents: 410000 },
+  {
+    id: 'cash',
+    method: 'cash',
+    pixAccountId: null,
+    accountName: null,
+    amountCents: 300000,
+  },
+];
+identified.receipts = [
+  {
+    ...first.receipts[0],
+    receiptAmountCents: 410000,
+    receiptAmountSource: 'ocr',
+    receiptPaymentId: identified.payments[0].id,
+    receiptDetails: extractReceiptDocument(
+      `Comprovante de Pix\n09/09/2026 às 17:34:00\nR$ 4.100,00\nOrigem e destino\nCliente de demonstração\nBanco Pagador\nCNPJ:00000000000000\nLoja de demonstração\nBanco Recebedor\nCNPJ:12345678000199\nID de transação Pix\nE${'0'.repeat(31)}`,
+    ).details,
+  },
+];
+identified.reconciliation = {
+  status: 'reconciled',
+  confirmedTotalCents: 410000,
+  differenceCents: 0,
+  pendingReceiptCount: 0,
+};
+const identifiedBytes = await buildSalesReportPdf({
+  storeName: 'Loja demonstração',
+  sales: [identified],
+  singleSale: true,
+  level: 'detailed',
+  includePhotos: false,
+  includeReceipts: false,
+});
+await writeFile(
+  new URL('novo-comprovante-identificado.pdf', out),
+  identifiedBytes,
+);
+const identifiedTask = getDocument({
+  data: identifiedBytes,
+  useSystemFonts: true,
+});
+const identifiedPdf = await identifiedTask.promise;
+const texts = [];
+for (let n = 1; n <= identifiedPdf.numPages; n++)
+  texts.push(
+    (await (await identifiedPdf.getPage(n)).getTextContent()).items
+      .map((i) => ('str' in i ? i.str : ''))
+      .join(' '),
+  );
+const orderText = texts.join(' ');
+assert.ok(
+  texts[0].includes(identified.customerName),
+  'The customer starts on the first page, not a redundant cover',
+);
+assert.ok(
+  orderText.indexOf(identified.customerName) < orderText.indexOf('Produtos'),
+);
+assert.ok(
+  orderText.indexOf('Produtos') < orderText.indexOf('Pagamentos informados'),
+);
+assert.ok(
+  orderText.indexOf('Banco recebedor: Banco Recebedor') <
+    orderText.indexOf('Conferência dos comprovantes'),
+);
+assert.doesNotMatch(
+  orderText,
+  /Quantidade por aparelho|MONTANTE VENDIDO|TOTAL DO DIA/,
+);
+assert.match(orderText, /3\.000,00/);
+assert.match(orderText, /4\.100,00/);
+assert.match(orderText, /Status: Conciliado/);
+await identifiedTask.destroy();
+console.log(
+  'PASS: single-sale PDF customer/items/payments order, bank/date/ID metadata and separate cash.',
 );

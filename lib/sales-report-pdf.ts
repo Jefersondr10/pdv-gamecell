@@ -3,6 +3,7 @@ import type { PDFFont, PDFPage } from 'pdf-lib';
 import type { AttachmentRecord, SaleRecord } from './pdv-types';
 import { saleDisplayStatus, saleIssues } from './sale-display-status.ts';
 import { saleFinancialSummary } from './sale-financial-summary.ts';
+import { receiptDocumentLines } from './receipt-document.ts';
 import { summarizeSalesPayments } from './sales-payment-summary.ts';
 import { reportCard, reportColors, reportTones } from './report-pdf-theme.ts';
 import type { RGB } from 'pdf-lib';
@@ -459,33 +460,6 @@ function saleDetails(
     ],
     tone,
   );
-  layout.row('Valor da venda', money(sale.productsTotalCents), {
-    bold: true,
-    fill: PALE,
-  });
-  if ((detailed || singleSale) && showFinancial) {
-    layout.row('Total pago informado', money(sale.receivedTotalCents), {
-      fill: PALE,
-    });
-    if (sale.status !== 'cancelled') {
-      const diff = sale.receivedTotalCents - sale.productsTotalCents;
-      const label =
-        sale.productsTotalCents <= 0
-          ? 'Valor da venda ainda não definido'
-          : diff < 0
-            ? `Falta receber ${money(-diff)}`
-            : diff > 0
-              ? `Pagamento acima da venda em ${money(diff)}`
-              : 'Pagamento informado igual ao valor da venda';
-      layout.paragraph(label, { bold: true, size: 9 });
-      const financial = saleFinancialSummary(sale);
-      if (financial.receiptText)
-        layout.paragraph(financial.receiptText, {
-          size: 9,
-          bold: financial.receiptWarning,
-        });
-    }
-  }
   if (sale.status === 'cancelled') {
     layout.paragraph(
       'Cancelada: não entra no montante vendido nem nas quantidades.',
@@ -544,7 +518,7 @@ function saleDetails(
     );
     layout.y += height + 6;
   }
-  if (detailed && showFinancial) {
+  if (showFinancial) {
     layout.title('Pagamentos informados');
     for (const payment of sale.payments)
       layout.row(
@@ -555,6 +529,56 @@ function saleDetails(
         { fill: PALE },
       );
     if (!sale.payments.length) layout.paragraph('Nenhum pagamento informado.');
+  }
+  if (showFinancial && sale.receipts.length) {
+    layout.title('Dados identificados nos comprovantes');
+    for (const [index, receipt] of sale.receipts.entries()) {
+      layout.row(
+        `Comprovante ${index + 1}${receipt.receiptAmountSource === 'manual' ? ' (valor manual)' : ''}`,
+        receipt.receiptAmountCents === null
+          ? 'A conferir'
+          : money(receipt.receiptAmountCents),
+        { bold: true, fill: PALE },
+      );
+      if (receipt.receiptDetails)
+        for (const line of receiptDocumentLines(receipt.receiptDetails))
+          layout.paragraph(line, { size: 9 });
+      else
+        layout.paragraph(
+          'Dados bancários não identificados. Use Reler comprovante em Editar venda.',
+          { size: 9, muted: true },
+        );
+      if (receipt.receiptReviewReason)
+        layout.paragraph(receipt.receiptReviewReason, { size: 9, bold: true });
+      layout.y += 6;
+    }
+  }
+  layout.row('Valor da venda', money(sale.productsTotalCents), {
+    bold: true,
+    fill: PALE,
+  });
+  if ((detailed || singleSale) && showFinancial) {
+    layout.row('Total pago informado', money(sale.receivedTotalCents), {
+      fill: PALE,
+    });
+    if (sale.status !== 'cancelled') {
+      const diff = sale.receivedTotalCents - sale.productsTotalCents;
+      const label =
+        sale.productsTotalCents <= 0
+          ? 'Valor da venda ainda não definido'
+          : diff < 0
+            ? `Falta receber ${money(-diff)}`
+            : diff > 0
+              ? `Pagamento acima da venda em ${money(diff)}`
+              : 'Pagamento informado igual ao valor da venda';
+      layout.paragraph(label, { bold: true, size: 9 });
+      const financial = saleFinancialSummary(sale);
+      if (financial.receiptText)
+        layout.paragraph(financial.receiptText, {
+          size: 9,
+          bold: financial.receiptWarning,
+        });
+    }
   }
   if ((level === 'complete' || singleSale) && showFinancial) {
     layout.title('Conferência dos comprovantes');
@@ -656,73 +680,75 @@ export async function buildSalesReportPdf(
   if (options.filterSummary)
     layout.paragraph(options.filterSummary, { size: 10 });
   layout.y += 12;
-  layout.totals(
-    singleSale ? 'VALOR DA VENDA' : 'MONTANTE VENDIDO',
-    money(amount),
-    completed.length,
-    units,
-    completed.filter((sale) => saleIssues(sale).length > 0).length,
-  );
-  if (!singleSale || sales[0].status === 'completed') {
-    const summary = summarizeSalesPayments(sales);
-    layout.context = 'Onde foi recebido';
-    layout.title('Onde foi recebido');
-    layout.paragraph(
-      'Pagamentos informados das vendas deste relatório. Não confirma crédito no banco.',
-      { size: 9, muted: true },
+  if (!singleSale) {
+    layout.totals(
+      singleSale ? 'VALOR DA VENDA' : 'MONTANTE VENDIDO',
+      money(amount),
+      completed.length,
+      units,
+      completed.filter((sale) => saleIssues(sale).length > 0).length,
     );
-    layout.y += 5;
-    if (!summary.groups.length)
-      layout.paragraph('Nenhum pagamento informado.', {
-        size: 10,
-        muted: true,
-      });
-    for (const group of summary.groups) {
-      layout.row(group.label, money(group.amountCents));
-      if (group.aliases.length)
-        layout.paragraph(
-          `Outros nomes no período: ${group.aliases.join(', ')}`,
-          { size: 9, muted: true },
-        );
-    }
-    layout.rule();
-    layout.row('Total recebido informado', money(summary.receivedCents), {
-      bold: true,
-      fill: PALE,
-    });
-    if (summary.outstandingCents > 0)
-      layout.row('Falta receber', money(summary.outstandingCents), {
-        bold: true,
-        fill: PALE,
-        color: reportTones.shortage.ink,
-      });
-    if (summary.excessCents > 0)
-      layout.row('Recebido a mais', money(summary.excessCents), {
-        bold: true,
-        fill: PALE,
-        color: reportTones.warning.ink,
-      });
-    if (summary.outstandingCents > 0 && summary.excessCents > 0)
+    if (!singleSale || sales[0].status === 'completed') {
+      const summary = summarizeSalesPayments(sales);
+      layout.context = 'Onde foi recebido';
+      layout.title('Onde foi recebido');
       layout.paragraph(
-        'As diferenças são conferidas por venda: um valor a mais não quita outra venda.',
+        'Pagamentos informados das vendas deste relatório. Não confirma crédito no banco.',
         { size: 9, muted: true },
       );
-    if (summary.inconsistentSaleCount > 0)
+      layout.y += 5;
+      if (!summary.groups.length)
+        layout.paragraph('Nenhum pagamento informado.', {
+          size: 10,
+          muted: true,
+        });
+      for (const group of summary.groups) {
+        layout.row(group.label, money(group.amountCents));
+        if (group.aliases.length)
+          layout.paragraph(
+            `Outros nomes no período: ${group.aliases.join(', ')}`,
+            { size: 9, muted: true },
+          );
+      }
+      layout.rule();
+      layout.row('Total recebido informado', money(summary.receivedCents), {
+        bold: true,
+        fill: PALE,
+      });
+      if (summary.outstandingCents > 0)
+        layout.row('Falta receber', money(summary.outstandingCents), {
+          bold: true,
+          fill: PALE,
+          color: reportTones.shortage.ink,
+        });
+      if (summary.excessCents > 0)
+        layout.row('Recebido a mais', money(summary.excessCents), {
+          bold: true,
+          fill: PALE,
+          color: reportTones.warning.ink,
+        });
+      if (summary.outstandingCents > 0 && summary.excessCents > 0)
+        layout.paragraph(
+          'As diferenças são conferidas por venda: um valor a mais não quita outra venda.',
+          { size: 9, muted: true },
+        );
+      if (summary.inconsistentSaleCount > 0)
+        layout.paragraph(
+          `Conferir pagamentos de ${summary.inconsistentSaleCount} venda(s): o detalhamento não corresponde ao total recebido salvo. Total detalhado: ${money(summary.detailedCents)}.`,
+          { size: 9, bold: true },
+        );
+      layout.y += 8;
+      layout.context = 'Resumo de vendas';
+    }
+    if (completed.length !== sales.length)
       layout.paragraph(
-        `Conferir pagamentos de ${summary.inconsistentSaleCount} venda(s): o detalhamento não corresponde ao total recebido salvo. Total detalhado: ${money(summary.detailedCents)}.`,
-        { size: 9, bold: true },
+        singleSale
+          ? 'Cancelada: registro histórico, fora dos totais do período.'
+          : `${sales.length - completed.length} venda(s) cancelada(s), excluída(s) dos totais.`,
+        { size: 9, muted: true },
       );
-    layout.y += 8;
-    layout.context = 'Resumo de vendas';
+    modelSummary(layout, summarySales, level !== 'simple');
   }
-  if (completed.length !== sales.length)
-    layout.paragraph(
-      singleSale
-        ? 'Cancelada: registro histórico, fora dos totais do período.'
-        : `${sales.length - completed.length} venda(s) cancelada(s), excluída(s) dos totais.`,
-      { size: 9, muted: true },
-    );
-  modelSummary(layout, summarySales, level !== 'simple');
 
   let loadedBytes = 0;
   let attachmentPages = 0;
@@ -811,13 +837,16 @@ export async function buildSalesReportPdf(
   for (const sale of sales) {
     layout.context = `Venda ${number(sale)} · ${sale.customerName}`;
     // Complete reports give each sale its own starting page and keep its evidence together.
-    if (level === 'complete' || photos || receipts || sale === sales[0])
+    if (
+      !singleSale &&
+      (level === 'complete' || photos || receipts || sale === sales[0])
+    )
       layout.newPage();
     const measure = new Layout(doc, regular, bold, storeName, true);
     measure.y = 0;
     saleDetails(measure, sale, level, singleSale);
     // Keep a sale whole when it fits a page; oversized sales continue with their header.
-    layout.ensure(Math.min(measure.y + 12, BOTTOM - 86));
+    if (!singleSale) layout.ensure(Math.min(measure.y + 12, BOTTOM - 86));
     saleDetails(layout, sale, level, singleSale);
     if (!mediaSales.includes(sale)) continue;
     if (photos)

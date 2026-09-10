@@ -10,6 +10,7 @@ export type ReceiptReconciliation = {
   confirmedTotalCents: number;
   differenceCents: number | null;
   pendingReceiptCount: number;
+  reviewReceiptCount?: number;
 };
 
 export function paymentMethodTotals(
@@ -29,6 +30,7 @@ export function deriveReceiptReconciliation(
   receipts: Array<{
     amountCents?: number | null;
     receiptAmountCents?: number | null;
+    receiptReviewReason?: string | null;
   }>,
   pixTotalCents: number,
 ): ReceiptReconciliation {
@@ -44,6 +46,17 @@ export function deriveReceiptReconciliation(
     (sum, value) => sum + (validAmount(value) ? value : 0),
     0,
   );
+  const reviewReceiptCount = receipts.filter((receipt) =>
+    Boolean(receipt.receiptReviewReason),
+  ).length;
+  if (reviewReceiptCount)
+    return {
+      status: 'pending',
+      confirmedTotalCents,
+      differenceCents: null,
+      pendingReceiptCount,
+      reviewReceiptCount,
+    };
 
   if (!Number.isSafeInteger(pixTotalCents) || pixTotalCents < 0) {
     return {

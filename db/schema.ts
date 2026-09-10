@@ -236,6 +236,8 @@ export const pixAccounts = sqliteTable(
       .references(() => stores.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     details: text('details'),
+    receiptBank: text('receipt_bank'),
+    receiptRecipientDocument: text('receipt_recipient_document'),
     active: integer('active', { mode: 'boolean' }).notNull().default(true),
     createdBy: text('created_by')
       .notNull()
@@ -480,6 +482,8 @@ export const attachments = sqliteTable(
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     receiptAmountCents: integer('receipt_amount_cents'),
+    receiptDetailsJson: text('receipt_details_json'),
+    receiptReviewReason: text('receipt_review_reason'),
     receiptAmountSource: text('receipt_amount_source', {
       enum: ['ocr', 'manual'],
     }),
@@ -505,6 +509,34 @@ export const attachments = sqliteTable(
     index('idx_attachments_entry').on(table.entryId),
     index('idx_attachments_sale').on(table.saleId),
     index('idx_attachments_sale_item').on(table.saleItemId),
+  ],
+);
+
+// Keep evidence claims after an attachment is removed: a deleted receipt must
+// not silently pay a second sale. Payment/history deletion is never implied.
+export const receiptPaymentLinks = sqliteTable(
+  'receipt_payment_links',
+  {
+    attachmentId: text('attachment_id').primaryKey(),
+    storeId: text('store_id')
+      .notNull()
+      .references(() => stores.id, { onDelete: 'cascade' }),
+    saleId: text('sale_id')
+      .notNull()
+      .references(() => sales.id, { onDelete: 'cascade' }),
+    paymentId: text('payment_id')
+      .notNull()
+      .references(() => payments.id),
+    transactionId: text('transaction_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('uq_receipt_payment_transaction').on(
+      table.storeId,
+      table.transactionId,
+    ),
+    uniqueIndex('uq_receipt_payment_payment').on(table.paymentId),
+    index('idx_receipt_payment_sale').on(table.saleId, table.storeId),
   ],
 );
 

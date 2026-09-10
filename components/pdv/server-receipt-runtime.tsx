@@ -18,6 +18,8 @@ export type ServerReceiptJob = {
   source: 'ocr' | 'manual' | null;
   status: string | null;
   updatedAt: number | null;
+  confirmedAt: number | null;
+  generation: number | null;
 };
 
 export function ServerReceiptProvider({
@@ -141,17 +143,31 @@ export function useServerReceiptJobs(
   }, [enabled, saleId, revision]);
   const retry = async (attachmentId: string) => {
     try {
+      const job = jobs[attachmentId];
+      if (!job) throw new Error('Aguarde a atualização do comprovante.');
       await requestJson(`/api/sales/${saleId}/receipt-ocr`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           'x-csrf-token': csrfToken,
         },
-        body: JSON.stringify({ attachmentId }),
+        body: JSON.stringify({
+          attachmentId,
+          operationId: crypto.randomUUID(),
+          expectedAmount: job.amountCents,
+          expectedConfirmedAt: job.confirmedAt,
+          expectedGeneration: job.generation,
+        }),
       });
       setRevision((current) => current + 1);
-    } catch {
-      setError('Não foi possível solicitar outra leitura. Tente novamente.');
+      window.dispatchEvent(new Event('pdv:receipts-saved'));
+      window.dispatchEvent(new Event('pdv:sales-changed'));
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível solicitar outra leitura. Tente novamente.',
+      );
     }
   };
   return { enabled, jobs, error, retry };

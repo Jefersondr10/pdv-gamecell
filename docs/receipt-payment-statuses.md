@@ -2,6 +2,19 @@
 
 ## Precedência do total pago
 
+### Pix identificado pelo comprovante — revisão de 10/09/2026
+
+- A venda pode ser finalizada sem comprovante e sem Pix informado: recebido fica zero ou apenas com dinheiro manual. O saldo abaixo do total da venda permanece em destaque como pagamento pendente.
+- Depois, em Vendas → Editar, é possível anexar o comprovante. **Reler comprovante** refaz a leitura de um anexo existente, mediante confirmação. A releitura pode substituir o valor anterior; uma edição manual posterior continua tendo precedência e interrompe a leitura antiga.
+- Contas Pix têm campos opcionais de banco e CPF/CNPJ do recebedor. Para registro automático, a leitura precisa identificar uma transação realizada, valor seguro, identificador Pix único e uma única conta ativa com banco e documento correspondentes. Nome/logotipo do banco emissor nunca é usado como banco recebedor. Dados ausentes ou duvidosos pedem conferência; nenhuma conta é inventada.
+- Sem Pix manual prévio, o servidor registra cada comprovante identificado como Pix, soma ao dinheiro existente e recalcula a conferência. Releituras atualizam o mesmo pagamento. Comprovantes duplicados, agendados, cancelados, em processamento ou com dados conflitantes não são registrados automaticamente.
+- Reservas duráveis do identificador impedem que a exclusão de um comprovante registrado permita pagar outra venda com a mesma transação. Isso vale também para registro explícito pelo botão de escolher conta. A exclusão do anexo não exclui pagamentos nem seu histórico.
+- Os relatórios individuais seguem cliente → produtos → pagamentos e dados identificados (data/hora, pagador, bancos, recebedor e identificador) → conferência. Dinheiro permanece separado. CPF/CNPJ é mascarado na apresentação. **Conciliado** é conferência documental, não consulta/confirmacão de crédito no banco; a exigência de foto dos aparelhos permanece.
+- Migração aditiva necessária: `0015_receipt_identified_payments`, executada pela cadeia de publicação com backup. Nenhum valor histórico é recalculado sem uma nova ação autorizada de envio, releitura ou aplicação.
+- Regressões específicas: `test:receipt-auto-payment` usa todas as migrações em banco novo, com pagamento zero, dinheiro/Pix mistos, releitura, duplicidade, conta errada, revisão, permissões e concorrência. Não usar dados reais para testar.
+
+### Compatibilidade com pagamentos manuais
+
 - Um novo envio de comprovantes ou correção explícita de valores cria uma solicitação persistida de atualização do pagamento, desde que o usuário tenha permissão de pagamentos.
 - O servidor espera todos os comprovantes ativos terem valores positivos; nunca usa uma soma parcial. Fotos de aparelhos não entram nessa soma.
 - Com um pagamento Pix, ajusta apenas seu valor e mantém a conta. Com vários Pix, exige a escolha explícita de qual Pix absorve a diferença. Dinheiro nunca é alvo dessa atualização: o total recebido passa a ser dinheiro preservado + comprovantes. Sem Pix cadastrado, a seção Comprovantes oferece escolher a conta ativa e **Registrar Pix do comprovante**. Usa o valor lido, sem convertê-lo a partir do dinheiro nem inventar uma conta.
