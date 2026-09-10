@@ -38,6 +38,8 @@ import {
   SaleIssuesNotice,
 } from '@/components/pdv/sale-status-badge';
 import { saleFinancialSummary } from '@/lib/sale-financial-summary';
+import { summarizeSalesPayments } from '@/lib/sales-payment-summary';
+import { SalesReportPayments } from '@/components/pdv/sales-report-payments';
 import { replaceGuardedUrl } from '@/lib/app-back';
 import { salesReportPath, type SalesReportLink } from '@/lib/sales-report-link';
 import {
@@ -2941,6 +2943,10 @@ function SaleReport({
   const [pdfError, setPdfError] = useState('');
   const reportRef = useRef<HTMLElement | null>(null);
   const modelGroups = useMemo(() => groupModels(sale), [sale]);
+  const paymentSummary = useMemo(
+    () => summarizeSalesPayments(sale ? [sale] : []),
+    [sale],
+  );
   return (
     <Dialog onOpenChange={onOpenChange} open={Boolean(sale)}>
       <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[92dvh] sm:max-w-4xl sm:rounded-2xl">
@@ -3039,6 +3045,9 @@ function SaleReport({
                   />
                   <ReportMetric label="Cliente" value={sale.customerName} />
                 </div>
+                {sale.status === 'completed' && (
+                  <SalesReportPayments summary={paymentSummary} />
+                )}
                 {sale.status === 'completed' && (
                   <div
                     className={cn(
@@ -3419,6 +3428,7 @@ function SalesPeriodReport({
     [sales],
   );
   const dayGroups = useMemo(() => groupSalesByDay(sales), [sales]);
+  const paymentSummary = useMemo(() => summarizeSalesPayments(sales), [sales]);
   const modelGroups = useMemo(
     () => groupModelsAcrossSales(completedSales),
     [completedSales],
@@ -3564,6 +3574,8 @@ function SalesPeriodReport({
                 <ReportMetric label="Aparelhos" value={String(itemCount)} />
                 <ReportMetric label="Avisos" value={String(alertCount)} />
               </dl>
+
+              <SalesReportPayments summary={paymentSummary} />
 
               {cancelledCount > 0 && (
                 <p className="report-section mt-3 rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">

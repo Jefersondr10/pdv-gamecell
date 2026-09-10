@@ -3,6 +3,7 @@ import type { PDFFont, PDFPage } from 'pdf-lib';
 import type { AttachmentRecord, SaleRecord } from './pdv-types';
 import { saleDisplayStatus, saleIssues } from './sale-display-status.ts';
 import { saleFinancialSummary } from './sale-financial-summary.ts';
+import { summarizeSalesPayments } from './sales-payment-summary.ts';
 
 export type SalesPdfOptions = {
   storeName: string;
@@ -420,6 +421,51 @@ export async function buildSalesReportPdf(
     money(amount),
     `${summarySales.length} venda(s)${singleSale ? '' : ' concluída(s)'} · ${units} aparelho(s)`,
   );
+  if (!singleSale || sales[0].status === 'completed') {
+    const summary = summarizeSalesPayments(sales);
+    layout.context = 'Onde foi recebido';
+    layout.title('Onde foi recebido');
+    layout.paragraph(
+      'Pagamentos informados das vendas deste relatório. Não confirma crédito no banco.',
+      { size: 9, muted: true },
+    );
+    layout.y += 5;
+    if (!summary.groups.length)
+      layout.paragraph('Nenhum pagamento informado.', {
+        size: 10,
+        muted: true,
+      });
+    for (const group of summary.groups) {
+      layout.row(group.label, money(group.amountCents));
+      if (group.aliases.length)
+        layout.paragraph(
+          `Outros nomes no período: ${group.aliases.join(', ')}`,
+          { size: 9, muted: true },
+        );
+    }
+    layout.rule();
+    layout.row('Total recebido informado', money(summary.receivedCents), {
+      bold: true,
+    });
+    if (summary.outstandingCents > 0)
+      layout.row('Falta receber', money(summary.outstandingCents), {
+        bold: true,
+      });
+    if (summary.excessCents > 0)
+      layout.row('Recebido a mais', money(summary.excessCents), { bold: true });
+    if (summary.outstandingCents > 0 && summary.excessCents > 0)
+      layout.paragraph(
+        'As diferenças são conferidas por venda: um valor a mais não quita outra venda.',
+        { size: 9, muted: true },
+      );
+    if (summary.inconsistentSaleCount > 0)
+      layout.paragraph(
+        `Conferir pagamentos de ${summary.inconsistentSaleCount} venda(s): o detalhamento não corresponde ao total recebido salvo. Total detalhado: ${money(summary.detailedCents)}.`,
+        { size: 9, bold: true },
+      );
+    layout.y += 8;
+    layout.context = 'Resumo de vendas';
+  }
   if (completed.length !== sales.length)
     layout.paragraph(
       singleSale

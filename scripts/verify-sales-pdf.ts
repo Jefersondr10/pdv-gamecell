@@ -283,7 +283,7 @@ for (let pageNo = 1; pageNo <= textPdf.numPages; pageNo++) {
 }
 assert.match(textContent, /Verificar comprovante/);
 assert.match(textContent, /Pagamento informado igual ao valor da venda/);
-assert.match(textContent, /80,00 abaixo da venda/);
+assert.match(textContent, /80,00 abaixo do Pix informado/);
 assert.doesNotMatch(textContent, /Quitado/);
 await textTask.destroy();
 console.log(
