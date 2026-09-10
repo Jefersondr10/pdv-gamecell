@@ -143,6 +143,7 @@ const loader = async (attachment: AttachmentRecord) => {
   assert.notEqual(attachment.id, 'cancelled-should-not-load');
   return sourceBytes;
 };
+const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
 for (const level of ['simple', 'detailed', 'complete'] as const) {
   loaded.length = 0;
   const bytes = await buildSalesReportPdf(
@@ -163,6 +164,44 @@ for (const level of ['simple', 'detailed', 'complete'] as const) {
     'Text reports must not become giant screenshots',
   );
   await writeFile(new URL(`novo-${level}.pdf`, out), bytes);
+  const task = getDocument({ data: bytes, useSystemFonts: true });
+  const pdf = await task.promise;
+  const pages: string[] = [];
+  for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
+    const page = await pdf.getPage(pageNo);
+    const content = await page.getTextContent();
+    pages.push(
+      content.items.map((item) => ('str' in item ? item.str : '')).join(' '),
+    );
+  }
+  const reportText = pages.join(' ');
+  assert.doesNotMatch(
+    reportText,
+    /TOTAL DO DIA/,
+    `${level}: no daily total card inside a sale`,
+  );
+  assert.equal(
+    (reportText.match(/MONTANTE VENDIDO/g) || []).length,
+    1,
+    `${level}: keep just the opening report total`,
+  );
+  assert.match(
+    pages[0],
+    /10\.800,00/,
+    `${level}: preserve opening sales total`,
+  );
+  assert.match(
+    pages[0],
+    /Onde foi recebido/,
+    `${level}: preserve receipt breakdown`,
+  );
+  for (const name of [
+    first.customerName,
+    second.customerName,
+    cancelled.customerName,
+  ])
+    assert.ok(reportText.includes(name), `${level}: preserve every sale`);
+  await task.destroy();
 }
 const long = sale(99, 64);
 long.customerName =
@@ -270,7 +309,6 @@ const statusBytes = await buildSalesReportPdf(
   loader,
 );
 await writeFile(new URL('novo-status.pdf', out), statusBytes);
-const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
 const textTask = getDocument({ data: statusBytes, useSystemFonts: true });
 const textPdf = await textTask.promise;
 let textContent = '';

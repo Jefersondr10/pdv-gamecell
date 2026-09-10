@@ -304,33 +304,6 @@ class Layout {
       this.y += 18;
     }
   }
-  dayHeader(day: string, count: number, units: number, amount: number) {
-    this.ensure(135);
-    reportCard(this.page, M, this.y, CONTENT, 58, NAVY, undefined, [
-      NAVY,
-      reportColors.blue,
-    ]);
-    this.draw(day, M + 12, this.y + 10, 12, true, WHITE);
-    this.draw(
-      `${count} venda(s) concluída(s) · ${units} aparelho(s)`,
-      M + 12,
-      this.y + 33,
-      9,
-      false,
-      WHITE,
-    );
-    const value = money(amount);
-    this.draw('TOTAL DO DIA', W - M - 124, this.y + 10, 8, true, WHITE);
-    this.draw(
-      value,
-      W - M - 12 - this.bold.widthOfTextAtSize(value, 16),
-      this.y + 28,
-      16,
-      true,
-      WHITE,
-    );
-    this.y += 70;
-  }
 }
 
 function modelSummary(layout: Layout, sales: SaleRecord[], detailed: boolean) {
@@ -749,11 +722,6 @@ export async function buildSalesReportPdf(
         : `${sales.length - completed.length} venda(s) cancelada(s), excluída(s) dos totais.`,
       { size: 9, muted: true },
     );
-  const days = new Map<string, SaleRecord[]>();
-  for (const sale of sales) {
-    const key = date(sale.createdAt);
-    days.set(key, [...(days.get(key) ?? []), sale]);
-  }
   modelSummary(layout, summarySales, level !== 'simple');
 
   let loadedBytes = 0;
@@ -840,7 +808,6 @@ export async function buildSalesReportPdf(
     }
   }
 
-  let previousDay = '';
   for (const sale of sales) {
     layout.context = `Venda ${number(sale)} · ${sale.customerName}`;
     // Complete reports give each sale its own starting page and keep its evidence together.
@@ -851,19 +818,6 @@ export async function buildSalesReportPdf(
     saleDetails(measure, sale, level, singleSale);
     // Keep a sale whole when it fits a page; oversized sales continue with their header.
     layout.ensure(Math.min(measure.y + 12, BOTTOM - 86));
-    if (!singleSale && date(sale.createdAt) !== previousDay) {
-      previousDay = date(sale.createdAt);
-      const valid = (days.get(previousDay) ?? []).filter(
-        (item) => item.status === 'completed',
-      );
-      layout.ensure(Math.min(measure.y + 82, BOTTOM - 86));
-      layout.dayHeader(
-        previousDay,
-        valid.length,
-        valid.reduce((sum, item) => sum + item.items.length, 0),
-        valid.reduce((sum, item) => sum + item.productsTotalCents, 0),
-      );
-    }
     saleDetails(layout, sale, level, singleSale);
     if (!mediaSales.includes(sale)) continue;
     if (photos)
