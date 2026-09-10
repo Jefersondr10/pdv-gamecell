@@ -1,0 +1,29 @@
+node_modules/
+data/
+*.sqlite*
+.env
+.env.*
+!.env.example
+*.log
+playwright-artifacts/
+
+# Arquivos privados de operação e contexto local; nunca publicar.
+/AGENTS.md
+/docs/
+/deploy/
+/PREVIA-VISUAL.html
+/.codex/
+/.agents/
+/.deployment-access/
+/.public-review/
+*.pem
+*.key
+*.p12
+*.pfx
+*.zip
+*.tar
+*.tar.gz
+
+# Importação comercial específica desta loja, mantida somente no ambiente local.
+/scripts/import-print-rates.mjs
+/tests/import-rates.test.mjs

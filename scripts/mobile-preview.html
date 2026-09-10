@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width,initial-scale=1">
+ <title>Simulação mobile · Gamecell</title>
+ <link rel="stylesheet" href="/mobile-preview.css">
+ <script type="module" src="/mobile-preview.mjs"></script>
+</head>
+<body>
+ <header class="preview-heading">
+  <div><span class="eyebrow">GAMECELL · AMBIENTE DE TESTE</span><h1>Teste a versão mobile</h1><p>Use o sistema dentro do celular abaixo. Os dados são fictícios e separados da loja online.</p></div>
+  <div class="sizes" role="group" aria-label="Tamanho da simulação">
+   <button type="button" data-size="compact" aria-pressed="false">Pequeno</button>
+   <button type="button" data-size="regular" aria-pressed="true">Padrão</button>
+   <button type="button" data-size="large" aria-pressed="false">Grande</button>
+   <button type="button" data-preview-zoom aria-pressed="false">Ampliar</button>
+  </div>
+ </header>
+ <main>
+  <div class="device" data-device-size="regular"><iframe id="mobile-app" src="/" title="Gamecell: sistema em formato de celular" allow="clipboard-write"></iframe></div>
+  <p class="preview-note">Esta moldura não tem cronômetro. A prévia funciona enquanto o servidor local estiver ligado.<br>Use apenas dados fictícios: os registros desaparecem quando o servidor de teste é encerrado.</p>
+ </main>
+</body>
+</html>
