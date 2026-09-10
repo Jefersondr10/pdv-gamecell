@@ -25,14 +25,15 @@ type Context = { params: Promise<{ id: string }> };
 function publicState(
   state: NonNullable<Awaited<ReturnType<typeof readReceiptPaymentSync>>>,
 ) {
+  const receiptTotal = state.sale.effectiveReceiptTotalCents;
   return {
     status: state.request?.status ?? 'manual',
     requestId: state.request?.requestId ?? null,
     updatedAt: state.request?.updatedAt ?? null,
     saleStatus: state.sale.status,
-    receivedTotalCents: state.sale.receivedTotalCents,
+    receivedTotalCents: receiptTotal + state.cashCents,
     productsTotalCents: state.sale.productsTotalCents,
-    receiptTotalCents: state.total,
+    receiptTotalCents: receiptTotal,
     pixCents: state.pixCents,
     cashCents: state.cashCents,
     complete: state.complete,

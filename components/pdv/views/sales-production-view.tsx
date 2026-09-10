@@ -1,4 +1,5 @@
 'use client';
+import { saleReceiptIncome, receiptDrivenPayments } from '@/lib/receipt-income';
 import { ReceiptPaymentDetails } from '@/components/pdv/receipt-payment-details';
 
 /* oxlint-disable next/no-img-element, jsx-a11y/label-has-associated-control -- report media is authenticated and the custom textarea is wrapped by its label */
@@ -117,6 +118,7 @@ import { parseMoneyInput } from '@/lib/money';
 import {
   deriveReceiptReconciliation,
   paymentMethodTotals,
+  receiptTargetLabel,
   type ReceiptValueInput,
 } from '@/lib/receipt-reconciliation';
 import { cn } from '@/lib/utils';
@@ -1134,10 +1136,16 @@ export function SalesProductionView({
             );
             return {
               ...record,
+              receivedTotalCents: saleReceiptIncome({ ...record, receipts })
+                .receivedTotalCents,
+              receivedDifferenceCents: saleReceiptIncome({
+                ...record,
+                receipts,
+              }).receivedDifferenceCents,
               receipts,
               reconciliation: deriveReceiptReconciliation(
                 receipts,
-                paymentMethodTotals(record.payments).pixCents,
+                saleReceiptIncome(record).receiptTargetCents,
               ),
             };
           };
@@ -1226,8 +1234,21 @@ function SaleList({
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-base font-bold">
-                  {sale.customerName}
+                <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-base font-bold">
+                  <span
+                    className={cn(
+                      'shrink-0 text-lg font-extrabold tabular-nums',
+                      sale.status !== 'cancelled' && 'text-primary',
+                    )}
+                  >
+                    #{String(sale.number).padStart(5, '0')}
+                  </span>
+                  <span
+                    className="min-w-0 max-w-full truncate"
+                    title={sale.customerName}
+                  >
+                    {sale.customerName}
+                  </span>
                 </p>
                 <p
                   className="mt-0.5 line-clamp-2 text-sm text-muted-foreground"
@@ -1255,14 +1276,39 @@ function SaleList({
                 >
                   {formatMoney(sale.productsTotalCents)}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {financial.paymentLabel}
-                </p>
+                {sale.status === 'cancelled' ? (
+                  <p className="text-sm text-muted-foreground">
+                    {financial.paymentLabel}
+                  </p>
+                ) : financial.pixCents > 0 || financial.cashCents > 0 ? (
+                  <div className="text-sm font-semibold tabular-nums text-success">
+                    {financial.pixCents > 0 && (
+                      <p>Recebido Pix {formatMoney(financial.pixCents)}</p>
+                    )}
+                    {financial.cashCents > 0 && (
+                      <p>
+                        Recebido Dinheiro {formatMoney(financial.cashCents)}
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+                {sale.status === 'completed' &&
+                  sale.receivedDifferenceCents !== 0 && (
+                    <p
+                      className={cn(
+                        'mt-0.5 text-sm font-semibold tabular-nums',
+                        sale.receivedDifferenceCents < 0
+                          ? 'text-destructive'
+                          : 'text-amber-800 dark:text-amber-200',
+                      )}
+                    >
+                      {paymentDifferenceText(sale)}
+                    </p>
+                  )}
               </div>
             </div>
             <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
               <p className="text-xs text-muted-foreground">
-                #{String(sale.number).padStart(5, '0')} ·{' '}
                 {formatDateTime(sale.createdAt)} · {sale.sellerName}
               </p>
               <span className="flex items-center gap-1.5">
@@ -1286,15 +1332,10 @@ function SaleList({
               </p>
             )}
             {sale.status === 'completed' &&
-              (sale.receivedDifferenceCents !== 0 ||
-                (financial.pixCents > 0 && !sale.receipts.length)) && (
+              financial.pixCents > 0 &&
+              !sale.receipts.length && (
                 <p className="mt-1 truncate text-xs font-semibold text-amber-800 dark:text-amber-200">
-                  {paymentDifferenceText(sale) ?? 'Sem comprovante'}
-                  {sale.receivedDifferenceCents !== 0 &&
-                  financial.pixCents > 0 &&
-                  !sale.receipts.length
-                    ? ' · sem comprovante'
-                    : ''}
+                  Sem comprovante
                 </p>
               )}
           </button>
@@ -1471,7 +1512,7 @@ function EditSaleDialog({
   const [preparing, setPreparing] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'pix' | 'cash' | ''>('');
-  const [paymentPixAccountId, setPaymentPixAccountId] = useState(
+  const [paymentPixAccountId] = useState(
     () => data.pixAccounts.find((account) => account.active)?.id ?? '',
   );
   const [paymentAmount, setPaymentAmount] = useState(() =>
@@ -1572,14 +1613,17 @@ function EditSaleDialog({
   });
   const invalidPaymentCorrection = correctedPayments.some(
     (payment) =>
-      payment.amountCents <= 0 ||
-      payment.amountCents > 1_000_000_000 ||
-      (payment.method === 'pix' && !payment.pixAccountId),
+      payment.amountCents <= 0 || payment.amountCents > 1_000_000_000 || false,
   );
-  const correctedReceivedCents = correctedPayments.reduce(
-    (total, payment) => total + payment.amountCents,
-    0,
-  );
+  const correctedReceivedCents = saleReceiptIncome({
+    productsTotalCents: sale?.productsTotalCents ?? 0,
+    payments: correctedPayments,
+    receipts: activeReceipts.map((r) => ({
+      ...r,
+      receiptAmountCents:
+        savedReceiptValues[r.id]?.amountCents ?? r.receiptAmountCents,
+    })),
+  }).receivedTotalCents;
   const pendingPaymentCents = Math.max(
     0,
     (sale?.productsTotalCents ?? 0) - correctedReceivedCents,
@@ -1608,13 +1652,17 @@ function EditSaleDialog({
       ? [{ id: receipt.id, ...value }]
       : [];
   });
-  const draftPixCents = paymentMethodTotals([
+  const draftCashCents = paymentMethodTotals([
     ...correctedPayments,
     ...queuedPayments,
     ...(paymentReady
       ? [{ method: paymentMethod, amountCents: additionalPaymentCents }]
       : []),
-  ]).pixCents;
+  ]).cashCents;
+  const draftPixCents = Math.max(
+    0,
+    (sale?.productsTotalCents ?? 0) - draftCashCents,
+  );
   const reconciliation = sale
     ? deriveReceiptReconciliation(
         [
@@ -1863,8 +1911,8 @@ function EditSaleDialog({
                     <div className="min-w-0 flex-1">
                       <h3 className="font-extrabold">Pagamentos da venda</h3>
                       <p className="text-xs text-muted-foreground">
-                        Corrija um pagamento ou acrescente o valor que falta. As
-                        correções ficam no histórico.
+                        Informe ou corrija somente dinheiro. O Pix vem do valor
+                        lido no comprovante, sem cadastro manual.
                       </p>
                     </div>
                   </div>
@@ -1872,156 +1920,91 @@ function EditSaleDialog({
                   {(visiblePayments.length > 0 ||
                     queuedPayments.length > 0) && (
                     <div className="mt-3 space-y-1 rounded-xl bg-background/80 p-3 text-xs">
-                      {visiblePayments.map((payment, index) => {
-                        const edit = paymentEdits[payment.id];
-                        const update = (
-                          changes: Partial<NonNullable<typeof edit>>,
-                        ) => {
-                          paymentCorrectionIdRef.current = createOperationId();
-                          setPaymentEdits((current) => ({
-                            ...current,
-                            [payment.id]: {
-                              ...(current[payment.id] ?? {
-                                method: payment.method,
-                                pixAccountId: payment.pixAccountId,
-                                amount: formatMoneyInput(payment.amountCents),
-                              }),
-                              ...changes,
-                            },
-                          }));
-                        };
-                        return (
-                          <div
-                            className="rounded-xl border p-3"
-                            key={payment.id}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="min-w-0 text-sm text-muted-foreground">
-                                {payment.method === 'pix'
-                                  ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                                  : 'Dinheiro'}
-                              </span>
-                              <strong className="ml-auto whitespace-nowrap text-sm">
-                                {formatMoney(payment.amountCents)}
-                              </strong>
-                              <Button
-                                disabled={uploadBusy}
-                                size="sm"
-                                variant="ghost"
-                                type="button"
-                                onClick={() => {
-                                  if (edit) {
-                                    paymentCorrectionIdRef.current =
-                                      createOperationId();
-                                    setPaymentEdits((current) => {
-                                      const next = { ...current };
-                                      delete next[payment.id];
-                                      return next;
-                                    });
-                                  } else update({});
-                                }}
-                              >
-                                {edit ? (
-                                  'Desfazer'
-                                ) : (
-                                  <>
-                                    <Pencil className="size-4" /> Alterar
-                                  </>
-                                )}
-                              </Button>
-                            </div>
-                            {edit && (
-                              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                                <label className="text-sm font-semibold">
-                                  Forma de pagamento
-                                  <NativeSelect
-                                    aria-label={`Forma do pagamento ${index + 1}`}
-                                    className="mt-1 h-11 w-full"
-                                    disabled={uploadBusy}
-                                    value={edit.method}
-                                    onChange={(event) =>
-                                      update({
-                                        method: event.target.value as
-                                          | 'pix'
-                                          | 'cash',
-                                        pixAccountId:
-                                          edit.pixAccountId ??
-                                          activePixAccounts[0]?.id ??
-                                          null,
-                                      })
-                                    }
-                                  >
-                                    <NativeSelectOption value="pix">
-                                      Pix
-                                    </NativeSelectOption>
-                                    <NativeSelectOption value="cash">
-                                      Dinheiro
-                                    </NativeSelectOption>
-                                  </NativeSelect>
-                                </label>
-                                <label className="text-sm font-semibold">
-                                  Valor do pagamento
-                                  <Input
-                                    aria-label={`Valor do pagamento ${index + 1}`}
-                                    className="mt-1 h-11 text-right font-bold"
-                                    disabled={uploadBusy}
-                                    inputMode="decimal"
-                                    value={edit.amount}
-                                    onChange={(event) =>
-                                      update({ amount: event.target.value })
-                                    }
-                                  />
-                                </label>
-                                {edit.method === 'pix' && (
-                                  <label className="text-sm font-semibold sm:col-span-2">
-                                    Conta Pix
-                                    <NativeSelect
-                                      aria-label={`Conta do pagamento ${index + 1}`}
-                                      className="mt-1 h-11 w-full"
-                                      disabled={uploadBusy}
-                                      value={edit.pixAccountId ?? ''}
-                                      onChange={(event) =>
-                                        update({
-                                          pixAccountId:
-                                            event.target.value || null,
-                                        })
-                                      }
-                                    >
-                                      <NativeSelectOption value="">
-                                        Selecione uma conta
-                                      </NativeSelectOption>
-                                      {payment.pixAccountId &&
-                                        !activePixAccounts.some(
-                                          (account) =>
-                                            account.id === payment.pixAccountId,
-                                        ) && (
-                                          <NativeSelectOption
-                                            value={payment.pixAccountId}
-                                          >
-                                            {payment.accountName} (inativa ·
-                                            manter)
-                                          </NativeSelectOption>
-                                        )}
-                                      {activePixAccounts.map((account) => (
-                                        <NativeSelectOption
-                                          key={account.id}
-                                          value={account.id}
-                                        >
-                                          {account.name}
-                                        </NativeSelectOption>
-                                      ))}
-                                    </NativeSelect>
-                                  </label>
-                                )}
-                                <p className="text-xs text-muted-foreground sm:col-span-2">
-                                  A correção será aplicada ao salvar as
-                                  alterações.
-                                </p>
+                      {visiblePayments
+                        .filter((payment) => payment.method === 'cash')
+                        .map((payment, index) => {
+                          const edit = paymentEdits[payment.id];
+                          const update = (
+                            changes: Partial<NonNullable<typeof edit>>,
+                          ) => {
+                            paymentCorrectionIdRef.current =
+                              createOperationId();
+                            setPaymentEdits((current) => ({
+                              ...current,
+                              [payment.id]: {
+                                ...(current[payment.id] ?? {
+                                  method: payment.method,
+                                  pixAccountId: payment.pixAccountId,
+                                  amount: formatMoneyInput(payment.amountCents),
+                                }),
+                                ...changes,
+                              },
+                            }));
+                          };
+                          return (
+                            <div
+                              className="rounded-xl border p-3"
+                              key={payment.id}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="min-w-0 text-sm text-muted-foreground">
+                                  {payment.method === 'pix'
+                                    ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                    : 'Dinheiro'}
+                                </span>
+                                <strong className="ml-auto whitespace-nowrap text-sm">
+                                  {formatMoney(payment.amountCents)}
+                                </strong>
+                                <Button
+                                  disabled={uploadBusy}
+                                  size="sm"
+                                  variant="ghost"
+                                  type="button"
+                                  onClick={() => {
+                                    if (edit) {
+                                      paymentCorrectionIdRef.current =
+                                        createOperationId();
+                                      setPaymentEdits((current) => {
+                                        const next = { ...current };
+                                        delete next[payment.id];
+                                        return next;
+                                      });
+                                    } else update({});
+                                  }}
+                                >
+                                  {edit ? (
+                                    'Desfazer'
+                                  ) : (
+                                    <>
+                                      <Pencil className="size-4" /> Alterar
+                                    </>
+                                  )}
+                                </Button>
                               </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                              {edit && (
+                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                  <label className="text-sm font-semibold">
+                                    Valor do pagamento
+                                    <Input
+                                      aria-label={`Valor do pagamento ${index + 1}`}
+                                      className="mt-1 h-11 text-right font-bold"
+                                      disabled={uploadBusy}
+                                      inputMode="decimal"
+                                      value={edit.amount}
+                                      onChange={(event) =>
+                                        update({ amount: event.target.value })
+                                      }
+                                    />
+                                  </label>
+                                  <p className="text-xs text-muted-foreground sm:col-span-2">
+                                    A correção será aplicada ao salvar as
+                                    alterações.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       {queuedPayments.map((payment) => (
                         <div
                           className="flex items-center justify-between gap-3 rounded-lg bg-primary/5 px-2 py-1.5"
@@ -2075,8 +2058,7 @@ function EditSaleDialog({
                   </div>
                   {invalidPaymentCorrection && (
                     <p role="alert" className="mt-2 text-sm text-destructive">
-                      Informe um valor maior que zero e selecione a conta dos
-                      pagamentos Pix.
+                      Informe um valor em dinheiro maior que zero.
                     </p>
                   )}
                   {queuedPaymentCents > pendingPaymentCents && (
@@ -2117,12 +2099,6 @@ function EditSaleDialog({
                           <NativeSelectOption value="">
                             Selecione
                           </NativeSelectOption>
-                          <NativeSelectOption
-                            disabled={activePixAccounts.length === 0}
-                            value="pix"
-                          >
-                            Pix
-                          </NativeSelectOption>
                           <NativeSelectOption value="cash">
                             Dinheiro
                           </NativeSelectOption>
@@ -2151,39 +2127,6 @@ function EditSaleDialog({
                           value={paymentAmount}
                         />
                       </div>
-                    </div>
-                  )}
-
-                  {remainingPaymentCents > 0 && paymentMethod === 'pix' && (
-                    <div className="mt-2">
-                      <label
-                        className="text-sm font-semibold"
-                        htmlFor={`sale-${sale.id}-payment-account`}
-                      >
-                        Conta Pix
-                      </label>
-                      <NativeSelect
-                        className="mt-1 h-11 w-full [&_select]:h-11"
-                        id={`sale-${sale.id}-payment-account`}
-                        onChange={(event) =>
-                          setPaymentPixAccountId(event.target.value)
-                        }
-                        value={paymentPixAccountId}
-                      >
-                        {activePixAccounts.length === 0 && (
-                          <NativeSelectOption value="">
-                            Cadastre uma conta Pix ativa
-                          </NativeSelectOption>
-                        )}
-                        {activePixAccounts.map((account) => (
-                          <NativeSelectOption
-                            key={account.id}
-                            value={account.id}
-                          >
-                            {account.name}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
                     </div>
                   )}
 
@@ -2371,6 +2314,7 @@ function EditSaleDialog({
                       }}
                     />
                     <ReceiptReconciliationEditor
+                      cashCents={draftCashCents}
                       className="mt-3"
                       disabled={preparing || uploadBusy}
                       files={receiptFiles}
@@ -2394,6 +2338,7 @@ function EditSaleDialog({
                 )}
                 {reconciliation && (
                   <ReconciliationSummary
+                    cashCents={draftCashCents}
                     className="mt-3"
                     reconciliation={reconciliation}
                     targetCents={draftPixCents}
@@ -2401,10 +2346,7 @@ function EditSaleDialog({
                 )}
                 <ReceiptPaymentSync
                   saleId={sale.id}
-                  pixAccounts={data.pixAccounts}
                   productsTotalCents={sale.productsTotalCents}
-                  csrfToken={data.csrfToken}
-                  canUse={canPayments && canReceipts}
                   disabled={
                     preparing ||
                     uploadBusy ||
@@ -2703,11 +2645,6 @@ function EditSaleDialog({
                             body: JSON.stringify({
                               operationId: receiptValueOperationIdRef.current,
                               receipts: changedSavedReceiptValues,
-                              ...(preserveReceiptPaymentRef.current.has(
-                                receiptValueOperationIdRef.current,
-                              )
-                                ? { preservePayments: true }
-                                : {}),
                             }),
                           },
                         );
@@ -2719,12 +2656,6 @@ function EditSaleDialog({
                       }
                       if (selectedFiles.length > 0) {
                         const form = new FormData();
-                        if (
-                          preserveReceiptPaymentRef.current.has(
-                            attachmentOperationIdRef.current,
-                          )
-                        )
-                          form.set('preservePayments', 'true');
                         form.set(
                           'operationId',
                           attachmentOperationIdRef.current,
@@ -2784,7 +2715,7 @@ function EditSaleDialog({
                         receiptValueOperationIdRef.current =
                           createOperationId();
                         setNotice(
-                          'Comprovante salvo. Na seção Comprovantes, aguarde a leitura, escolha a conta e toque em Registrar Pix do comprovante.',
+                          'Comprovante salvo. O valor lido será somado ao dinheiro recebido e conferido com o preço da venda.',
                         );
                       } else {
                         onOpenChange(false);
@@ -3096,14 +3027,14 @@ function SaleReport({
                           Pagamento não informado — pendente
                         </div>
                       ) : (
-                        sale.payments.map((payment) => (
+                        receiptDrivenPayments(sale).map((payment) => (
                           <div
                             className="report-row flex justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm"
                             key={payment.id}
                           >
                             <span>
                               {payment.method === 'pix'
-                                ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                ? `Pix · ${payment.recipientName || 'Recebedor não identificado'}`
                                 : 'Dinheiro'}
                             </span>
                             <strong>{formatMoney(payment.amountCents)}</strong>
@@ -3168,11 +3099,11 @@ function SaleReport({
                   </p>
                   <p className="mt-0.5">
                     Comprovantes confirmados:{' '}
-                    {formatMoney(sale.reconciliation.confirmedTotalCents)} · Pix
-                    informado:{' '}
-                    {formatMoney(paymentMethodTotals(sale.payments).pixCents)}
+                    {formatMoney(sale.reconciliation.confirmedTotalCents)} ·{' '}
+                    {receiptTargetLabel(saleReceiptIncome(sale).cashCents)}:{' '}
+                    {formatMoney(saleReceiptIncome(sale).receiptTargetCents)}
                     {sale.reconciliation.status === 'divergent'
-                      ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado`
+                      ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(saleReceiptIncome(sale).cashCents)}`
                       : ''}
                   </p>
                 </div>
@@ -3808,21 +3739,23 @@ function SalesPeriodReport({
                                         Pagamento não informado — pendente
                                       </p>
                                     ) : (
-                                      sale.payments.map((payment) => (
-                                        <p
-                                          className="mt-1 flex justify-between gap-3"
-                                          key={payment.id}
-                                        >
-                                          <span>
-                                            {payment.method === 'pix'
-                                              ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                                              : 'Dinheiro'}
-                                          </span>
-                                          <strong>
-                                            {formatMoney(payment.amountCents)}
-                                          </strong>
-                                        </p>
-                                      ))
+                                      receiptDrivenPayments(sale).map(
+                                        (payment) => (
+                                          <p
+                                            className="mt-1 flex justify-between gap-3"
+                                            key={payment.id}
+                                          >
+                                            <span>
+                                              {payment.method === 'pix'
+                                                ? `Pix · ${payment.recipientName || 'Recebedor não identificado'}`
+                                                : 'Dinheiro'}
+                                            </span>
+                                            <strong>
+                                              {formatMoney(payment.amountCents)}
+                                            </strong>
+                                          </p>
+                                        ),
+                                      )
                                     )}
                                     <ReceiptPaymentDetails
                                       receipts={sale.receipts}
@@ -3865,14 +3798,18 @@ function SalesPeriodReport({
                                           sale.reconciliation
                                             .confirmedTotalCents,
                                         )}{' '}
-                                        · Pix informado:{' '}
+                                        ·{' '}
+                                        {receiptTargetLabel(
+                                          saleReceiptIncome(sale).cashCents,
+                                        )}
+                                        :{' '}
                                         {formatMoney(
-                                          paymentMethodTotals(sale.payments)
-                                            .pixCents,
+                                          saleReceiptIncome(sale)
+                                            .receiptTargetCents,
                                         )}
                                         {sale.reconciliation.status ===
                                         'divergent'
-                                          ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado`
+                                          ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(saleReceiptIncome(sale).cashCents)}`
                                           : ''}
                                       </p>
                                     </div>

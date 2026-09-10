@@ -118,5 +118,6 @@ export function buildStockWhatsAppMessage(
     `📱 *${lineText(storeName) || 'ESTOQUE DISPONÍVEL'}*\n*ESTOQUE E PREÇOS*\n_Atualizado em ${updated}_`,
     ...sections,
     '⚠️ *Preços e disponibilidade sujeitos a alteração.*\nConfirme a disponibilidade e os dados de pagamento com o vendedor antes de comprar.',
+    '💬 *Grupo de atacado da loja*\nhttps://chat.whatsapp.com/H9rpYRcvNncCs9sW4pccDf',
   ].join('\n\n');
 }

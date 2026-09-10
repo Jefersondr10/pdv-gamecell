@@ -12,6 +12,7 @@ import { parseSalePriceInput, type SalePrices } from '@/lib/sale-prices';
 import {
   deriveReceiptReconciliation,
   paymentMethodTotals,
+  receiptTargetLabel,
 } from '@/lib/receipt-reconciliation';
 
 const money = (cents: number) =>
@@ -63,9 +64,10 @@ export function SalePricesEditor({
   );
   const newTotal = items.reduce((total, item) => total + item.priceCents, 0);
   const difference = sale.receivedTotalCents - newTotal;
+  const cashCents = paymentMethodTotals(sale.payments).cashCents;
   const receiptCheck = deriveReceiptReconciliation(
     sale.receipts,
-    paymentMethodTotals(sale.payments).pixCents,
+    Math.max(0, newTotal - cashCents),
   );
   const headers = {
     'content-type': 'application/json',
@@ -220,19 +222,21 @@ export function SalePricesEditor({
           <div className="rounded-xl bg-muted/40 p-3 text-sm">
             <p>Total anterior: {money(current.productsTotalCents)}</p>
             <p className="font-extrabold">Novo total: {money(newTotal)}</p>
-            <p>Pagamentos registrados: {money(sale.receivedTotalCents)}</p>
+            <p>Comprovantes + dinheiro: {money(sale.receivedTotalCents)}</p>
             <p>
               Comprovantes com valor: {money(receiptCheck.confirmedTotalCents)}
             </p>
             {!invalid && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {receiptCheck.status === 'not_required'
-                  ? 'Sem Pix: dinheiro informado manualmente, sem exigência de comprovante.'
+                  ? cashCents > 0
+                    ? 'Sem Pix: dinheiro informado manualmente, sem exigência de comprovante.'
+                    : 'Não há saldo a receber por Pix.'
                   : receiptCheck.status === 'pending'
                     ? `${receiptCheck.pendingReceiptCount} comprovante(s) pendente(s) de valor ou anexo. A conferência ainda não terminou.`
                     : receiptCheck.differenceCents === 0
-                      ? 'Comprovantes conferem com o Pix informado.'
-                      : `Comprovantes ${receiptCheck.differenceCents! < 0 ? 'abaixo' : 'acima'} do Pix informado em ${money(Math.abs(receiptCheck.differenceCents!))}.`}
+                      ? `Comprovantes conferem com o ${receiptTargetLabel(cashCents)}.`
+                      : `Comprovantes ${receiptCheck.differenceCents! < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(cashCents)} em ${money(Math.abs(receiptCheck.differenceCents!))}.`}
               </p>
             )}
             {!invalid && (

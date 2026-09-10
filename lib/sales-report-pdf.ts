@@ -1,9 +1,11 @@
+import { receiptDrivenPayments, saleReceiptIncome } from './receipt-income.ts';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import type { PDFFont, PDFPage } from 'pdf-lib';
 import type { AttachmentRecord, SaleRecord } from './pdv-types';
 import { saleDisplayStatus, saleIssues } from './sale-display-status.ts';
 import { saleFinancialSummary } from './sale-financial-summary.ts';
-import { receiptDocumentLines } from './receipt-document.ts';
+import { receiptTargetLabel } from './receipt-reconciliation.ts';
+import { shortReceiptDate } from './receipt-document.ts';
 import { summarizeSalesPayments } from './sales-payment-summary.ts';
 import { reportCard, reportColors, reportTones } from './report-pdf-theme.ts';
 import type { RGB } from 'pdf-lib';
@@ -420,7 +422,8 @@ function saleDetails(
   const showFinancial = singleSale || sale.status === 'completed';
   layout.context = `Venda ${number(sale)} · ${sale.customerName}`;
   layout.ensure(205);
-  const difference = sale.receivedTotalCents - sale.productsTotalCents;
+  const difference =
+    saleReceiptIncome(sale).receivedTotalCents - sale.productsTotalCents;
   const tone =
     sale.status === 'cancelled'
       ? reportTones.neutral
@@ -519,16 +522,17 @@ function saleDetails(
     layout.y += height + 6;
   }
   if (showFinancial) {
-    layout.title('Pagamentos informados');
-    for (const payment of sale.payments)
+    layout.title('Comprovantes e dinheiro');
+    for (const payment of receiptDrivenPayments(sale))
       layout.row(
         payment.method === 'cash'
           ? 'Dinheiro'
-          : `Pix · ${payment.accountName || 'Conta não informada'}`,
+          : `Pix · ${payment.recipientName || 'Recebedor não identificado'}`,
         money(payment.amountCents),
         { fill: PALE },
       );
-    if (!sale.payments.length) layout.paragraph('Nenhum pagamento informado.');
+    if (!receiptDrivenPayments(sale).length)
+      layout.paragraph('Nenhum pagamento informado.');
   }
   if (showFinancial && sale.receipts.length) {
     layout.title('Dados identificados nos comprovantes');
@@ -540,10 +544,35 @@ function saleDetails(
           : money(receipt.receiptAmountCents),
         { bold: true, fill: PALE },
       );
-      if (receipt.receiptDetails)
-        for (const line of receiptDocumentLines(receipt.receiptDetails))
-          layout.paragraph(line, { size: 9 });
-      else
+      if (receipt.receiptDetails) {
+        const doc = receipt.receiptDetails;
+        layout.paragraph(shortReceiptDate(doc.paidAtText), { size: 9 });
+        layout.paragraph('Pagador', { size: 9, bold: true });
+        layout.paragraph(doc.payerName || 'Nome não identificado', { size: 9 });
+        layout.paragraph(doc.payerBank || 'Banco não identificado', {
+          size: 9,
+          muted: true,
+        });
+        layout.y += 4;
+        layout.paragraph('Recebedor', { size: 9, bold: true });
+        layout.paragraph(doc.recipientName || 'Nome não identificado', {
+          size: 9,
+        });
+        layout.paragraph(doc.recipientBank || 'Banco não identificado', {
+          size: 9,
+          muted: true,
+        });
+        if (doc.recipientDocument)
+          layout.paragraph(`CPF/CNPJ: ***${doc.recipientDocument.slice(-4)}`, {
+            size: 9,
+            muted: true,
+          });
+        layout.y += 4;
+        layout.paragraph(
+          `Identificador Pix: ${doc.transactionId || 'Não identificado'}`,
+          { size: 8, muted: true },
+        );
+      } else
         layout.paragraph(
           'Dados bancários não identificados. Use Reler comprovante em Editar venda.',
           { size: 9, muted: true },
@@ -558,11 +587,16 @@ function saleDetails(
     fill: PALE,
   });
   if ((detailed || singleSale) && showFinancial) {
-    layout.row('Total pago informado', money(sale.receivedTotalCents), {
-      fill: PALE,
-    });
+    layout.row(
+      'Total recebido',
+      money(saleReceiptIncome(sale).receivedTotalCents),
+      {
+        fill: PALE,
+      },
+    );
     if (sale.status !== 'cancelled') {
-      const diff = sale.receivedTotalCents - sale.productsTotalCents;
+      const diff =
+        saleReceiptIncome(sale).receivedTotalCents - sale.productsTotalCents;
       const label =
         sale.productsTotalCents <= 0
           ? 'Valor da venda ainda não definido'
@@ -570,7 +604,7 @@ function saleDetails(
             ? `Falta receber ${money(-diff)}`
             : diff > 0
               ? `Pagamento acima da venda em ${money(diff)}`
-              : 'Pagamento informado igual ao valor da venda';
+              : 'Comprovantes + dinheiro iguais ao valor da venda';
       layout.paragraph(label, { bold: true, size: 9 });
       const financial = saleFinancialSummary(sale);
       if (financial.receiptText)
@@ -581,9 +615,12 @@ function saleDetails(
     }
   }
   if ((level === 'complete' || singleSale) && showFinancial) {
+    const { cashCents } = saleReceiptIncome(sale);
     layout.title('Conferência dos comprovantes');
     layout.paragraph(
-      'Compara comprovantes com o Pix. Dinheiro informado manualmente; não confirma crédito bancário.',
+      cashCents > 0
+        ? 'Compara comprovantes mais dinheiro com o preço da venda. Dinheiro informado manualmente; não confirma crédito bancário.'
+        : 'Compara comprovantes com o preço da venda; não confirma crédito bancário.',
       { size: 9, muted: true },
     );
     layout.row(
@@ -594,7 +631,9 @@ function saleDetails(
     const diff = sale.reconciliation.differenceCents;
     layout.paragraph(
       sale.reconciliation.status === 'not_required'
-        ? 'Sem Pix — comprovante não exigido; dinheiro informado manualmente.'
+        ? cashCents > 0
+          ? 'Sem Pix — comprovante não exigido; dinheiro informado manualmente.'
+          : 'Não há saldo a receber por Pix.'
         : !sale.receipts.length
           ? 'Sem comprovante anexado.'
           : pending || sale.reconciliation.status === 'pending'
@@ -602,10 +641,10 @@ function saleDetails(
               ? `Leitura/conferência pendente: ${pending} comprovante(s).`
               : 'Conferência dos comprovantes pendente.'
             : diff === 0
-              ? 'Comprovantes conferem com o Pix informado.'
+              ? `Comprovantes conferem com o ${receiptTargetLabel(cashCents)}.`
               : diff === null
                 ? 'Conferência pendente.'
-                : `Comprovantes ${diff < 0 ? 'abaixo' : 'acima'} do Pix informado: diferença de ${money(Math.abs(diff))}.`,
+                : `Comprovantes ${diff < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(cashCents)}: diferença de ${money(Math.abs(diff))}.`,
       { size: 9, bold: true },
     );
   }
@@ -693,7 +732,7 @@ export async function buildSalesReportPdf(
       layout.context = 'Onde foi recebido';
       layout.title('Onde foi recebido');
       layout.paragraph(
-        'Pagamentos informados das vendas deste relatório. Não confirma crédito no banco.',
+        'Comprovantes e dinheiro das vendas deste relatório. Não confirma crédito no banco.',
         { size: 9, muted: true },
       );
       layout.y += 5;

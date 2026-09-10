@@ -4,10 +4,8 @@ import type {
   OrderStatusColor,
 } from './pdv-types.ts';
 import { normalizeOrderStatusName } from './order-status-names.ts';
-import {
-  deriveReceiptReconciliation,
-  paymentMethodTotals,
-} from './receipt-reconciliation.ts';
+import { saleReceiptIncome } from './receipt-income.ts';
+import { deriveReceiptReconciliation } from './receipt-reconciliation.ts';
 
 // Only these outcomes are automatic. All other order statuses belong to the store.
 export const SYSTEM_SALE_STATUSES = [
@@ -38,15 +36,15 @@ export const SYSTEM_SALE_STATUS_DESCRIPTIONS: Record<SaleCheckKey, string> = {
   cancelled:
     'A venda foi cancelada e não entra nos totais de vendas concluídas.',
   missing_price: 'Há produto sem preço de venda válido.',
-  missing_receipt: 'Há pagamento em Pix sem comprovante anexado.',
+  missing_receipt: 'Há saldo a receber sem comprovante anexado.',
   review:
-    'Há leitura inválida ou o total dos comprovantes difere do Pix informado.',
+    'Há leitura inválida ou comprovantes mais dinheiro diferem do preço da venda.',
   reading: 'Há comprovante aguardando a conclusão da leitura.',
-  pending_payment: 'O pagamento informado está abaixo do valor da venda.',
-  overpaid: 'O pagamento informado está acima do valor da venda.',
+  pending_payment: 'Comprovantes mais dinheiro estão abaixo do valor da venda.',
+  overpaid: 'Comprovantes mais dinheiro estão acima do valor da venda.',
   missing_photo: 'Falta foto em pelo menos um aparelho vendido.',
   reconciled:
-    'Preços e fotos preenchidos, Pix mais dinheiro igual à venda e comprovantes iguais ao Pix. Dinheiro informado manualmente; não confirma crédito bancário.',
+    'Preços e fotos preenchidos, comprovantes mais dinheiro iguais ao valor da venda. Dinheiro informado manualmente; não confirma crédito bancário.',
 };
 
 export function isAutomaticStatusName(name: string) {
@@ -64,27 +62,39 @@ type StatusSale = Pick<
   items: { soldPriceCents: number; photos: readonly unknown[] }[];
   receipts: Pick<
     ReceiptAttachmentRecord,
-    'receiptAmountCents' | 'receiptOcrStatus' | 'receiptReviewReason'
+    | 'receiptAmountCents'
+    | 'receiptOcrStatus'
+    | 'receiptReviewReason'
+    | 'receiptDetails'
   >[];
 };
 export function saleIssues(sale: StatusSale) {
   if (sale.status === 'cancelled') return [];
-  const { pixCents } = paymentMethodTotals(sale.payments);
-  const reconciliation = deriveReceiptReconciliation(sale.receipts, pixCents);
+  const income = saleReceiptIncome(sale);
+  const reconciliation = deriveReceiptReconciliation(
+    sale.receipts,
+    income.receiptTargetCents,
+  );
   const failed = sale.receipts.some((receipt) =>
-    receipt.receiptAmountCents !== null
-      ? !Number.isSafeInteger(receipt.receiptAmountCents) ||
-        receipt.receiptAmountCents <= 0
-      : !['pending', 'processing', 'retry'].includes(
-          receipt.receiptOcrStatus ?? '',
-        ),
+    receipt.receiptDetails &&
+    (receipt.receiptDetails.blocked ||
+      receipt.receiptDetails.ambiguous ||
+      receipt.receiptDetails.state !== 'completed')
+      ? true
+      : receipt.receiptAmountCents !== null
+        ? !Number.isSafeInteger(receipt.receiptAmountCents) ||
+          receipt.receiptAmountCents <= 0
+        : !['pending', 'processing', 'retry'].includes(
+            receipt.receiptOcrStatus ?? '',
+          ),
   );
   const conditions: Partial<Record<SaleIssueKey, boolean>> = {
     missing_price:
       sale.productsTotalCents <= 0 ||
       sale.items.length === 0 ||
       sale.items.some((item) => item.soldPriceCents <= 0),
-    missing_receipt: pixCents > 0 && sale.receipts.length === 0,
+    missing_receipt:
+      income.receiptTargetCents > 0 && sale.receipts.length === 0,
     review:
       failed ||
       reconciliation.status === 'divergent' ||
@@ -92,8 +102,8 @@ export function saleIssues(sale: StatusSale) {
     reading:
       !failed &&
       sale.receipts.some((receipt) => receipt.receiptAmountCents === null),
-    pending_payment: sale.receivedTotalCents < sale.productsTotalCents,
-    overpaid: sale.receivedTotalCents > sale.productsTotalCents,
+    pending_payment: income.receivedTotalCents < sale.productsTotalCents,
+    overpaid: income.receivedTotalCents > sale.productsTotalCents,
     missing_photo: sale.items.some((item) => item.photos.length === 0),
   };
   return SALE_ISSUES.filter((status) => conditions[status.key]);

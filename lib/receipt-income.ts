@@ -1,0 +1,94 @@
+import type { ReceiptDocument } from './receipt-document.ts';
+
+type Receipt = {
+  receiptAmountCents: number | null;
+  receiptDetails?: ReceiptDocument | null;
+  receiptReviewReason?: string | null;
+};
+type Sale = {
+  productsTotalCents: number;
+  payments: readonly { method: string; amountCents: number }[];
+  receipts: readonly Receipt[];
+};
+
+// The receipt is the Pix value itself, not evidence for a separately typed Pix.
+// Legacy payment rows remain in the audit trail but cannot override this total.
+export function receiptIncomeCents(receipt: Receipt) {
+  const amount = receipt.receiptAmountCents;
+  const doc = receipt.receiptDetails;
+  if (receipt.receiptReviewReason?.startsWith('Transação repetida')) return 0;
+  if (doc && (doc.blocked || doc.ambiguous || doc.state !== 'completed'))
+    return 0;
+  return Number.isSafeInteger(amount) && amount! > 0 ? amount! : 0;
+}
+
+export function saleReceiptIncome(sale: Sale) {
+  const cashCents = sale.payments.reduce(
+    (sum, payment) =>
+      sum + (payment.method === 'cash' ? payment.amountCents : 0),
+    0,
+  );
+  const pixCents = sale.receipts.reduce((sum, receipt) => {
+    const id = receipt.receiptDetails?.transactionId;
+    const duplicate =
+      id &&
+      sale.receipts.filter((r) => r.receiptDetails?.transactionId === id)
+        .length > 1;
+    return sum + (duplicate ? 0 : receiptIncomeCents(receipt));
+  }, 0);
+  return {
+    cashCents,
+    pixCents,
+    receivedTotalCents: cashCents + pixCents,
+    receivedDifferenceCents: cashCents + pixCents - sale.productsTotalCents,
+    receiptTargetCents: Math.max(0, sale.productsTotalCents - cashCents),
+  };
+}
+
+export function receiptDrivenPayments(sale: {
+  payments: readonly {
+    id: string;
+    method: 'pix' | 'cash';
+    amountCents: number;
+    pixAccountId: string | null;
+    accountName: string | null;
+  }[];
+  receipts: readonly (Receipt & {
+    id: string;
+    receiptPaymentId?: string | null;
+  })[];
+}) {
+  return [
+    ...sale.receipts.flatMap((receipt) => {
+      const amountCents = receiptIncomeCents(receipt);
+      const transactionId = receipt.receiptDetails?.transactionId;
+      if (
+        !amountCents ||
+        (transactionId &&
+          sale.receipts.filter(
+            (r) => r.receiptDetails?.transactionId === transactionId,
+          ).length > 1)
+      )
+        return [];
+      const registered = sale.payments.find(
+        (p) => p.id === receipt.receiptPaymentId && p.method === 'pix',
+      );
+      return [
+        {
+          id: `receipt:${receipt.id}`,
+          method: 'pix' as const,
+          amountCents,
+          pixAccountId: registered?.pixAccountId ?? null,
+          recipientName: receipt.receiptDetails?.recipientName?.trim() || null,
+          accountName:
+            receipt.receiptDetails?.recipientBank ||
+            registered?.accountName ||
+            'Banco não identificado',
+        },
+      ];
+    }),
+    ...sale.payments
+      .filter((payment) => payment.method === 'cash')
+      .map((payment) => ({ ...payment, recipientName: null })),
+  ];
+}

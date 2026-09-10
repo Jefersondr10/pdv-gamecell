@@ -1,4 +1,4 @@
-import { stopReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
+import { SALE_RECEIVED_TOTAL_SQL } from '@/lib/server/sale-status-sql';
 import { assertCsrf, requireSession } from '@/lib/server/auth';
 import {
   apiError,
@@ -24,6 +24,7 @@ type SaleBalance = {
   status: 'completed' | 'cancelled';
   productsTotalCents: number;
   receivedTotalCents: number;
+  effectiveReceivedCents: number;
 };
 
 type AddedPayment = {
@@ -97,12 +98,19 @@ export async function POST(
       return paymentResponse(replay, true);
     }
 
+    if (method === 'pix')
+      throw new HttpError(
+        400,
+        'Anexe o comprovante para registrar o Pix. Informe manualmente apenas dinheiro.',
+        'PIX_FROM_RECEIPT',
+      );
     const sale = await db
       .prepare(
         `SELECT number, status,
                 products_total_cents AS productsTotalCents,
-                received_total_cents AS receivedTotalCents
-         FROM sales WHERE id = ? AND store_id = ? LIMIT 1`,
+                received_total_cents AS receivedTotalCents,
+                ${SALE_RECEIVED_TOTAL_SQL} AS effectiveReceivedCents
+         FROM sales s WHERE id = ? AND store_id = ? LIMIT 1`,
       )
       .bind(saleId, storeId)
       .first<SaleBalance>();
@@ -118,7 +126,8 @@ export async function POST(
     }
     const productsTotalCents = Number(sale.productsTotalCents);
     const previousReceivedCents = Number(sale.receivedTotalCents);
-    const pendingCents = productsTotalCents - previousReceivedCents;
+    const pendingCents =
+      productsTotalCents - Number(sale.effectiveReceivedCents);
     if (pendingCents <= 0) {
       throw new HttpError(
         409,
@@ -176,8 +185,8 @@ export async function POST(
              WHERE sale.id = ? AND sale.store_id = ?
                AND sale.status = 'completed'
                AND sale.received_total_cents = ?
-               AND sale.products_total_cents > sale.received_total_cents
-               AND ? <= sale.products_total_cents - sale.received_total_cents
+               AND sale.products_total_cents > ${SALE_RECEIVED_TOTAL_SQL.replaceAll('s.', 'sale.')}
+               AND ? <= sale.products_total_cents - ${SALE_RECEIVED_TOTAL_SQL.replaceAll('s.', 'sale.')}
                AND (? = 'cash' OR account.id IS NOT NULL)`,
           )
           .bind(
@@ -253,7 +262,6 @@ export async function POST(
             }),
             now,
           ),
-        stopReceiptPaymentSync(db, storeId, saleId, now),
         addedPaymentQuery(db, storeId, saleId, paymentId),
       ]);
       const saved = (batchResults.at(-1) as D1Result<AddedPayment> | undefined)
@@ -378,8 +386,8 @@ function addedPaymentQuery(
               ) AS originalPaymentJson,
               sale.number,
               sale.products_total_cents AS productsTotalCents,
-              sale.received_total_cents AS receivedTotalCents,
-              sale.received_difference_cents AS receivedDifferenceCents
+              ${SALE_RECEIVED_TOTAL_SQL.replaceAll('s.', 'sale.')} AS receivedTotalCents,
+              (${SALE_RECEIVED_TOTAL_SQL.replaceAll('s.', 'sale.')} - sale.products_total_cents) AS receivedDifferenceCents
        FROM payments payment
        JOIN sales sale
          ON sale.id = payment.sale_id AND sale.store_id = payment.store_id

@@ -47,8 +47,8 @@ export const PERMISSION_GROUPS = [
       ['clients.manage', 'Editar e desativar clientes'],
       ['products', 'Consultar produtos e códigos'],
       ['products.manage', 'Cadastrar, editar e desativar produtos e códigos'],
-      ['finance', 'Consultar contas e status cadastrados'],
-      ['finance.manage', 'Gerenciar contas Pix e status do pedido'],
+      ['finance', 'Consultar status cadastrados'],
+      ['finance.manage', 'Gerenciar status do pedido'],
     ],
   },
   {

@@ -92,6 +92,7 @@ export function routePermissions(request: Request): Permission[] | null {
   if (/^\/api\/sales\/[^/]+\/receipt-ocr$/.test(path))
     return read ? ['sales', 'overview'] : ['sales.receipts'];
   if (path === '/api/receipt-ocr/status') return ['sales', 'overview', 'sell'];
+  if (path === '/api/receipt-ocr/legacy-review') return ['sales.receipts'];
   if (path === '/api/entries') return [read ? 'entries' : 'entry'];
   if (path === '/api/inventory') return ['stock'];
   if (path === '/api/inventory/lookup') return ['sell', 'entry', 'stock'];

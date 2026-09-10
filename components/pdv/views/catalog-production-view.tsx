@@ -68,6 +68,12 @@ export function CatalogProductionView({
 }) {
   const [historyId, setHistoryId] = useState<string | null>(null);
   const historyClient = data.clients.find((client) => client.id === historyId);
+  if (!can(data.user, 'clients') && !can(data.user, 'products'))
+    return (
+      <p className="p-4 text-sm text-muted-foreground">
+        Nenhum cadastro disponível para seu usuário.
+      </p>
+    );
   if (historyClient)
     return (
       <ClientPurchaseHistory
@@ -85,21 +91,15 @@ export function CatalogProductionView({
           Cadastros
         </h1>
         <p className="mt-1 hidden text-sm text-muted-foreground lg:block">
-          Consulte e gerencie clientes, produtos e contas de pagamento.
+          Consulte e gerencie clientes e produtos.
         </p>
       </header>
       <Tabs
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
-        defaultValue={
-          can(data.user, 'clients')
-            ? 'clients'
-            : can(data.user, 'products')
-              ? 'products'
-              : 'accounts'
-        }
+        defaultValue={can(data.user, 'clients') ? 'clients' : 'products'}
       >
         <TabsList
-          className="mb-3 grid w-full shrink-0 grid-cols-3 rounded-xl bg-muted p-1 [&_[data-slot=tabs-trigger]]:min-h-10 lg:w-fit lg:min-w-[34rem]"
+          className="mb-3 grid w-full shrink-0 grid-cols-2 rounded-xl bg-muted p-1 [&_[data-slot=tabs-trigger]]:min-h-10 lg:w-fit lg:min-w-[24rem]"
           size="lg"
         >
           <TabsTrigger value="clients" disabled={!can(data.user, 'clients')}>
@@ -107,9 +107,6 @@ export function CatalogProductionView({
           </TabsTrigger>
           <TabsTrigger value="products" disabled={!can(data.user, 'products')}>
             <Smartphone /> Produtos
-          </TabsTrigger>
-          <TabsTrigger value="accounts" disabled={!can(data.user, 'finance')}>
-            <WalletCards /> Contas
           </TabsTrigger>
         </TabsList>
         <TabsContent className="min-h-0 flex-1 overflow-hidden" value="clients">
@@ -133,17 +130,6 @@ export function CatalogProductionView({
             items={data.products}
             onChanged={onChanged}
             onStatusChanged={onStatusChanged}
-          />
-        </TabsContent>
-        <TabsContent
-          className="min-h-0 flex-1 overflow-hidden"
-          value="accounts"
-        >
-          <AccountsManager
-            canManage={can(data.user, 'finance.manage')}
-            csrfToken={data.csrfToken}
-            items={data.pixAccounts}
-            onChanged={onChanged}
           />
         </TabsContent>
       </Tabs>

@@ -1,3 +1,4 @@
+import { receiptDrivenPayments, saleReceiptIncome } from './receipt-income.ts';
 import type { SaleRecord } from './pdv-types';
 
 type SummarySale = Pick<
@@ -7,6 +8,7 @@ type SummarySale = Pick<
   | 'productsTotalCents'
   | 'receivedTotalCents'
   | 'payments'
+  | 'receipts'
 >;
 type Destination = {
   key: string;
@@ -17,7 +19,7 @@ type Destination = {
 const normalizeName = (name: string | null) =>
   name?.trim().replace(/\s+/g, ' ') || '';
 
-/** Read-only breakdown of the same filtered sales. Receipt/OCR values are not payments. */
+/** Read-only breakdown of the same filtered sales. Pix values come only from receipts; cash is entered manually. */
 export function summarizeSalesPayments(sales: readonly SummarySale[]) {
   const destinations = new Map<
     string,
@@ -32,17 +34,17 @@ export function summarizeSalesPayments(sales: readonly SummarySale[]) {
   for (const sale of sales) {
     if (sale.status !== 'completed') continue;
     soldCents += sale.productsTotalCents;
-    receivedCents += sale.receivedTotalCents;
+    receivedCents += saleReceiptIncome(sale).receivedTotalCents;
     outstandingCents += Math.max(
       0,
-      sale.productsTotalCents - sale.receivedTotalCents,
+      sale.productsTotalCents - saleReceiptIncome(sale).receivedTotalCents,
     );
     excessCents += Math.max(
       0,
-      sale.receivedTotalCents - sale.productsTotalCents,
+      saleReceiptIncome(sale).receivedTotalCents - sale.productsTotalCents,
     );
     let saleDetailedCents = 0;
-    for (const payment of sale.payments) {
+    for (const payment of receiptDrivenPayments(sale)) {
       saleDetailedCents += payment.amountCents;
       const name = normalizeName(payment.accountName);
       // IDs separate homonymous accounts. Legacy records without an ID retain their saved name.
@@ -72,7 +74,8 @@ export function summarizeSalesPayments(sales: readonly SummarySale[]) {
     }
     detailedCents += saleDetailedCents;
     // Compare each sale: differences from separate sales must not cancel each other out.
-    if (saleDetailedCents !== sale.receivedTotalCents) inconsistentSaleCount++;
+    if (saleDetailedCents !== saleReceiptIncome(sale).receivedTotalCents)
+      inconsistentSaleCount++;
   }
   const compare = new Intl.Collator('pt-BR', {
     numeric: true,

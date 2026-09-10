@@ -24,7 +24,6 @@ import {
   Trash2,
   UserRound,
   WalletCards,
-  X,
 } from 'lucide-react';
 
 import {
@@ -53,10 +52,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
-import {
   formatMediaBytes,
   MEDIA_LIMITS,
   prepareMediaSelection,
@@ -73,7 +68,7 @@ import { parseMoneyInput } from '@/lib/money';
 import { ReceiptReconciliationEditor } from '@/components/pdv/receipt-reconciliation-editor';
 import {
   deriveReceiptReconciliation,
-  paymentMethodTotals,
+  receiptTargetLabel,
   type ReceiptValueInput,
 } from '@/lib/receipt-reconciliation';
 import { normalizeCandidate, type ScanCandidate } from '@/lib/scanner';
@@ -324,10 +319,14 @@ export function SellWizard({
       setPrice(value.price);
       setItems(value.items);
       itemsRef.current = value.items;
-      setPayments(value.payments);
+      setPayments(
+        value.payments.filter((payment) => payment.method === 'cash'),
+      );
       setReceiptFiles(value.receiptFiles);
       setReceiptValues(value.receiptValues);
-      setAnnouncement('Rascunho recuperado. Confira os dados e continue.');
+      setAnnouncement(
+        'Rascunho recuperado. O Pix agora vem somente dos comprovantes; confira os anexos e o dinheiro recebido.',
+      );
     },
     confirmed: () => {
       setStep('done');
@@ -894,6 +893,7 @@ export function SellWizard({
 
       {step === 'receipt' && (
         <ReceiptStage
+          cashCents={paid}
           files={receiptFiles}
           onBack={goBack}
           onClear={() => {
@@ -911,14 +911,7 @@ export function SellWizard({
           receiptBytes={sumFileBytes(receiptFiles)}
           receiptError={receiptError}
           receiptValues={receiptValues}
-          targetCents={
-            paymentMethodTotals(
-              payments.map((payment) => ({
-                method: payment.method,
-                amountCents: parseMoneyInput(payment.amount),
-              })),
-            ).pixCents
-          }
+          targetCents={Math.max(0, total - paid)}
           onReceiptValueChange={(index, value) =>
             setReceiptValues((current) =>
               receiptFiles.map((_, candidateIndex) =>
@@ -1706,12 +1699,10 @@ function SaleItemsStage({
 }
 
 function PaymentStage({
-  itemCount,
   total,
   paid,
   remaining,
   payments,
-  pixAccounts,
   ready,
   onAdd,
   onUpdate,
@@ -1732,262 +1723,87 @@ function PaymentStage({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const [showTypePicker, setShowTypePicker] = useState(false);
-  const [activePaymentIndex, setActivePaymentIndex] = useState(0);
-  const safePaymentIndex = Math.min(
-    activePaymentIndex,
-    Math.max(0, payments.length - 1),
-  );
-  const activePayment = payments[safePaymentIndex];
-
   return (
     <Card className={STAGE_CARD_CLASS}>
-      <CardContent className="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
-        <div className="mx-auto max-w-2xl space-y-2">
-          <div className="payment-stage-summary rounded-xl bg-secondary px-3 py-2.5 sm:rounded-2xl sm:px-4 sm:py-3">
-            <p className="font-bold">Dinheiro recebido e Pix por comprovante</p>
-            <p className="flow-stage-support mt-1 text-sm text-muted-foreground">
-              Informe dinheiro somente se já recebeu. O Pix dos {itemCount}{' '}
-              aparelho(s) será preenchido após ler e identificar os
-              comprovantes, que podem ser anexados agora ou depois em Vendas.
+      <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="mx-auto max-w-2xl space-y-4">
+          <div className="rounded-xl bg-secondary p-4">
+            <h3 className="text-lg font-bold">
+              Recebeu alguma parte em dinheiro?
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Informe somente o dinheiro recebido. Na próxima etapa, o sistema
+              lê o valor e o banco do comprovante Pix — sem digitar essas
+              informações.
             </p>
           </div>
-
-          {payments.length === 0 && (
-            <div className="rounded-xl border border-amber-500/35 bg-amber-50 p-3 text-center text-amber-950 dark:bg-amber-500/10 dark:text-amber-100">
-              <p className="font-bold">Recebido até agora: R$ 0,00</p>
-              <p className="flow-stage-support mt-1 text-sm">
-                Pode continuar sem banco, valor de Pix ou comprovante. O saldo
-                ficará pendente até registrar o recebimento.
-              </p>
-            </div>
-          )}
-
-          {activePayment && (
-            <div className="rounded-xl border bg-background p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 font-bold">
-                  {activePayment.method === 'pix' ? (
-                    <WalletCards className="size-5 text-primary" />
-                  ) : (
-                    <Banknote className="size-5 text-primary" />
-                  )}
-                  {activePayment.method === 'pix' ? 'Pix' : 'Dinheiro'}
-                  {payments.length > 1 && (
-                    <span className="text-xs font-semibold text-muted-foreground">
-                      {safePaymentIndex + 1} de {payments.length}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  {payments.length > 1 && (
-                    <>
-                      <Button
-                        aria-label="Pagamento anterior"
-                        className="size-9"
-                        disabled={safePaymentIndex === 0}
-                        onClick={() =>
-                          setActivePaymentIndex((current) =>
-                            Math.max(0, current - 1),
-                          )
-                        }
-                        size="icon"
-                        variant="ghost"
-                      >
-                        <ChevronLeft />
-                      </Button>
-                      <Button
-                        aria-label="Próximo pagamento"
-                        className="size-9"
-                        disabled={safePaymentIndex >= payments.length - 1}
-                        onClick={() =>
-                          setActivePaymentIndex((current) =>
-                            Math.min(payments.length - 1, current + 1),
-                          )
-                        }
-                        size="icon"
-                        variant="ghost"
-                      >
-                        <ChevronRight />
-                      </Button>
-                    </>
-                  )}
-                  <Button
-                    aria-label={`Remover pagamento ${safePaymentIndex + 1}`}
-                    className="size-9"
-                    onClick={() => {
-                      onRemove(activePayment.id);
-                      setActivePaymentIndex((current) =>
-                        Math.max(0, current - 1),
-                      );
-                    }}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <Trash2 />
-                  </Button>
-                </div>
-              </div>
-
+          {payments
+            .filter((p) => p.method === 'cash')
+            .map((payment) => (
               <div
-                className={`mt-2 grid gap-2 ${activePayment.method === 'pix' ? 'grid-cols-2' : ''}`}
+                key={payment.id}
+                className="flex items-end gap-2 rounded-xl border p-3"
               >
-                {activePayment.method === 'pix' && (
-                  <div>
-                    <label
-                      className="text-sm font-semibold"
-                      htmlFor={`bank-${activePayment.id}`}
-                    >
-                      Conta Pix
-                    </label>
-                    <NativeSelect
-                      className="mt-1 h-11 w-full [&_select]:h-11"
-                      id={`bank-${activePayment.id}`}
-                      onChange={(event) =>
-                        onUpdate(activePayment.id, {
-                          bank: event.target.value,
-                        })
-                      }
-                      value={activePayment.bank}
-                    >
-                      {pixAccounts.length === 0 && (
-                        <NativeSelectOption value="">
-                          Cadastre uma conta Pix
-                        </NativeSelectOption>
-                      )}
-                      {pixAccounts.map((account) => (
-                        <NativeSelectOption key={account.id} value={account.id}>
-                          {account.name}
-                        </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  </div>
-                )}
-                <div>
-                  <label
-                    className="text-sm font-semibold"
-                    htmlFor={`amount-${activePayment.id}`}
-                  >
-                    Valor
-                  </label>
+                <label
+                  htmlFor={`cash-${payment.id}`}
+                  className="flex-1 text-sm font-semibold"
+                >
+                  Dinheiro recebido
                   <Input
-                    className="mt-1 h-11 text-right text-base font-bold"
-                    id={`amount-${activePayment.id}`}
+                    id={`cash-${payment.id}`}
+                    className="mt-1 h-12 text-right text-lg font-bold"
                     inputMode="decimal"
+                    value={payment.amount}
                     onChange={(event) =>
-                      onUpdate(activePayment.id, {
-                        amount: event.target.value,
-                      })
+                      onUpdate(payment.id, { amount: event.target.value })
                     }
-                    value={activePayment.amount}
                   />
-                </div>
+                </label>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Remover dinheiro recebido"
+                  onClick={() => onRemove(payment.id)}
+                >
+                  <Trash2 />
+                </Button>
               </div>
-            </div>
-          )}
-
-          {!showTypePicker && (
-            <Button
-              className="h-11 w-full rounded-xl border-dashed"
-              onClick={() => setShowTypePicker(true)}
-              variant="outline"
-            >
-              <Plus /> Informar dinheiro ou Pix manual
-            </Button>
-          )}
-
-          {showTypePicker && (
-            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 rounded-xl bg-muted p-2">
-              <Button
-                className="h-12 rounded-xl"
-                onClick={() => {
-                  setActivePaymentIndex(payments.length);
-                  onAdd('pix');
-                  setShowTypePicker(false);
-                }}
-                variant="outline"
-              >
-                <WalletCards /> Pix
-              </Button>
-              <Button
-                className="h-12 rounded-xl"
-                onClick={() => {
-                  setActivePaymentIndex(payments.length);
-                  onAdd('cash');
-                  setShowTypePicker(false);
-                }}
-                variant="outline"
-              >
-                <Banknote /> Dinheiro
-              </Button>
-              <Button
-                aria-label="Cancelar novo pagamento"
-                className="size-11"
-                onClick={() => setShowTypePicker(false)}
-                size="icon"
-                variant="ghost"
-              >
-                <X />
-              </Button>
-            </div>
-          )}
-
-          <div className="payment-stage-totals rounded-xl bg-muted p-3">
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Total da venda</span>
+            ))}
+          <Button
+            className="h-12 w-full"
+            variant="outline"
+            onClick={() => onAdd('cash')}
+          >
+            <Banknote /> Informar dinheiro recebido
+          </Button>
+          <div className="space-y-2 rounded-xl bg-muted p-4">
+            <p className="flex justify-between">
+              <span>Valor da venda</span>
               <strong>{formatMoney(total)}</strong>
-            </div>
-            <div className="mt-1 flex justify-between text-sm">
-              <span className="text-muted-foreground">Informado</span>
+            </p>
+            <p className="flex justify-between">
+              <span>Dinheiro recebido</span>
               <strong>{formatMoney(paid)}</strong>
-            </div>
-            <div className="mt-2 flex justify-between border-t pt-2">
-              <span className="font-bold">
-                {remaining < 0 ? 'Excedente' : 'Restante'}
+            </p>
+            <p className="flex justify-between border-t pt-2">
+              <span>
+                {remaining < 0 ? 'Acima da venda' : 'Saldo para conferir'}
               </span>
-              <strong
-                className={
-                  remaining === 0
-                    ? 'text-success'
-                    : remaining < 0
-                      ? 'text-violet-700 dark:text-violet-300'
-                      : 'text-destructive'
-                }
-              >
-                {formatMoney(Math.abs(remaining))}
-              </strong>
-            </div>
+              <strong>{formatMoney(Math.abs(remaining))}</strong>
+            </p>
           </div>
-          {remaining !== 0 && paid > 0 && (
-            <div
-              className="payment-stage-warning rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
-              role="alert"
-            >
-              <p className="font-bold">
-                {remaining > 0
-                  ? `Falta receber ${formatMoney(remaining)}`
-                  : `Recebido a mais ${formatMoney(-remaining)}`}
-              </p>
-              <p className="mt-0.5 text-xs">
-                Valor da venda: {formatMoney(total)} · Total pago:{' '}
-                {formatMoney(paid)}. A venda pode ser concluída e ficará
-                sinalizada em Vendas e nos relatórios.
-              </p>
-            </div>
-          )}
+          <p className="text-sm text-muted-foreground">
+            Pode continuar sem dinheiro e sem comprovante. A venda fica salva
+            com pagamento pendente para anexar o comprovante depois.
+          </p>
         </div>
       </CardContent>
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-2.5 sm:p-3">
-        <Button className="h-12 rounded-xl" onClick={onBack} variant="outline">
+      <div className="grid shrink-0 grid-cols-2 gap-2 border-t p-3">
+        <Button className="h-12" variant="outline" onClick={onBack}>
           <ArrowLeft /> Voltar
         </Button>
-        <Button className="h-12 rounded-xl" disabled={!ready} onClick={onNext}>
-          {payments.length === 0
-            ? 'Continuar sem pagamento'
-            : remaining !== 0 && paid > 0
-              ? 'Continuar com aviso'
-              : 'Comprovante'}{' '}
-          <ArrowRight className="hidden sm:block" />
+        <Button className="h-12" disabled={!ready} onClick={onNext}>
+          Comprovante <ArrowRight />
         </Button>
       </div>
     </Card>
@@ -1995,6 +1811,7 @@ function PaymentStage({
 }
 
 function ReceiptStage({
+  cashCents,
   files,
   receiptValues,
   targetCents,
@@ -2009,6 +1826,7 @@ function ReceiptStage({
   onNext,
   onReceiptValueChange,
 }: {
+  cashCents: number;
   files: File[];
   receiptValues: ReceiptValueInput[];
   targetCents: number;
@@ -2107,6 +1925,7 @@ function ReceiptStage({
           </div>
         )}
         <ReceiptReconciliationEditor
+          cashCents={cashCents}
           className="mt-3 max-w-xl"
           disabled={preparing}
           files={files}
@@ -2194,12 +2013,7 @@ function SaleReview({
 }) {
   const reconciliation = deriveReceiptReconciliation(
     receiptValues,
-    paymentMethodTotals(
-      payments.map((payment) => ({
-        method: payment.method,
-        amountCents: parseMoneyInput(payment.amount),
-      })),
-    ).pixCents,
+    Math.max(0, total - paid),
   );
   return (
     <Card className={STAGE_CARD_CLASS}>
@@ -2374,7 +2188,7 @@ function SaleReview({
                   }`}
                 >
                   {reconciliation.status === 'reconciled'
-                    ? 'Comprovantes conferem com o Pix informado'
+                    ? `Comprovantes conferem com o ${receiptTargetLabel(paid)}`
                     : reconciliation.status === 'divergent'
                       ? `${(reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} nos comprovantes · verificar venda`
                       : 'Leitura em andamento · você já pode salvar a venda'}

@@ -6,9 +6,9 @@ import {
 } from '@/lib/sale-display-status';
 
 import { createOperationId } from '@/lib/client-operation-id';
+import { LegacyReceiptReview } from '@/components/pdv/legacy-receipt-review';
 
 import { useState } from 'react';
-import { AccountsManager } from './catalog-production-view';
 import { can, defaultPermissions } from '@/lib/permissions';
 import {
   PermissionFields,
@@ -17,7 +17,6 @@ import {
 import {
   ArrowDownToLine,
   ArrowRight,
-  Building2,
   CircleUserRound,
   KeyRound,
   ListChecks,
@@ -92,7 +91,6 @@ import {
 type Manager =
   | 'products'
   | 'clients'
-  | 'pix'
   | 'order-statuses'
   | 'users'
   | 'install'
@@ -184,6 +182,13 @@ export function SettingsProductionView({
           />
         </Tab>
         <Tab value="finance">
+          {data.user.role !== 'operator' &&
+            can(data.user, 'sales.receipts') && (
+              <LegacyReceiptReview
+                csrfToken={data.csrfToken}
+                onChanged={onChanged}
+              />
+            )}
           <SettingsCard
             icon={ListChecks}
             title="Status do pedido"
@@ -193,18 +198,10 @@ export function SettingsProductionView({
             onManage={() => setManager('order-statuses')}
           />
           <SettingsCard
-            icon={Building2}
-            title="Contas Pix"
-            detail={`${data.pixAccounts.filter((account) => account.active).length} ativas`}
-            description="A conta escolhida fica registrada no pagamento."
-            disabled={!can(data.user, 'finance.manage')}
-            onManage={() => setManager('pix')}
-          />
-          <SettingsCard
             icon={WalletCards}
             title="Formas de pagamento"
             detail="Pix e dinheiro"
-            description="Dinheiro e Pix só aparecem quando adicionados pelo botão +."
+            description="Pix identificado nos comprovantes. Dinheiro informado manualmente."
             disabled
           />
         </Tab>
@@ -258,12 +255,6 @@ export function SettingsProductionView({
         onChanged={onChanged}
         onOpenChange={(open) => !open && setManager(null)}
         open={manager === 'clients'}
-      />
-      <PixDialog
-        data={data}
-        onChanged={onChanged}
-        onOpenChange={(open) => !open && setManager(null)}
-        open={manager === 'pix'}
       />
       <OrderStatusesDialog
         data={data}
@@ -714,35 +705,6 @@ function ClientsDialog({
             )}
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function PixDialog({ data, open, onOpenChange, onChanged }: CommonDialogProps) {
-  return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="flex h-[85dvh] max-h-[92dvh] max-w-2xl flex-col overflow-hidden p-0">
-        <DialogHeader className="shrink-0 border-b p-4 pr-12">
-          <DialogTitle>Contas Pix</DialogTitle>
-          <DialogDescription>
-            Cadastre, edite ou desative contas. Os pagamentos anteriores ficam
-            preservados.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 p-4">
-          <AccountsManager
-            items={data.pixAccounts}
-            csrfToken={data.csrfToken}
-            canManage={can(data.user, 'finance.manage')}
-            onChanged={onChanged}
-          />
-        </div>
-        <DialogFooter className="shrink-0 border-t p-3">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Fechar
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

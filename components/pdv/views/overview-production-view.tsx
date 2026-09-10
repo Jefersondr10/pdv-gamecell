@@ -85,7 +85,7 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
         </div>
         <div>
           <p className="text-[11px] font-semibold text-muted-foreground">
-            Pagamento informado
+            Comprovantes + dinheiro
           </p>
           <p className="mt-0.5 break-words text-base font-bold tabular-nums">
             {money(sale.receivedCents)}
@@ -407,14 +407,18 @@ export function OverviewProductionView({
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
               <div className="rounded-2xl border bg-white p-3 sm:p-4">
                 <p className="text-xs font-semibold text-muted-foreground">
-                  Pix informado
+                  {totals.cashCents > 0
+                    ? 'Saldo das vendas após dinheiro'
+                    : 'Valor das vendas'}
                 </p>
                 <p className="mt-1 break-words text-lg font-bold tabular-nums sm:text-2xl">
                   {money(totals.pixCents)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Dinheiro (manual): {money(totals.cashCents)} · Total pago:{' '}
-                  {money(totals.receivedCents)}
+                  {totals.cashCents > 0 && (
+                    <>Dinheiro (manual): {money(totals.cashCents)} · </>
+                  )}
+                  Total pago: {money(totals.receivedCents)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {totals.saleCount} venda(s){' '}
@@ -467,7 +471,7 @@ export function OverviewProductionView({
                   <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
                     {totals.shortfallCents > 0 && (
                       <span>
-                        Comprovantes abaixo do Pix{' '}
+                        Comprovantes abaixo do saldo da venda{' '}
                         <strong className="ml-1 text-base tabular-nums">
                           {money(totals.shortfallCents)}
                         </strong>
@@ -475,7 +479,7 @@ export function OverviewProductionView({
                     )}
                     {totals.surplusCents > 0 && (
                       <span>
-                        Comprovantes acima do Pix{' '}
+                        Comprovantes acima do saldo da venda{' '}
                         <strong className="ml-1 text-base tabular-nums">
                           {money(totals.surplusCents)}
                         </strong>
@@ -491,7 +495,7 @@ export function OverviewProductionView({
                 )}
                 <p className="mt-1 text-xs">
                   {comparison === 'matched'
-                    ? 'Comprovantes conferem com o Pix, e Pix mais dinheiro fecham cada venda. Dinheiro é informado manualmente. O status também considera as fotos dos aparelhos.'
+                    ? 'Comprovantes mais dinheiro conferem com o preço de cada venda. Dinheiro é informado manualmente. O status também considera as fotos dos aparelhos.'
                     : comparison === 'pending'
                       ? 'Há documentos ausentes ou ainda sem valor identificado.'
                       : 'Confira as vendas sinalizadas abaixo. Diferenças entre vendas não se compensam.'}
@@ -517,7 +521,7 @@ export function OverviewProductionView({
                 )}
                 {totals.cashCents > 0 && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    O pago informado inclui {money(totals.cashCents)} em
+                    O total recebido inclui {money(totals.cashCents)} em
                     dinheiro, que pode não ter comprovante. Pix:{' '}
                     {money(totals.receivedCents - totals.cashCents)}.
                   </p>

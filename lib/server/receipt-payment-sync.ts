@@ -1,3 +1,4 @@
+import { SALE_RECEIPT_TOTAL_SQL } from './sale-status-sql.ts';
 import {
   can,
   resolvePermissions,
@@ -54,7 +55,11 @@ export function requestReceiptPaymentSync(
   now: number,
   targetPaymentId: string | null = null,
 ) {
-  if (!can(scope.subject, 'sales.payments'))
+  if (
+    !can(scope.subject, 'sales.payments') &&
+    !can(scope.subject, 'sales.receipts') &&
+    !can(scope.subject, 'sell')
+  )
     return [stopReceiptPaymentSync(db, scope.storeId, scope.saleId, now)];
   return [
     db
@@ -97,9 +102,9 @@ export async function readReceiptPaymentSync(
 ) {
   const results = await db.batch([
     db
-      .prepare(`SELECT status, products_total_cents AS productsTotalCents, received_total_cents AS receivedTotalCents,
+      .prepare(`SELECT status, products_total_cents AS productsTotalCents, received_total_cents AS receivedTotalCents, ${SALE_RECEIPT_TOTAL_SQL} AS effectiveReceiptTotalCents,
       received_difference_cents AS receivedDifferenceCents, ${paymentSnapshot} AS paymentsJson, ${receiptSnapshot} AS receiptsJson
-      FROM sales WHERE id=? AND store_id=?`)
+      FROM sales s WHERE id=? AND store_id=?`)
       .bind(saleId, storeId, saleId, storeId, saleId, storeId),
     db
       .prepare(`SELECT request_id AS requestId, requested_by AS requestedBy, target_payment_id AS targetPaymentId, status, updated_at AS updatedAt
@@ -111,6 +116,7 @@ export async function readReceiptPaymentSync(
         status: string;
         productsTotalCents: number;
         receivedTotalCents: number;
+        effectiveReceiptTotalCents: number;
         receivedDifferenceCents: number;
         paymentsJson: string;
         receiptsJson: string;
@@ -390,14 +396,30 @@ export async function settleReceiptPaymentSync(
       active: number;
     }>();
   const allowed =
-    actor?.active === 1 &&
-    can(
-      {
-        role: actor.role,
-        permissions: resolvePermissions(actor.role, actor.permissionsJson),
-      },
-      'sales.payments',
-    );
+    (actor?.active === 1 &&
+      can(
+        {
+          role: actor.role,
+          permissions: resolvePermissions(actor.role, actor.permissionsJson),
+        },
+        'sales.receipts',
+      )) ||
+    (actor?.active === 1 &&
+      can(
+        {
+          role: actor.role,
+          permissions: resolvePermissions(actor.role, actor.permissionsJson),
+        },
+        'sell',
+      )) ||
+    (actor?.active === 1 &&
+      can(
+        {
+          role: actor.role,
+          permissions: resolvePermissions(actor.role, actor.permissionsJson),
+        },
+        'sales.payments',
+      ));
   const pixPayments = payments.filter((p) => p.method === 'pix');
   if (
     allowed &&

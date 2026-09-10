@@ -1,5 +1,5 @@
 import type { ReceiptAttachmentRecord } from '@/lib/pdv-types';
-import { receiptDocumentLines } from '@/lib/receipt-document';
+import { shortReceiptDate } from '@/lib/receipt-document';
 
 export function ReceiptPaymentDetails({
   receipts,
@@ -23,6 +23,7 @@ export function ReceiptPaymentDetails({
           <div className="flex items-start justify-between gap-3">
             <a
               href={receipt.url}
+              title={receipt.name || `Comprovante ${index + 1}`}
               target="_blank"
               rel="noreferrer"
               className="font-bold text-primary underline underline-offset-2"
@@ -39,24 +40,74 @@ export function ReceiptPaymentDetails({
             </strong>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            {receipt.receiptPaymentId
-              ? 'Pix registrado a partir deste comprovante'
-              : 'Dados do documento - confira o registro do pagamento'}
+            Pix identificado no comprovante
             {receipt.receiptAmountSource === 'manual'
               ? ' · valor corrigido manualmente'
               : ''}
           </p>
           {receipt.receiptDetails ? (
-            <div className="mt-2 space-y-1 break-words">
-              {receiptDocumentLines(receipt.receiptDetails).map((line) => (
-                <p key={line}>{line}</p>
-              ))}
+            <div className="mt-3 space-y-3 break-words">
+              <p className="text-sm tabular-nums">
+                {shortReceiptDate(receipt.receiptDetails.paidAtText)}
+              </p>
+              <div className="grid gap-3">
+                <div className="rounded-lg bg-muted/50 p-2.5">
+                  <p className="mb-1 font-bold text-muted-foreground">
+                    Pagador
+                  </p>
+                  <p>
+                    {receipt.receiptDetails.payerName ||
+                      'Nome não identificado'}
+                  </p>
+                  <p className="text-muted-foreground">
+                    {receipt.receiptDetails.payerBank ||
+                      'Banco não identificado'}
+                  </p>
+                </div>
+                <div className="rounded-lg border bg-secondary/30 p-2.5">
+                  <p className="mb-1 font-bold text-primary">Recebedor</p>
+                  <p>
+                    {receipt.receiptDetails.recipientName ||
+                      'Nome não identificado'}
+                  </p>
+                  {receipt.receiptDetails.recipientDocument && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      CPF/CNPJ: ***
+                      {receipt.receiptDetails.recipientDocument.slice(-4)}
+                    </p>
+                  )}
+                  <dl className="mt-3 border-t border-primary/15 pt-2">
+                    <dt className="text-sm font-semibold text-muted-foreground">
+                      Banco recebedor
+                    </dt>
+                    <dd className="mt-1 font-bold text-primary">
+                      {receipt.receiptDetails.recipientBank ||
+                        'Não identificado no comprovante'}
+                    </dd>
+                  </dl>
+                </div>
+              </div>
+              <div className="border-t pt-2 text-xs text-muted-foreground">
+                <p>Identificador Pix</p>
+                <p className="mt-1 break-all font-mono">
+                  {receipt.receiptDetails.transactionId || 'Não identificado'}
+                </p>
+              </div>
             </div>
           ) : (
-            <p className="mt-2 text-muted-foreground">
-              Dados bancários ainda não identificados. Em Editar venda, use
-              Reler comprovante para tentar identificar.
-            </p>
+            <div className="mt-3 rounded-lg border bg-secondary/30 p-2.5">
+              <dl>
+                <dt className="text-sm font-semibold text-muted-foreground">
+                  Banco recebedor
+                </dt>
+                <dd className="mt-1 font-bold text-primary">
+                  Não identificado no comprovante
+                </dd>
+              </dl>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Em Editar venda, use Reler comprovante para tentar identificar.
+              </p>
+            </div>
           )}
           {receipt.receiptReviewReason && (
             <p role="alert" className="mt-2 font-semibold text-amber-800">

@@ -7,6 +7,7 @@ import {
   receiptEvidenceProblem,
   receiptConflictSql,
   receiptAllocationProblem,
+  receiptClaimStatements,
 } from './receipt-evidence-safety.ts';
 
 type State = NonNullable<Awaited<ReturnType<typeof readReceiptPaymentSync>>>;
@@ -123,37 +124,81 @@ export async function settleAutomaticReceiptPayments(
     return review(
       'O pagamento deste comprovante foi alterado manualmente. Confira os pagamentos; dinheiro não será convertido em Pix.',
     );
-  if (links.some((l) => !receipts.some((r) => r.id === l.attachmentId)))
-    return review(
-      'Um comprovante de Pix registrado foi excluído. Confira o pagamento antes de substituir o anexo.',
-    );
   // The established explicit/manual allocation path remains available for old sales.
   if (
     request.targetPaymentId ||
     pix.some((p) => !links.some((l) => l.paymentId === p.id))
   ) {
-    for (const doc of documents) {
-      const matches =
-        doc?.recipientBank && doc.recipientDocument
-          ? accounts.filter(
-              (a) =>
-                a.active === 1 &&
-                a.bank &&
-                a.document &&
-                normalizeReceiptIdentity(a.bank) ===
-                  normalizeReceiptIdentity(doc.recipientBank!) &&
-                a.document === doc.recipientDocument,
-            )
-          : [];
+    // Legacy Pix entries are historical, not a second amount to reconcile.
+    // Preserve them, claim the evidence, and let the shared receipt-income model
+    // expose receipts + cash. No account selection or allocation is required.
+    const auditId = `receipt-verified:${request.requestId}`;
+    const now = Date.now();
+    const details = JSON.stringify({
+      receiptIds: receipts.map((r) => r.id),
+      source: 'receipt-income',
+    });
+    try {
+      await db.batch([
+        db
+          .prepare(`INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+          VALUES(?,?,?,'sale.receipts_verified','sale',CASE WHEN
+          EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending')
+          AND EXISTS(SELECT 1 FROM sales WHERE id=? AND store_id=? AND status='completed')
+          AND (${evidenceSql})=? AND ${receiptConflictSql}
+          THEN ? ELSE NULL END,?,?)`)
+          .bind(
+            auditId,
+            storeId,
+            request.requestedBy,
+            saleId,
+            storeId,
+            request.requestId,
+            saleId,
+            storeId,
+            saleId,
+            storeId,
+            evidenceJson,
+            storeId,
+            saleId,
+            storeId,
+            saleId,
+            saleId,
+            details,
+            now,
+          ),
+        ...receiptClaimStatements(
+          db,
+          {
+            storeId,
+            saleId,
+            actorId: request.requestedBy,
+            paymentIds: pix.map((p) => p.id),
+          },
+          receipts,
+          auditId,
+          details,
+          now,
+        ),
+        db
+          .prepare(
+            "UPDATE attachments SET receipt_review_reason=NULL WHERE sale_id=? AND store_id=? AND kind='receipt'",
+          )
+          .bind(saleId, storeId),
+        db
+          .prepare(
+            "UPDATE sale_receipt_payment_sync SET status='applied',updated_at=? WHERE sale_id=? AND store_id=? AND request_id=?",
+          )
+          .bind(now, saleId, storeId, request.requestId),
+      ]);
+    } catch (error) {
       if (
-        matches.length === 1 &&
-        !pix.some((p) => p.pixAccountId === matches[0].id)
+        !(error instanceof Error) ||
+        !/constraint failed/i.test(error.message)
       )
-        return review(
-          'O banco/recebedor do comprovante não corresponde à conta do Pix informado. Confira a conta do pagamento.',
-        );
+        throw error;
     }
-    return false;
+    return true;
   }
   if (
     !receipts.length ||
@@ -170,20 +215,12 @@ export async function settleAutomaticReceiptPayments(
     const receipt = receipts[i];
     const doc = documents[i];
     const link = links.find((l) => l.attachmentId === receipt.id);
-    if (
-      !doc ||
-      !doc.automaticEligible ||
-      doc.state !== 'completed' ||
-      !doc.transactionId ||
-      !/^E[A-Za-z0-9]{31}$/.test(doc.transactionId) ||
-      !doc.recipientBank ||
-      !doc.recipientDocument ||
-      (!link && receipt.source !== 'ocr')
-    )
+    if (doc && (doc.blocked || doc.ambiguous || doc.state !== 'completed'))
       return review(
-        'Confira o recebedor e registre o Pix: a leitura não identificou todos os dados da transação com segurança.',
+        'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
       );
-    if (link && link.transactionId !== doc.transactionId)
+    const transactionId = doc?.transactionId ?? `receipt:${receipt.id}`;
+    if (link && link.transactionId !== transactionId)
       return review(
         'A identificação da transação mudou na releitura. Confira o pagamento registrado.',
       );
@@ -193,20 +230,18 @@ export async function settleAutomaticReceiptPayments(
         a.bank &&
         a.document &&
         normalizeReceiptIdentity(a.bank) ===
-          normalizeReceiptIdentity(doc.recipientBank!) &&
-        a.document === doc.recipientDocument,
+          normalizeReceiptIdentity(doc?.recipientBank ?? '') &&
+        a.document === doc?.recipientDocument,
     );
-    if (matches.length !== 1)
-      return review(
-        matches.length
-          ? 'Mais de uma conta corresponde ao recebedor. Escolha a conta ao conferir o Pix.'
-          : 'Conta recebedora não identificada no cadastro. Confira o banco e CPF/CNPJ da conta ou registre o Pix manualmente.',
-      );
+    const account =
+      matches.length === 1
+        ? matches[0]
+        : { id: null, name: doc?.recipientBank || 'Banco não identificado' };
     const claim = await db
       .prepare(
         'SELECT attachment_id AS attachmentId FROM receipt_payment_links WHERE store_id=? AND transaction_id=?',
       )
-      .bind(storeId, doc.transactionId)
+      .bind(storeId, transactionId)
       .first<{ attachmentId: string }>();
     if (claim && claim.attachmentId !== receipt.id)
       return review(
@@ -214,8 +249,8 @@ export async function settleAutomaticReceiptPayments(
       );
     planned.push({
       receipt,
-      document: doc,
-      account: matches[0],
+      transactionId,
+      account,
       link,
       paymentId: link?.paymentId ?? crypto.randomUUID(),
     });
@@ -318,7 +353,7 @@ export async function settleAutomaticReceiptPayments(
             storeId,
             saleId,
             p.paymentId,
-            p.document.transactionId,
+            p.transactionId,
             now,
           ),
       );

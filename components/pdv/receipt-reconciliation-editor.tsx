@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { parseMoneyInput } from '@/lib/money';
 import {
   deriveReceiptReconciliation,
+  receiptTargetLabel,
   type ReceiptValueInput,
 } from '@/lib/receipt-reconciliation';
 import { cn } from '@/lib/utils';
@@ -38,6 +39,7 @@ type AnalysisState = {
 };
 
 export function ReceiptReconciliationEditor({
+  cashCents = 0,
   className,
   disabled = false,
   files,
@@ -46,6 +48,7 @@ export function ReceiptReconciliationEditor({
   targetCents,
   values,
 }: {
+  cashCents?: number;
   className?: string;
   disabled?: boolean;
   files: File[];
@@ -249,6 +252,7 @@ export function ReceiptReconciliationEditor({
 
       {showSummary && (
         <ReconciliationSummary
+          cashCents={cashCents}
           className="mt-3"
           reconciliation={reconciliation}
           targetCents={targetCents}
@@ -259,10 +263,12 @@ export function ReceiptReconciliationEditor({
 }
 
 export function ReconciliationSummary({
+  cashCents = 0,
   className,
   reconciliation,
   targetCents,
 }: {
+  cashCents?: number;
   className?: string;
   reconciliation: ReturnType<typeof deriveReceiptReconciliation>;
   targetCents: number;
@@ -287,18 +293,20 @@ export function ReconciliationSummary({
         {reconciliation.status === 'not_required'
           ? 'Sem Pix — comprovante não exigido'
           : reconciled
-            ? 'Comprovantes iguais ao Pix informado'
+            ? `Comprovantes iguais ao ${receiptTargetLabel(cashCents)}`
             : divergent
               ? 'Comprovantes não conferem'
               : 'Conferência dos comprovantes pendente'}
       </p>
       <p className="mt-0.5">
         {reconciliation.status === 'not_required'
-          ? 'Dinheiro é considerado pelo valor informado manualmente.'
+          ? cashCents > 0
+            ? 'Dinheiro é considerado pelo valor informado manualmente.'
+            : 'Não há saldo a receber por Pix.'
           : reconciled
             ? `Comprovantes: ${formatMoney(reconciliation.confirmedTotalCents)} · Pix: ${formatMoney(targetCents)}.`
             : divergent
-              ? `Os comprovantes estão ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} ${(reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado. Dinheiro não entra nesta comparação.`
+              ? `Os comprovantes estão ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} ${(reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(cashCents)}.${cashCents > 0 ? ' O dinheiro recebido já foi descontado do saldo.' : ''}`
               : `${reconciliation.pendingReceiptCount} comprovante(s) ainda sem valor confirmado.`}
       </p>
     </div>

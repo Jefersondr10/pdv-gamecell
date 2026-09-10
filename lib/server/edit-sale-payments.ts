@@ -1,3 +1,4 @@
+import { SALE_RECEIVED_TOTAL_SQL } from './sale-status-sql';
 import { assertCsrf, requireSession } from './auth';
 import {
   apiError,
@@ -11,7 +12,6 @@ import {
 } from './http';
 import { consumeStoreWriteBudget } from './rate-limit';
 import { runtime } from './runtime';
-import { stopReceiptPaymentSync } from './receipt-payment-sync';
 
 type Payment = {
   id: string;
@@ -52,7 +52,7 @@ function parsePayments(value: unknown): Payment[] {
         id: stringField(raw.id, 'Pagamento', { max: 80 }),
         method: raw.method,
         pixAccountId:
-          raw.method === 'pix'
+          raw.method === 'pix' && raw.pixAccountId != null
             ? stringField(raw.pixAccountId, 'Conta Pix', { max: 80 })
             : null,
         amountCents: integerField(raw.amountCents, 'Valor do pagamento', {
@@ -136,8 +136,8 @@ export async function editSalePayments(
           amount_cents AS amountCents FROM payments WHERE sale_id = ? AND store_id = ? ORDER BY created_at, id`)
           .bind(saleId, storeId),
         db
-          .prepare(`SELECT products_total_cents AS productsTotalCents, received_total_cents AS receivedTotalCents,
-          received_difference_cents AS receivedDifferenceCents FROM sales WHERE id = ? AND store_id = ?`)
+          .prepare(`SELECT products_total_cents AS productsTotalCents, ${SALE_RECEIVED_TOTAL_SQL} AS receivedTotalCents,
+          (${SALE_RECEIVED_TOTAL_SQL} - s.products_total_cents) AS receivedDifferenceCents FROM sales s WHERE id = ? AND store_id = ?`)
           .bind(saleId, storeId),
       ]);
       return json({
@@ -148,6 +148,18 @@ export async function editSalePayments(
       });
     };
     if (await readReplay()) return response(true);
+    if (
+      changes.some(
+        (p) =>
+          p.method !== 'cash' ||
+          before.find((b) => b.id === p.id)?.method !== 'cash',
+      )
+    )
+      throw new HttpError(
+        400,
+        'O Pix é definido pelo comprovante. Corrija ou releia o arquivo; somente dinheiro pode ser editado aqui.',
+        'PIX_FROM_RECEIPT',
+      );
     const sale = await db
       .prepare('SELECT status FROM sales WHERE id = ? AND store_id = ?')
       .bind(saleId, storeId)
@@ -225,7 +237,6 @@ export async function editSalePayments(
               storeId,
             ),
         ),
-        stopReceiptPaymentSync(db, storeId, saleId, now),
         db
           .prepare(`UPDATE sales SET received_total_cents = (SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE sale_id = ? AND store_id = ?),
           received_difference_cents = (SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE sale_id = ? AND store_id = ?) - products_total_cents

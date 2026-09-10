@@ -1732,7 +1732,7 @@ function GuideDialog({
           <GuideStep number="Novo" title="Vendas e estoque mais diretos">
             Toque em uma venda para ver produtos, SNs, pagamentos e
             comprovantes. Use o filtro Vendedor junto do período. Conciliado
-            significa que os comprovantes conferem com o Pix informado; não
+            significa que comprovantes mais dinheiro conferem com o valor da venda; não
             confirma crédito no banco. No estoque, pesquise modelo, cor e
             memória em qualquer ordem, ou um SN. Com estoque, Sem estoque e
             Todos filtram as variações. Os preços em edição ficam destacados. O
@@ -1784,7 +1784,7 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="Novo" title="Comprovantes: conferir os pagamentos">
             No menu da loja, abra Comprovantes e escolha o período pela data da
-            venda. Compare o Pix informado com os valores dos comprovantes,
+            venda. O Pix vem dos comprovantes e é somado ao dinheiro recebido,
             separados por venda. Toque em um arquivo para abrir a foto ou PDF,
             passe para o próximo ou abra a venda para corrigir dados. Valores
             ainda não identificados ficam pendentes; anexos só são carregados ao

@@ -1,8 +1,6 @@
 import type { SaleRecord } from './pdv-types.ts';
-import {
-  deriveReceiptReconciliation,
-  paymentMethodTotals,
-} from './receipt-reconciliation.ts';
+import { deriveReceiptReconciliation } from './receipt-reconciliation.ts';
+import { saleReceiptIncome } from './receipt-income.ts';
 import { parseMoneyInput } from './money.ts';
 
 export function parseSalePriceInput(value: string) {
@@ -36,12 +34,13 @@ export function applySalePrices(
         item.soldPriceCents,
     })),
     productsTotalCents: value.productsTotalCents,
-    receivedTotalCents: value.receivedTotalCents,
-    receivedDifferenceCents: value.receivedDifferenceCents,
+    receivedTotalCents: saleReceiptIncome(sale).receivedTotalCents,
+    receivedDifferenceCents:
+      saleReceiptIncome(sale).receivedTotalCents - value.productsTotalCents,
     priceDifferenceCents: value.priceDifferenceCents,
     reconciliation: deriveReceiptReconciliation(
       sale.receipts,
-      paymentMethodTotals(sale.payments).pixCents,
+      Math.max(0, value.productsTotalCents - saleReceiptIncome(sale).cashCents),
     ),
   };
 }

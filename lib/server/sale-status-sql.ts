@@ -12,13 +12,26 @@ export function validReceiptAmountSql(alias: 'a' | 'ar') {
 const complete = `(EXISTS (${receipts}) AND NOT EXISTS (${receipts} AND NOT ${validReceiptAmountSql('ar')}))`;
 const failed = `EXISTS (${receipts} AND ((ar.receipt_amount_cents IS NOT NULL AND NOT ${validReceiptAmountSql('ar')}) OR (ar.receipt_amount_cents IS NULL AND NOT EXISTS (SELECT 1 FROM receipt_ocr_jobs j WHERE j.attachment_id = ar.id AND j.status IN ('pending', 'processing', 'retry')))))`;
 export const SALE_PIX_TOTAL_SQL = `COALESCE((SELECT SUM(pix_payment.amount_cents) FROM payments pix_payment WHERE pix_payment.sale_id=s.id AND pix_payment.store_id=s.store_id AND pix_payment.method='pix'), 0)`;
+export const SALE_CASH_TOTAL_SQL = `COALESCE((SELECT SUM(p.amount_cents) FROM payments p WHERE p.sale_id=s.id AND p.store_id=s.store_id AND p.method='cash'),0)`;
+export function duplicateReceiptSql(alias: string) {
+  const transaction = (a: string) =>
+    `json_extract(CASE WHEN json_valid(${a}.receipt_details_json) THEN ${a}.receipt_details_json ELSE '{}' END,'$.transactionId')`;
+  return `(${transaction(alias)} IS NOT NULL AND (EXISTS(SELECT 1 FROM attachments other_receipt WHERE other_receipt.kind='receipt' AND other_receipt.store_id=${alias}.store_id AND other_receipt.id<>${alias}.id AND ${transaction('other_receipt')}=${transaction(alias)}) OR EXISTS(SELECT 1 FROM receipt_payment_links claimed WHERE claimed.store_id=${alias}.store_id AND claimed.attachment_id<>${alias}.id AND claimed.transaction_id=${transaction(alias)}) OR EXISTS(SELECT 1 FROM audit_events claimed_event WHERE claimed_event.store_id=${alias}.store_id AND claimed_event.action='sale.receipt_transaction_claimed' AND claimed_event.entity_id<>${alias}.id AND json_extract(CASE WHEN json_valid(claimed_event.details_json) THEN claimed_event.details_json ELSE '{}' END,'$.transactionId')=${transaction(alias)})))`;
+}
+export function acceptedReceiptSql(alias: 'a' | 'ar') {
+  const doc = `CASE WHEN json_valid(${alias}.receipt_details_json) THEN ${alias}.receipt_details_json ELSE '{}' END`;
+  return `(${validReceiptAmountSql(alias)} AND NOT ${duplicateReceiptSql(alias)} AND COALESCE(json_extract(${doc},'$.blocked'),0)=0 AND COALESCE(json_extract(${doc},'$.ambiguous'),0)=0 AND COALESCE(json_extract(${doc},'$.state'),'completed')='completed')`;
+}
+export const SALE_RECEIPT_TOTAL_SQL = `COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id=s.store_id AND ar.sale_id=s.id AND ar.kind='receipt' AND ${acceptedReceiptSql('ar')}),0)`;
+export const SALE_RECEIVED_TOTAL_SQL = `(${SALE_CASH_TOTAL_SQL} + ${SALE_RECEIPT_TOTAL_SQL})`;
+export const SALE_RECEIPT_TARGET_SQL = `MAX(0,s.products_total_cents - ${SALE_CASH_TOTAL_SQL})`;
 export const SALE_ISSUE_SQL: Record<SaleIssueKey, string> = {
   missing_price: `(s.products_total_cents <= 0 OR NOT EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.store_id = s.store_id) OR EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.store_id = s.store_id AND si.sold_price_cents <= 0))`,
-  missing_receipt: `(${SALE_PIX_TOTAL_SQL} > 0 AND NOT EXISTS (${receipts}))`,
-  review: `(EXISTS (${receipts} AND ar.receipt_review_reason IS NOT NULL) OR ${failed} OR (${complete} AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) <> ${SALE_PIX_TOTAL_SQL}))`,
+  missing_receipt: `(${SALE_RECEIPT_TARGET_SQL} > 0 AND NOT EXISTS (${receipts}))`,
+  review: `(EXISTS (${receipts} AND (${duplicateReceiptSql('ar')} OR ar.receipt_review_reason IS NOT NULL OR (ar.receipt_amount_cents IS NOT NULL AND NOT ${acceptedReceiptSql('ar')}))) OR ${failed} OR (${complete} AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) <> ${SALE_RECEIPT_TARGET_SQL}))`,
   reading: `(NOT ${failed} AND EXISTS (${receipts} AND ar.receipt_amount_cents IS NULL))`,
-  pending_payment: 's.received_total_cents < s.products_total_cents',
-  overpaid: 's.received_total_cents > s.products_total_cents',
+  pending_payment: `${SALE_RECEIVED_TOTAL_SQL} < s.products_total_cents`,
+  overpaid: `${SALE_RECEIVED_TOTAL_SQL} > s.products_total_cents`,
   missing_photo: `EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.store_id = s.store_id AND NOT EXISTS (SELECT 1 FROM attachments ap WHERE ap.sale_item_id = si.id AND ap.sale_id = s.id AND ap.store_id = s.store_id AND ap.kind = 'item_photo'))`,
 };
 export const SALE_CHECK_STATUS_SQL = `(CASE WHEN s.status = 'cancelled' THEN 'cancelled' ${SALE_CHECK_STATUSES.filter(

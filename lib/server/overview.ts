@@ -5,7 +5,10 @@ import {
   SALE_AUTO_STATUS_SQL,
   SALE_ISSUE_SQL,
   SALE_ISSUE_KEYS_SQL,
-  SALE_PIX_TOTAL_SQL,
+  SALE_RECEIPT_TARGET_SQL,
+  SALE_RECEIVED_TOTAL_SQL,
+  acceptedReceiptSql,
+  duplicateReceiptSql,
   validReceiptAmountSql,
 } from './sale-status-sql.ts';
 import {
@@ -81,9 +84,9 @@ export async function readOverview(
     SELECT s.* FROM sales s WHERE ${where.join(' AND ')} AND s.status = 'completed'
   ), receipts AS (
     SELECT a.sale_id, COUNT(*) AS receiptCount,
-      COALESCE(SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN a.receipt_amount_cents ELSE 0 END), 0) AS receiptCents,
+      COALESCE(SUM(CASE WHEN ${acceptedReceiptSql('a')} THEN a.receipt_amount_cents ELSE 0 END), 0) AS receiptCents,
       SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN 0 ELSE 1 END) AS pendingCount,
-      SUM(CASE WHEN a.receipt_review_reason IS NOT NULL THEN 1 ELSE 0 END) AS receiptReviewCount
+      SUM(CASE WHEN a.receipt_review_reason IS NOT NULL OR ${duplicateReceiptSql('a')} OR (a.receipt_amount_cents IS NOT NULL AND NOT ${acceptedReceiptSql('a')}) THEN 1 ELSE 0 END) AS receiptReviewCount
     FROM attachments a JOIN filtered s ON s.id = a.sale_id AND s.store_id = a.store_id
     WHERE a.kind = 'receipt' GROUP BY a.sale_id
   ), cash AS (
@@ -92,8 +95,8 @@ export async function readOverview(
     WHERE p.method = 'cash' GROUP BY p.sale_id
   ), compared AS (
     SELECT s.id, s.number, s.customer_name AS customerName, s.created_at AS createdAt,
-      s.received_total_cents AS receivedCents, s.products_total_cents AS saleCents,
-      ${SALE_PIX_TOTAL_SQL} AS pixCents,
+      ${SALE_RECEIVED_TOTAL_SQL} AS receivedCents, s.products_total_cents AS saleCents,
+      ${SALE_RECEIPT_TARGET_SQL} AS pixCents,
       ${SALE_AUTO_STATUS_SQL} AS automaticStatus, CASE WHEN ${SALE_ISSUE_SQL.missing_price} THEN 1 ELSE 0 END AS saleInvalid, s.store_id AS storeId,
       ${SALE_ISSUE_KEYS_SQL} AS issueKeysJson, os.id AS orderStatusId, os.name AS orderStatusName, os.color AS orderStatusColor,
       COALESCE(c.cashCents, 0) AS cashCents, COALESCE(r.receiptCount, 0) AS receiptCount,

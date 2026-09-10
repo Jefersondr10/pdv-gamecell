@@ -1,4 +1,5 @@
 'use client';
+import { receiptDrivenPayments } from '@/lib/receipt-income';
 import { ReceiptPaymentDetails } from '@/components/pdv/receipt-payment-details';
 
 import { useState } from 'react';
@@ -18,6 +19,7 @@ import {
 import type { SaleRecord } from '@/lib/pdv-types';
 import { saleIssues } from '@/lib/sale-display-status';
 import { saleFinancialSummary } from '@/lib/sale-financial-summary';
+import { receiptTargetLabel } from '@/lib/receipt-reconciliation';
 import { SalePricesEditor } from '@/components/pdv/sale-prices-editor';
 import type { SalePrices } from '@/lib/sale-prices';
 
@@ -107,21 +109,23 @@ export function SaleDetailsDialog({
                 </div>
                 <div>
                   <dt className="text-sm text-muted-foreground">
-                    Total pago informado
+                    Total recebido
                   </dt>
-                  <dd className="font-bold tabular-nums">
+                  <dd className="font-bold tabular-nums text-success">
                     {money(sale.receivedTotalCents)}
                   </dd>
+                  {sale.status !== 'cancelled' &&
+                    sale.receivedDifferenceCents !== 0 && (
+                      <dd
+                        className={`mt-1 text-sm font-semibold tabular-nums ${sale.receivedDifferenceCents < 0 ? 'text-destructive' : 'text-amber-800 dark:text-amber-200'}`}
+                      >
+                        {sale.receivedDifferenceCents < 0
+                          ? 'Falta receber'
+                          : 'Pago a mais'}{' '}
+                        {money(Math.abs(sale.receivedDifferenceCents))}
+                      </dd>
+                    )}
                 </div>
-                {sale.status !== 'cancelled' &&
-                  sale.receivedDifferenceCents !== 0 && (
-                    <div className="col-span-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
-                      {sale.receivedDifferenceCents < 0
-                        ? 'Falta receber'
-                        : 'Pago a mais'}{' '}
-                      {money(Math.abs(sale.receivedDifferenceCents))}
-                    </div>
-                  )}
               </dl>
               {financial?.receiptText && (
                 <p
@@ -201,15 +205,15 @@ export function SaleDetailsDialog({
               <section>
                 <h3 className="mb-2 font-bold">Pagamentos recebidos</h3>
                 <div className="divide-y rounded-xl border">
-                  {sale.payments.length ? (
-                    sale.payments.map((payment, i) => (
+                  {receiptDrivenPayments(sale).length ? (
+                    receiptDrivenPayments(sale).map((payment, i) => (
                       <div
                         key={i}
                         className="flex justify-between gap-3 p-3 text-sm"
                       >
                         <span>
                           {payment.method === 'pix'
-                            ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                            ? `Pix · ${payment.recipientName || 'Recebedor não identificado'}`
                             : 'Dinheiro · informado manualmente'}
                         </span>
                         <strong className="shrink-0">
@@ -225,37 +229,6 @@ export function SaleDetailsDialog({
                   )}
                 </div>
                 <ReceiptPaymentDetails receipts={sale.receipts} />
-              </section>
-              <section>
-                <h3 className="mb-2 font-bold">
-                  Comprovantes · {sale.receipts.length}
-                </h3>
-                <div className="divide-y rounded-xl border">
-                  {sale.receipts.map((receipt, i) => (
-                    <a
-                      key={receipt.id}
-                      href={receipt.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex min-h-12 items-center justify-between gap-2 p-3 text-sm hover:bg-muted/50"
-                    >
-                      <span className="min-w-0 truncate text-primary">
-                        <Paperclip className="mr-1 inline size-4" />
-                        {receipt.name || `Comprovante ${i + 1}`}
-                      </span>
-                      <strong className="shrink-0">
-                        {receipt.receiptAmountCents === null
-                          ? 'A conferir'
-                          : money(receipt.receiptAmountCents)}
-                      </strong>
-                    </a>
-                  ))}
-                  {!sale.receipts.length && (
-                    <p className="p-3 text-sm text-muted-foreground">
-                      Sem comprovante anexado.
-                    </p>
-                  )}
-                </div>
                 <p className="mt-2 text-sm text-muted-foreground">
                   Valor identificado nos comprovantes:{' '}
                   <strong>
@@ -265,13 +238,14 @@ export function SaleDetailsDialog({
                   {sale.reconciliation.pendingReceiptCount > 0
                     ? 'Há valores pendentes de leitura ou conferência.'
                     : sale.reconciliation.status === 'divergent'
-                      ? `Comprovantes ${money(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do Pix informado.`
+                      ? `Comprovantes ${money(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(financial?.cashCents ?? 0)}.`
                       : ''}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Comprovantes são comparados apenas com o Pix informado.
-                  Dinheiro é conferido manualmente. Não confirma crédito na
-                  conta bancária.
+                  {(financial?.cashCents ?? 0) > 0
+                    ? 'Comprovantes e dinheiro são somados e comparados ao preço da venda. Dinheiro é conferido manualmente.'
+                    : 'Os comprovantes são comparados ao preço da venda.'}{' '}
+                  Não confirma crédito na conta bancária.
                 </p>
               </section>
             </div>

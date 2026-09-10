@@ -83,8 +83,8 @@ export async function receiptAllocationProblem(
     .all<{ attachmentId: string; details: string }>();
   for (const claim of claims.results) {
     const details = JSON.parse(claim.details) as { paymentIds?: unknown };
+    if (!receipts.some((r) => r.id === claim.attachmentId)) continue;
     if (
-      !receipts.some((r) => r.id === claim.attachmentId) ||
       !Array.isArray(details.paymentIds) ||
       !details.paymentIds.length ||
       details.paymentIds.some(

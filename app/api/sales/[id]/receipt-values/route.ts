@@ -224,7 +224,7 @@ export async function PATCH(
       const results = await db.batch([
         ...updateStatements,
         ...(receiptsToUpdate.length
-          ? !can(session, 'sales.payments') || preservePayments
+          ? preservePayments
             ? [stopReceiptPaymentSync(db, storeId, saleId, now)]
             : !onlyIfPending
               ? requestReceiptPaymentSync(

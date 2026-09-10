@@ -1,5 +1,9 @@
 export type ReceiptAmountSource = 'ocr' | 'manual';
 
+export function receiptTargetLabel(cashCents: number) {
+  return cashCents > 0 ? 'saldo da venda após dinheiro' : 'valor da venda';
+}
+
 export type ReceiptValueInput = {
   amountCents: number | null;
   source: ReceiptAmountSource | null;

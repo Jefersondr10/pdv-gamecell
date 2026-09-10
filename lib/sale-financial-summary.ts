@@ -1,5 +1,6 @@
 import { saleDisplayStatus } from './sale-display-status.ts';
-import { paymentMethodTotals } from './receipt-reconciliation.ts';
+import { saleReceiptIncome } from './receipt-income.ts';
+import { receiptTargetLabel } from './receipt-reconciliation.ts';
 
 type SummarySale = Parameters<typeof saleDisplayStatus>[0];
 const money = (cents: number) =>
@@ -8,7 +9,8 @@ const money = (cents: number) =>
 // A matching manually entered payment alone is not a reconciled sale.
 // Keep document evidence separate; displaying it must never change payments.
 export function saleFinancialSummary(sale: SummarySale) {
-  const { pixCents, cashCents } = paymentMethodTotals(sale.payments);
+  const { pixCents, cashCents, receivedTotalCents, receiptTargetCents } =
+    saleReceiptIncome(sale);
   const reconciled = saleDisplayStatus(sale).key === 'reconciled';
   const cancelled = sale.status === 'cancelled';
   const completeReceipts =
@@ -16,7 +18,12 @@ export function saleFinancialSummary(sale: SummarySale) {
     sale.receipts.every(
       (receipt) =>
         Number.isSafeInteger(receipt.receiptAmountCents) &&
-        receipt.receiptAmountCents! > 0,
+        receipt.receiptAmountCents! > 0 &&
+        !receipt.receiptReviewReason &&
+        (!receipt.receiptDetails ||
+          (!receipt.receiptDetails.blocked &&
+            !receipt.receiptDetails.ambiguous &&
+            receipt.receiptDetails.state === 'completed')),
     );
   const receiptTotalCents = completeReceipts
     ? sale.receipts.reduce(
@@ -25,7 +32,7 @@ export function saleFinancialSummary(sale: SummarySale) {
       )
     : null;
   const receiptDifferenceCents =
-    receiptTotalCents !== null ? receiptTotalCents - pixCents : null;
+    receiptTotalCents !== null ? receiptTotalCents - receiptTargetCents : null;
   const receiptWarning =
     !cancelled &&
     receiptDifferenceCents !== null &&
@@ -35,7 +42,7 @@ export function saleFinancialSummary(sale: SummarySale) {
       ? null
       : `Comprovantes ${money(receiptTotalCents)}${
           receiptWarning
-            ? ` · ${money(Math.abs(receiptDifferenceCents!))} ${receiptDifferenceCents! < 0 ? 'abaixo' : 'acima'} do Pix informado`
+            ? ` · ${money(Math.abs(receiptDifferenceCents!))} ${receiptDifferenceCents! < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(cashCents)}`
             : ''
         }`;
   return {
@@ -50,6 +57,6 @@ export function saleFinancialSummary(sale: SummarySale) {
       ? 'Venda cancelada'
       : reconciled
         ? 'Venda / pago'
-        : `Pago informado ${money(sale.receivedTotalCents)}`,
+        : `Recebido ${money(receivedTotalCents)}`,
   };
 }

@@ -46,8 +46,11 @@ assert.ok(message.indexOf('512GB') < message.indexOf('1TB'));
 assert.match(message, /07\/09\/2026,? 12:30/);
 assert.doesNotMatch(
   message,
-  /unidades|quantidade|disponíveis|serial|SN|LL|HN|garantia|LACRADOS|99403|whatsapp.com/i,
+  /unidades|quantidade|disponíveis|serial|SN|LL|HN|garantia|LACRADOS|99403/i,
 );
+const groupLink = 'https://chat.whatsapp.com/H9rpYRcvNncCs9sW4pccDf';
+assert.equal(message.split(groupLink).length - 1, 1);
+assert.ok(message.endsWith(`💬 *Grupo de atacado da loja*\n${groupLink}`));
 assert.equal(render([]), '');
 assert.match(render([row({ defaultPriceCents: 1 })]), /R\$ 0,01/);
 for (const price of [0, -1, NaN, Infinity, 12.5]) {

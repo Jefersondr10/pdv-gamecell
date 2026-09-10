@@ -31,6 +31,8 @@ import { runtime } from '@/lib/server/runtime';
 import { parseReceiptValues } from '@/lib/server/receipt-values';
 import { queueSaleReceipts } from '@/lib/server/receipt-ocr-jobs';
 import { requestReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
+import { duplicateReceiptSql } from '@/lib/server/sale-status-sql';
+import { saleReceiptIncome } from '@/lib/receipt-income';
 import { parseReceiptDocument } from '@/lib/receipt-document';
 import { parseSalesFilters, SALE_ALERT_SQL } from '@/lib/server/sales-filters';
 import {
@@ -421,6 +423,12 @@ export async function POST(request: Request) {
         replayed: true,
       });
     }
+    if (payments.some((p) => p.method === 'pix'))
+      throw new HttpError(
+        400,
+        'O valor do Pix vem do comprovante. Informe manualmente apenas dinheiro e anexe o comprovante.',
+        'PIX_FROM_RECEIPT',
+      );
     const seller = await db
       .prepare(
         'SELECT id, role, permissions_json AS permissionsJson FROM users WHERE id = ? AND store_id = ? AND active = 1 LIMIT 1',
@@ -1432,7 +1440,7 @@ async function hydrateSales(
                  receipt_amount_cents AS receiptAmountCents,
                  receipt_amount_source AS receiptAmountSource,
                  receipt_amount_confirmed_at AS receiptAmountConfirmedAt,
-                 receipt_details_json AS receiptDetailsJson, receipt_review_reason AS receiptReviewReason,
+                 receipt_details_json AS receiptDetailsJson, CASE WHEN kind='receipt' AND ${duplicateReceiptSql('attachments')} THEN 'Transação repetida em outro comprovante. Confira os anexos.' ELSE receipt_review_reason END AS receiptReviewReason,
                  (SELECT rp.payment_id FROM receipt_payment_links rp WHERE rp.attachment_id=attachments.id AND rp.sale_id=attachments.sale_id AND rp.store_id=attachments.store_id) AS receiptPaymentId,
                  (SELECT j.status FROM receipt_ocr_jobs j WHERE j.attachment_id = attachments.id) AS receiptOcrStatus
          FROM attachments
@@ -1500,8 +1508,16 @@ async function hydrateSales(
           : null,
       number: Number(sale.number),
       productsTotalCents,
-      receivedTotalCents: Number(sale.receivedTotalCents),
-      receivedDifferenceCents: Number(sale.receivedDifferenceCents),
+      receivedTotalCents: saleReceiptIncome({
+        productsTotalCents: Number(sale.productsTotalCents),
+        payments: paymentsBySale.get(sale.id) ?? [],
+        receipts: receiptsBySale.get(sale.id) ?? [],
+      }).receivedTotalCents,
+      receivedDifferenceCents: saleReceiptIncome({
+        productsTotalCents: Number(sale.productsTotalCents),
+        payments: paymentsBySale.get(sale.id) ?? [],
+        receipts: receiptsBySale.get(sale.id) ?? [],
+      }).receivedDifferenceCents,
       referenceTotalCents: Number(sale.referenceTotalCents),
       priceDifferenceCents: Number(sale.priceDifferenceCents),
       createdAt: Number(sale.createdAt),
@@ -1511,7 +1527,11 @@ async function hydrateSales(
       receipts,
       reconciliation: deriveReceiptReconciliation(
         receipts,
-        paymentMethodTotals(paymentsBySale.get(sale.id) ?? []).pixCents,
+        Math.max(
+          0,
+          Number(sale.productsTotalCents) -
+            paymentMethodTotals(paymentsBySale.get(sale.id) ?? []).cashCents,
+        ),
       ),
     };
   });

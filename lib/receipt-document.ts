@@ -22,6 +22,18 @@ export const normalizeReceiptIdentity = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
 
+function cleanParticipantName(value: string | null | undefined) {
+  if (!value) return null;
+  // Bank icons can become leading "&" or "<&" in OCR. Only remove the
+  // symbol prefix, preserving letters and legitimate names such as A & B.
+  return (
+    value
+      .replace(/^[\s<>&|•·◦]+/u, '')
+      .trim()
+      .slice(0, 150) || null
+  );
+}
+
 // Parse labelled participants only. A logo/header never identifies the recipient.
 export function extractReceiptDocument(text: string) {
   const lines = text
@@ -79,7 +91,7 @@ export function extractReceiptDocument(text: string) {
       ?.replace(/^[^:]+:/, '')
       .replace(/\D/g, '');
     return {
-      name: name?.slice(0, 150) || null,
+      name: cleanParticipantName(name),
       bank: bank?.slice(0, 150) || null,
       document: doc && [11, 14].includes(doc.length) ? doc : null,
     };
@@ -213,15 +225,49 @@ export function parseReceiptDocument(value: unknown): ReceiptDocument | null {
         return null;
       result[field] = doc[field];
     }
+    // Normalize saved readings at the read boundary too, without rewriting
+    // the original document or changing amounts, bank data or identifiers.
+    result.payerName = cleanParticipantName(result.payerName);
+    result.recipientName = cleanParticipantName(result.recipientName);
     return result;
   } catch {
     return null;
   }
 }
 
+export function shortReceiptDate(value: string | null) {
+  if (!value) return 'Não identificada';
+  const months = [
+    'janeiro',
+    'fevereiro',
+    'março',
+    'abril',
+    'maio',
+    'junho',
+    'julho',
+    'agosto',
+    'setembro',
+    'outubro',
+    'novembro',
+    'dezembro',
+  ];
+  const normalized = value.toLowerCase().replace(/\s+de\s+/g, '/');
+  const date = normalized.match(
+    /(\d{1,2})[/\-.\s]+(\d{1,2}|[a-zç]+)[/\-.\s]+(\d{4})/,
+  );
+  const time = value.match(/(\d{1,2}):(\d{2})(?::\d{2})?/);
+  if (!date) return value;
+  const month = /^\d+$/.test(date[2])
+    ? Number(date[2])
+    : months.indexOf(date[2]) + 1;
+  if (month < 1 || month > 12 || Number(date[1]) < 1 || Number(date[1]) > 31)
+    return value;
+  return `${date[1].padStart(2, '0')}/${String(month).padStart(2, '0')}/${date[3]}${time ? ` · ${time[1].padStart(2, '0')}:${time[2]}` : ''}`;
+}
+
 export function receiptDocumentLines(doc: ReceiptDocument) {
   return [
-    ['Data/hora da transação', doc.paidAtText],
+    ['Data/hora', shortReceiptDate(doc.paidAtText)],
     ['Pagador', doc.payerName],
     ['Banco pagador', doc.payerBank],
     ['Recebedor', doc.recipientName],
