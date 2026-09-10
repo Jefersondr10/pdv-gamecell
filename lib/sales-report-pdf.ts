@@ -587,7 +587,7 @@ export async function buildSalesReportPdf(
   return doc.save();
 }
 
-async function loadReportAsset(
+export async function loadReportAsset(
   attachment: AttachmentRecord,
 ): Promise<Uint8Array> {
   const response = await fetch(attachment.url, {

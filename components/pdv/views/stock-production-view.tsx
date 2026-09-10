@@ -52,7 +52,6 @@ import type {
   StockSummaryResponse,
 } from '@/lib/pdv-types';
 import { displayCommercialCode } from '@/lib/commercial-code';
-import { downloadReportPdf } from '@/lib/download-report-pdf';
 import { can } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 import { changedProductPrices, priceInput } from '@/lib/product-prices';
@@ -1068,7 +1067,6 @@ function StockReport({
   const [includePhotos, setIncludePhotos] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState('');
-  const reportRef = useRef<HTMLElement | null>(null);
   const needsDetails = level === 'serials' || includePhotos;
   const detailsComplete =
     detailsStarted &&
@@ -1124,7 +1122,6 @@ function StockReport({
           <article
             className="report-document mx-auto max-w-3xl rounded-2xl bg-white p-4 text-slate-950 shadow-sm ring-1 ring-slate-200 sm:p-7"
             data-print-report
-            ref={reportRef}
           >
             <header className="border-b border-slate-200 pb-4">
               <p className="text-xs font-bold uppercase tracking-[.16em] text-slate-500">
@@ -1314,12 +1311,17 @@ function StockReport({
           <Button
             disabled={pdfBusy || (needsDetails && !detailsComplete)}
             onClick={async () => {
-              if (!reportRef.current) return;
               setPdfBusy(true);
               setPdfError('');
               try {
-                await downloadReportPdf({
-                  element: reportRef.current,
+                const { downloadStockReportPdf } =
+                  await import('@/lib/stock-report-pdf');
+                await downloadStockReportPdf({
+                  rows,
+                  storeName,
+                  generatedAt,
+                  level,
+                  includePhotos,
                   fileName: `estoque-${dateFileKey(generatedAt)}`,
                 });
               } catch (error) {
