@@ -45,10 +45,9 @@ const output = new URL('../tmp/pdfs/', import.meta.url);
 await mkdir(output, { recursive: true });
 const summary = await buildStockReportPdf(options, noAsset);
 const summaryDoc = await PDFDocument.load(summary);
-assert.equal(
-  summaryDoc.getPageCount(),
-  1,
-  '14 variations should fit legibly on one A4',
+assert.ok(
+  summaryDoc.getPageCount() <= 2,
+  '14 variations fit on at most two legible card pages',
 );
 assert.ok(summary.byteLength < 40_000, 'Vector report stays small');
 await writeFile(new URL('estoque-novo.pdf', output), summary);
@@ -72,13 +71,39 @@ detailRows.push({
   ),
   photos: [],
 });
-await writeFile(
-  new URL('estoque-detalhado-teste.pdf', output),
-  await buildStockReportPdf(
-    { ...options, rows: detailRows, level: 'serials' },
-    noAsset,
-  ),
+const detailed = await buildStockReportPdf(
+  { ...options, rows: detailRows, level: 'serials' },
+  noAsset,
 );
+await writeFile(new URL('estoque-detalhado-teste.pdf', output), detailed);
+const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+const task = getDocument({ data: detailed, useSystemFonts: true });
+const textPdf = await task.promise;
+let text = '';
+for (let pageNo = 1; pageNo <= textPdf.numPages; pageNo++) {
+  const page = await textPdf.getPage(pageNo);
+  const content = await page.getTextContent();
+  const pageText = content.items
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ');
+  for (const row of detailRows)
+    for (const sn of row.serials) {
+      if (pageText.includes(sn))
+        assert.ok(
+          pageText.includes(row.model),
+          'SN page retains product identity',
+        );
+    }
+  text += pageText + ' ';
+}
+for (const row of detailRows)
+  for (const sn of row.serials)
+    assert.equal(text.split(sn).length - 1, 1, `Serial ${sn} appears once`);
+assert.ok(
+  text.indexOf('Quantidade por modelo e memória') <
+    text.indexOf('Produtos e números de série'),
+);
+await task.destroy();
 await assert.rejects(
   buildStockReportPdf({ ...options, level: 'serials' }),
   /estoque mudou/,
@@ -121,5 +146,5 @@ await assert.rejects(
   /Photo failed/,
 );
 console.log(
-  'Stock PDF: one-page summary, vector size, serial pagination, mismatch guard, empty report and photos passed.',
+  'Stock PDF: card layout, vector size, every serial once with product context, mismatch guard, empty report and photos passed.',
 );

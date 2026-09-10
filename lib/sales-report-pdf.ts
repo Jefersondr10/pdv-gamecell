@@ -1,9 +1,11 @@
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import type { PDFFont, PDFPage } from 'pdf-lib';
 import type { AttachmentRecord, SaleRecord } from './pdv-types';
 import { saleDisplayStatus, saleIssues } from './sale-display-status.ts';
 import { saleFinancialSummary } from './sale-financial-summary.ts';
 import { summarizeSalesPayments } from './sales-payment-summary.ts';
+import { reportCard, reportColors, reportTones } from './report-pdf-theme.ts';
+import type { RGB } from 'pdf-lib';
 
 export type SalesPdfOptions = {
   storeName: string;
@@ -22,10 +24,14 @@ const H = 841.89;
 const M = 36;
 const CONTENT = W - 2 * M;
 const BOTTOM = H - 45;
-const INK = rgb(0.07, 0.12, 0.19);
-const MUTED = rgb(0.35, 0.4, 0.47);
-const NAVY = rgb(0.02, 0.17, 0.29);
-const RULE = rgb(0.84, 0.88, 0.91);
+const {
+  ink: INK,
+  muted: MUTED,
+  navy: NAVY,
+  rule: RULE,
+  pale: PALE,
+  white: WHITE,
+} = reportColors;
 const money = (cents: number) =>
   new Intl.NumberFormat('pt-BR', {
     style: 'currency',
@@ -108,21 +114,24 @@ class Layout {
       color,
     });
   }
-  newPage() {
+  newPage(first = false) {
     this.page = this.doc.addPage([W, H]);
     const store = this.lines(this.store, CONTENT, 9, true)[0];
     this.draw(store, M, 25, 9, true, MUTED);
-    const heading = this.lines(this.context, CONTENT, 11, true).slice(0, 2);
+    const heading = first
+      ? []
+      : this.lines(this.context, CONTENT, 11, true).slice(0, 2);
     heading.forEach((line, index) =>
       this.draw(line, M, 40 + index * 14, 11, true, NAVY),
     );
-    this.page.drawLine({
-      start: { x: M, y: H - 72 },
-      end: { x: W - M, y: H - 72 },
-      thickness: 0.6,
-      color: RULE,
-    });
-    this.y = 86;
+    if (!first)
+      this.page.drawLine({
+        start: { x: M, y: H - 72 },
+        end: { x: W - M, y: H - 72 },
+        thickness: 0.6,
+        color: RULE,
+      });
+    this.y = first ? 46 : 86;
   }
   ensure(height: number) {
     if (this.measureOnly) return;
@@ -160,27 +169,48 @@ class Layout {
   row(
     left: string,
     right: string,
-    options: { bold?: boolean; muted?: boolean } = {},
+    options: { bold?: boolean; muted?: boolean; fill?: RGB; color?: RGB } = {},
   ) {
     const rightWidth = Math.max(
       105,
       this.bold.widthOfTextAtSize(this.text(right), 10),
     );
-    const lines = this.lines(left, CONTENT - rightWidth - 16, 10, options.bold);
-    this.ensure(Math.min(lines.length * 15 + 9, BOTTOM - 86));
+    const lines = this.lines(left, CONTENT - rightWidth - 40, 10, options.bold);
+    this.ensure(Math.min(lines.length * 15 + 18, BOTTOM - 86));
+    if (!this.measureOnly)
+      reportCard(
+        this.page,
+        M,
+        this.y,
+        CONTENT,
+        lines.length * 15 + 12,
+        options.fill ?? WHITE,
+        options.fill ? undefined : RULE,
+        undefined,
+        6,
+      );
+    this.y += 6;
     this.draw(
       right,
-      W - M - this.bold.widthOfTextAtSize(this.text(right), 10),
+      W - M - 10 - this.bold.widthOfTextAtSize(this.text(right), 10),
       this.y,
       10,
       true,
+      options.color ?? INK,
     );
     for (const line of lines) {
       this.ensure(15);
-      this.draw(line, M, this.y, 10, options.bold, options.muted ? MUTED : INK);
+      this.draw(
+        line,
+        M + 10,
+        this.y,
+        10,
+        options.bold,
+        options.color ?? (options.muted ? MUTED : INK),
+      );
       this.y += 15;
     }
-    this.y += 6;
+    this.y += 10;
   }
   rule() {
     this.ensure(12);
@@ -193,42 +223,214 @@ class Layout {
       });
     this.y += 12;
   }
-  totals(label: string, value: string, note: string) {
-    this.ensure(77);
-    this.page.drawRectangle({
-      x: M,
-      y: H - this.y - 68,
-      width: CONTENT,
-      height: 68,
-      color: rgb(0.94, 0.96, 0.98),
+  totals(
+    label: string,
+    value: string,
+    count: number,
+    units: number,
+    warnings: number,
+  ) {
+    this.ensure(82);
+    const heroWidth = 211,
+      gap = 6,
+      width = (CONTENT - heroWidth - gap * 3) / 3;
+    reportCard(
+      this.page,
+      M,
+      this.y,
+      heroWidth,
+      70,
+      reportColors.emerald,
+      undefined,
+      [reportColors.emerald, reportColors.green, reportColors.cyan],
+    );
+    this.draw(label, M + 12, this.y + 12, 8, true, WHITE);
+    const moneySize = Math.min(
+      25,
+      (heroWidth - 24) / this.bold.widthOfTextAtSize(this.text(value), 1),
+    );
+    this.draw(value, M + 12, this.y + 32, moneySize, true, WHITE);
+    [
+      ['VENDAS CONCLUÍDAS', count],
+      ['APARELHOS', units],
+      ['AVISOS', warnings],
+    ].forEach(([caption, amount], index) => {
+      const x = M + heroWidth + gap + index * (width + gap);
+      reportCard(this.page, x, this.y, width, 70, PALE);
+      this.lines(String(caption), width - 18, 8, true).forEach((line, i) =>
+        this.draw(line, x + 9, this.y + 11 + i * 11, 8, true, MUTED),
+      );
+      this.draw(String(amount), x + 9, this.y + 43, 18, true);
     });
-    this.draw(label, M + 12, this.y + 9, 9, true, MUTED);
-    this.draw(value, M + 12, this.y + 23, 20, true, NAVY);
-    this.draw(note, M + 12, this.y + 50, 9, false, MUTED);
-    this.y += 80;
+    this.y += 82;
+  }
+  panel(
+    entries: { text: string; size?: number; bold?: boolean }[],
+    tone = reportTones.neutral,
+  ) {
+    const lines = entries.flatMap((entry) =>
+      this.lines(entry.text, CONTENT - 24, entry.size ?? 10, entry.bold).map(
+        (text) => ({ ...entry, text }),
+      ),
+    );
+    // Bound panels as well as rows; repeat page context if unusually long labels wrap.
+    for (let offset = 0; offset < lines.length; offset += 22) {
+      const part = lines.slice(offset, offset + 22);
+      const height =
+        20 + part.reduce((sum, line) => sum + (line.size ?? 10) + 5, 0);
+      this.ensure(height + 8);
+      if (!this.measureOnly)
+        reportCard(
+          this.page,
+          M,
+          this.y,
+          CONTENT,
+          height,
+          tone.fill,
+          tone.border,
+        );
+      this.y += 10;
+      for (const line of part) {
+        this.draw(
+          line.text,
+          M + 12,
+          this.y,
+          line.size ?? 10,
+          line.bold,
+          tone.ink,
+        );
+        this.y += (line.size ?? 10) + 5;
+      }
+      this.y += 18;
+    }
+  }
+  dayHeader(day: string, count: number, units: number, amount: number) {
+    this.ensure(135);
+    reportCard(this.page, M, this.y, CONTENT, 58, NAVY, undefined, [
+      NAVY,
+      reportColors.blue,
+    ]);
+    this.draw(day, M + 12, this.y + 10, 12, true, WHITE);
+    this.draw(
+      `${count} venda(s) concluída(s) · ${units} aparelho(s)`,
+      M + 12,
+      this.y + 33,
+      9,
+      false,
+      WHITE,
+    );
+    const value = money(amount);
+    this.draw('TOTAL DO DIA', W - M - 124, this.y + 10, 8, true, WHITE);
+    this.draw(
+      value,
+      W - M - 12 - this.bold.widthOfTextAtSize(value, 16),
+      this.y + 28,
+      16,
+      true,
+      WHITE,
+    );
+    this.y += 70;
   }
 }
 
 function modelSummary(layout: Layout, sales: SaleRecord[], detailed: boolean) {
-  const groups = new Map<string, { label: string; serials: string[] }>();
+  const groups = new Map<
+    string,
+    { label: string; name: string; detail: string; serials: string[] }
+  >();
   for (const sale of sales)
     for (const item of sale.items) {
       const label = `${item.productName} · ${item.productDetail}`;
-      const group = groups.get(label) ?? { label, serials: [] };
+      const group = groups.get(label) ?? {
+        label,
+        name: item.productName,
+        detail: item.productDetail,
+        serials: [],
+      };
       group.serials.push(`${item.serial} (${number(sale)})`);
       groups.set(label, group);
     }
-  layout.title('Quantidade por modelo, cor e memória');
+  layout.title('Quantidade por aparelho');
   for (const group of groups.values()) {
     layout.context = `Resumo por modelo · ${group.label}`;
-    layout.ensure(60);
-    layout.row(group.label, `${group.serials.length} un.`, { bold: true });
-    if (detailed)
-      layout.paragraph(`SNs: ${group.serials.join(' · ')}`, {
-        size: 9,
-        muted: true,
+    const chunks = detailed ? Math.ceil(group.serials.length / 12) : 1;
+    for (let offset = 0; offset < chunks; offset++) {
+      const names = layout.lines(group.name, CONTENT - 80, 11, true);
+      const details = layout.lines(group.detail, CONTENT - 24, 9);
+      const serials = detailed
+        ? group.serials.slice(offset * 12, offset * 12 + 12)
+        : [];
+      const chips: { text: string; width: number; x: number; row: number }[] =
+        [];
+      let x = 0,
+        row = 0;
+      for (const sn of serials) {
+        const width = Math.min(
+          CONTENT - 24,
+          layout.regular.widthOfTextAtSize(layout.text(sn), 8) + 12,
+        );
+        if (x + width > CONTENT - 24) {
+          x = 0;
+          row++;
+        }
+        chips.push({ text: sn, width, x, row });
+        x += width + 5;
+      }
+      const height =
+        22 +
+        names.length * 15 +
+        details.length * 13 +
+        (offset ? 14 : 0) +
+        (chips.length ? (row + 1) * 20 + 5 : 0);
+      layout.ensure(height + 8);
+      reportCard(layout.page, M, layout.y, CONTENT, height, WHITE, RULE);
+      const top = layout.y;
+      names.forEach((line, i) =>
+        layout.draw(line, M + 12, top + 10 + i * 15, 11, true),
+      );
+      layout.draw(String(group.serials.length), W - M - 30, top + 10, 11, true);
+      layout.y += 10 + names.length * 15;
+      details.forEach((line) => {
+        layout.draw(line, M + 12, layout.y, 9, false, MUTED);
+        layout.y += 13;
       });
-    layout.rule();
+      if (offset) {
+        layout.draw(
+          'Números de série - continuação',
+          M + 12,
+          layout.y,
+          8,
+          false,
+          MUTED,
+        );
+        layout.y += 14;
+      }
+      for (const chip of chips) {
+        reportCard(
+          layout.page,
+          M + 12 + chip.x,
+          layout.y + 5 + chip.row * 20,
+          chip.width,
+          17,
+          PALE,
+          undefined,
+          undefined,
+          3,
+        );
+        const size = Math.min(
+          8,
+          (chip.width - 12) /
+            layout.regular.widthOfTextAtSize(layout.text(chip.text), 1),
+        );
+        layout.draw(
+          chip.text,
+          M + 18 + chip.x,
+          layout.y + 9 + chip.row * 20,
+          size,
+        );
+      }
+      layout.y = top + height + 8;
+    }
   }
   layout.context = 'Resumo de vendas';
   if (!groups.size) layout.paragraph('Nenhum aparelho vendido neste filtro.');
@@ -244,26 +446,54 @@ function saleDetails(
   const showFinancial = singleSale || sale.status === 'completed';
   layout.context = `Venda ${number(sale)} · ${sale.customerName}`;
   layout.ensure(205);
-  layout.title(
-    `Venda ${number(sale)} · ${sale.status === 'cancelled' ? 'CANCELADA' : 'Concluída'}`,
+  const difference = sale.receivedTotalCents - sale.productsTotalCents;
+  const tone =
+    sale.status === 'cancelled'
+      ? reportTones.neutral
+      : difference < 0
+        ? reportTones.shortage
+        : difference > 0
+          ? reportTones.excess
+          : saleFinancialSummary(sale).reconciled
+            ? reportTones.success
+            : reportTones.warning;
+  layout.panel(
+    [
+      {
+        text: `Venda ${number(sale)} · ${sale.customerName}`,
+        size: 13,
+        bold: true,
+      },
+      {
+        text: `${date(sale.createdAt, true)} · Vendedor: ${sale.sellerName}`,
+        size: 9,
+      },
+      {
+        text: `Status: ${saleDisplayStatus(sale).label}`,
+        size: 10,
+        bold: true,
+      },
+      ...(saleIssues(sale).length
+        ? [
+            {
+              text: `Conferência: ${saleIssues(sale)
+                .map((issue) => issue.label)
+                .join(' · ')}`,
+              size: 9,
+            },
+          ]
+        : []),
+    ],
+    tone,
   );
-  layout.paragraph(sale.customerName, { size: 14, bold: true });
-  layout.paragraph(
-    `${date(sale.createdAt, true)} · Vendedor: ${sale.sellerName}`,
-    { size: 9, muted: true },
-  );
-  layout.paragraph(`Status: ${saleDisplayStatus(sale).label}`, { size: 9 });
-  if (saleIssues(sale).length > 0)
-    layout.paragraph(
-      `Conferência: ${saleIssues(sale)
-        .map((issue) => issue.label)
-        .join(' · ')}`,
-      { size: 9 },
-    );
-  layout.y += 8;
-  layout.row('Valor da venda', money(sale.productsTotalCents), { bold: true });
+  layout.row('Valor da venda', money(sale.productsTotalCents), {
+    bold: true,
+    fill: PALE,
+  });
   if ((detailed || singleSale) && showFinancial) {
-    layout.row('Total pago informado', money(sale.receivedTotalCents));
+    layout.row('Total pago informado', money(sale.receivedTotalCents), {
+      fill: PALE,
+    });
     if (sale.status !== 'cancelled') {
       const diff = sale.receivedTotalCents - sale.productsTotalCents;
       const label =
@@ -298,12 +528,48 @@ function saleDetails(
   }
   layout.title(`Produtos · ${sale.items.length} aparelho(s)`);
   for (const item of sale.items) {
-    layout.ensure(65);
-    layout.row(item.productName, money(item.soldPriceCents), { bold: true });
-    layout.paragraph(item.productDetail, { size: 9, muted: true });
-    if (detailed)
-      layout.paragraph(`SN: ${item.serial}`, { size: 10, bold: true });
-    layout.y += 7;
+    const names = layout.lines(item.productName, CONTENT - 140, 10, true);
+    const details = layout.lines(
+      `${item.productDetail}${detailed ? ` · SN: ${item.serial}` : ''}`,
+      CONTENT - 24,
+      9,
+    );
+    const height = 18 + names.length * 14 + details.length * 13;
+    layout.ensure(height + 8);
+    if (!layout.measureOnly)
+      reportCard(
+        layout.page,
+        M,
+        layout.y,
+        CONTENT,
+        height,
+        WHITE,
+        RULE,
+        undefined,
+        6,
+      );
+    names.forEach((line, i) =>
+      layout.draw(line, M + 12, layout.y + 8 + i * 14, 10, true),
+    );
+    const value = money(item.soldPriceCents);
+    layout.draw(
+      value,
+      W - M - 12 - layout.bold.widthOfTextAtSize(value, 10),
+      layout.y + 8,
+      10,
+      true,
+    );
+    details.forEach((line, i) =>
+      layout.draw(
+        line,
+        M + 12,
+        layout.y + 8 + names.length * 14 + i * 13,
+        9,
+        false,
+        MUTED,
+      ),
+    );
+    layout.y += height + 6;
   }
   if (detailed && showFinancial) {
     layout.title('Pagamentos informados');
@@ -313,6 +579,7 @@ function saleDetails(
           ? 'Dinheiro'
           : `Pix · ${payment.accountName || 'Conta não informada'}`,
         money(payment.amountCents),
+        { fill: PALE },
       );
     if (!sale.payments.length) layout.paragraph('Nenhum pagamento informado.');
   }
@@ -402,7 +669,7 @@ export async function buildSalesReportPdf(
     0,
   );
   const units = summarySales.reduce((sum, sale) => sum + sale.items.length, 0);
-  layout.newPage();
+  layout.newPage(true);
   layout.paragraph(
     singleSale
       ? `Relatório da venda ${number(sales[0])}`
@@ -419,7 +686,9 @@ export async function buildSalesReportPdf(
   layout.totals(
     singleSale ? 'VALOR DA VENDA' : 'MONTANTE VENDIDO',
     money(amount),
-    `${summarySales.length} venda(s)${singleSale ? '' : ' concluída(s)'} · ${units} aparelho(s)`,
+    completed.length,
+    units,
+    completed.filter((sale) => saleIssues(sale).length > 0).length,
   );
   if (!singleSale || sales[0].status === 'completed') {
     const summary = summarizeSalesPayments(sales);
@@ -446,13 +715,20 @@ export async function buildSalesReportPdf(
     layout.rule();
     layout.row('Total recebido informado', money(summary.receivedCents), {
       bold: true,
+      fill: PALE,
     });
     if (summary.outstandingCents > 0)
       layout.row('Falta receber', money(summary.outstandingCents), {
         bold: true,
+        fill: PALE,
+        color: reportTones.shortage.ink,
       });
     if (summary.excessCents > 0)
-      layout.row('Recebido a mais', money(summary.excessCents), { bold: true });
+      layout.row('Recebido a mais', money(summary.excessCents), {
+        bold: true,
+        fill: PALE,
+        color: reportTones.warning.ink,
+      });
     if (summary.outstandingCents > 0 && summary.excessCents > 0)
       layout.paragraph(
         'As diferenças são conferidas por venda: um valor a mais não quita outra venda.',
@@ -473,29 +749,10 @@ export async function buildSalesReportPdf(
         : `${sales.length - completed.length} venda(s) cancelada(s), excluída(s) dos totais.`,
       { size: 9, muted: true },
     );
-  if (!singleSale) {
-    const warnings = completed.filter(
-      (sale) => saleIssues(sale).length > 0,
-    ).length;
-    layout.paragraph(`${warnings} venda(s) com pendências.`, {
-      size: 9,
-      muted: true,
-    });
-  }
   const days = new Map<string, SaleRecord[]>();
   for (const sale of sales) {
     const key = date(sale.createdAt);
     days.set(key, [...(days.get(key) ?? []), sale]);
-  }
-  if (!singleSale) {
-    layout.title('Montante vendido por dia');
-    for (const [day, records] of days) {
-      const valid = records.filter((sale) => sale.status === 'completed');
-      layout.row(
-        `${day} · ${valid.length} venda(s) · ${valid.reduce((sum, sale) => sum + sale.items.length, 0)} aparelho(s)`,
-        money(valid.reduce((sum, sale) => sum + sale.productsTotalCents, 0)),
-      );
-    }
   }
   modelSummary(layout, summarySales, level !== 'simple');
 
@@ -583,6 +840,7 @@ export async function buildSalesReportPdf(
     }
   }
 
+  let previousDay = '';
   for (const sale of sales) {
     layout.context = `Venda ${number(sale)} · ${sale.customerName}`;
     // Complete reports give each sale its own starting page and keep its evidence together.
@@ -593,6 +851,19 @@ export async function buildSalesReportPdf(
     saleDetails(measure, sale, level, singleSale);
     // Keep a sale whole when it fits a page; oversized sales continue with their header.
     layout.ensure(Math.min(measure.y + 12, BOTTOM - 86));
+    if (!singleSale && date(sale.createdAt) !== previousDay) {
+      previousDay = date(sale.createdAt);
+      const valid = (days.get(previousDay) ?? []).filter(
+        (item) => item.status === 'completed',
+      );
+      layout.ensure(Math.min(measure.y + 82, BOTTOM - 86));
+      layout.dayHeader(
+        previousDay,
+        valid.length,
+        valid.reduce((sum, item) => sum + item.items.length, 0),
+        valid.reduce((sum, item) => sum + item.productsTotalCents, 0),
+      );
+    }
     saleDetails(layout, sale, level, singleSale);
     if (!mediaSales.includes(sale)) continue;
     if (photos)
