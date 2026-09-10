@@ -3882,6 +3882,121 @@ for (const amountCents of [410000, 400000]) {
 console.log(
   'Mixed-payment HTTP: receipts compare only Pix; cash preserved after correction; sale balance and status recalculated.',
 );
+// A receipt attached after an unpaid sale can register its FIRST Pix, in an explicitly selected account.
+const firstPixPath = `/api/sales/${attributionId}/receipt-payment`;
+await call(`/api/sales/${attributionId}/receipt-values`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    receipts: [
+      { id: newReceipts[1].id, amountCents: 128400, source: 'manual' },
+    ],
+  }),
+});
+const firstPixBefore = (await call(firstPixPath, { cookie: ownerCookie })).body;
+assert.deepEqual(firstPixBefore.payments, []);
+assert.equal(firstPixBefore.receiptTotalCents, 128400);
+const firstPixPayload = {
+  operationId: crypto.randomUUID(),
+  pixAccountId: pixId,
+  expectedPayments: firstPixBefore.expectedPayments,
+  expectedReceipts: firstPixBefore.expectedReceipts,
+  expectedRequestId: firstPixBefore.requestId,
+};
+await call(firstPixPath, {
+  ...editingHeaders,
+  headers: { 'content-type': 'application/json', 'x-csrf-token': 'wrong' },
+  method: 'POST',
+  body: JSON.stringify(firstPixPayload),
+  expected: 403,
+});
+await call(firstPixPath, { cookie: secondShopCookie, expected: 404 });
+await call(firstPixPath, {
+  ...editingHeaders,
+  method: 'POST',
+  body: JSON.stringify({
+    ...firstPixPayload,
+    pixAccountId: crypto.randomUUID(),
+  }),
+  expected: 409,
+});
+const firstPixResponses = await Promise.all(
+  [0, 1].map(() =>
+    call(firstPixPath, {
+      ...editingHeaders,
+      method: 'POST',
+      body: JSON.stringify(firstPixPayload),
+    }),
+  ),
+);
+for (const response of firstPixResponses) {
+  assert.equal(response.body.status, 'applied');
+  assert.equal(response.body.receivedTotalCents, 128400);
+  assert.equal((response.body.payments as EditablePayment[]).length, 1);
+}
+assert.ok(
+  firstPixResponses.some((response) => response.body.replayed === true),
+);
+const firstPixAfter = (await call(firstPixPath, { cookie: ownerCookie })).body;
+const registeredPix = (firstPixAfter.payments as EditablePayment[])[0];
+assert.equal(registeredPix.method, 'pix');
+assert.equal(registeredPix.pixAccountId, pixId);
+assert.equal(registeredPix.amountCents, 128400);
+await call(firstPixPath, {
+  ...editingHeaders,
+  method: 'POST',
+  body: JSON.stringify({
+    ...firstPixPayload,
+    operationId: crypto.randomUUID(),
+  }),
+  expected: 409,
+});
+const replayAfterFirstPix = await call('/api/sales', {
+  method: 'POST',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': accessOwnerHeaders['x-csrf-token'] },
+  body: sellerForm(attributionPayload, false),
+});
+assert.equal(replayAfterFirstPix.body.replayed, true);
+assert.equal(
+  (await call(firstPixPath, { cookie: ownerCookie })).body.receivedTotalCents,
+  128400,
+);
+await call(`/api/sales/${attributionId}/payments`, {
+  ...editingHeaders,
+  method: 'PATCH',
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    expectedPayments: [
+      {
+        id: registeredPix.id,
+        method: registeredPix.method,
+        pixAccountId: registeredPix.pixAccountId,
+        amountCents: registeredPix.amountCents,
+      },
+    ],
+    payments: [
+      {
+        id: registeredPix.id,
+        method: registeredPix.method,
+        pixAccountId: registeredPix.pixAccountId,
+        amountCents: 128000,
+      },
+    ],
+  }),
+});
+const firstPixReplay = await call(firstPixPath, {
+  ...editingHeaders,
+  method: 'POST',
+  body: JSON.stringify(firstPixPayload),
+});
+assert.equal(firstPixReplay.body.replayed, true);
+assert.equal(firstPixReplay.body.receivedTotalCents, 128000);
+assert.equal((firstPixReplay.body.payments as EditablePayment[]).length, 1);
+console.log(
+  'First receipt Pix HTTP: chosen account, authenticated permissions, concurrent replay, original sale replay and later manual edits preserved.',
+);
 if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
   assert.ok(
     localTarget &&

@@ -471,16 +471,18 @@ export function StockProductionView({
                           SN localizado no histórico
                         </p>
                       )}
-                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                      <div className="mt-1 grid w-full max-w-60 grid-cols-[minmax(0,1fr)_4rem] items-center gap-1.5">
                         <span className="flex min-w-0 items-center gap-1.5 truncate text-sm text-muted-foreground">
                           <ProductColorSwatch
                             color={row.color}
                             model={row.model}
                           />
-                          <span className="truncate">{row.color}</span>
+                          <span className="truncate" title={row.color}>
+                            {row.color}
+                          </span>
                         </span>
                         <Badge
-                          className="shrink-0 font-extrabold"
+                          className="w-16 justify-center whitespace-nowrap font-extrabold tabular-nums"
                           variant="secondary"
                         >
                           {row.memory}

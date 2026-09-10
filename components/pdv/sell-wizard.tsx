@@ -2463,13 +2463,17 @@ function ProductDetailVisual({
   const memory = memoryParts.join('·').trim();
   return (
     <span
-      className={`flow-stage-support flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground ${className}`}
+      className={`grid w-full max-w-60 grid-cols-[minmax(0,1fr)_4rem] items-center gap-1.5 text-xs text-muted-foreground ${className}`}
     >
-      <ProductColorSwatch color={color} model={model} />
-      <span className="truncate">{color}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <ProductColorSwatch color={color} model={model} />
+        <span className="truncate" title={color}>
+          {color}
+        </span>
+      </span>
       {memory && (
         <Badge
-          className="shrink-0 px-1.5 py-0 font-extrabold"
+          className="w-16 justify-center whitespace-nowrap px-1.5 py-0 font-extrabold tabular-nums"
           variant="secondary"
         >
           {memory}

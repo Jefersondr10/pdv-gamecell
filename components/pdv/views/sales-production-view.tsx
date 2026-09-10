@@ -1283,10 +1283,13 @@ function SaleList({
               </p>
             )}
             {sale.status === 'completed' &&
-              (sale.receivedDifferenceCents !== 0 || !sale.receipts.length) && (
+              (sale.receivedDifferenceCents !== 0 ||
+                (financial.pixCents > 0 && !sale.receipts.length)) && (
                 <p className="mt-1 truncate text-xs font-semibold text-amber-800 dark:text-amber-200">
                   {paymentDifferenceText(sale) ?? 'Sem comprovante'}
-                  {sale.receivedDifferenceCents !== 0 && !sale.receipts.length
+                  {sale.receivedDifferenceCents !== 0 &&
+                  financial.pixCents > 0 &&
+                  !sale.receipts.length
                     ? ' · sem comprovante'
                     : ''}
                 </p>
@@ -2389,6 +2392,7 @@ function EditSaleDialog({
                 )}
                 <ReceiptPaymentSync
                   saleId={sale.id}
+                  pixAccounts={data.pixAccounts}
                   productsTotalCents={sale.productsTotalCents}
                   csrfToken={data.csrfToken}
                   canUse={canPayments && canReceipts}
@@ -2402,8 +2406,7 @@ function EditSaleDialog({
                     changedSavedReceiptValues.length > 0
                   }
                   onPayments={(payments, total) => {
-                    if (Object.keys(paymentEdits).length || uploadBusy)
-                      return false;
+                    if (hasPaymentCorrections || uploadBusy) return false;
                     setVisiblePayments(payments);
                     if (total !== sale.receivedTotalCents) void onChanged();
                     return true;
@@ -2756,7 +2759,27 @@ function EditSaleDialog({
                         attachmentsSaved = true;
                       }
                       await onChanged();
-                      onOpenChange(false);
+                      if (
+                        canPayments &&
+                        canReceipts &&
+                        (receiptFiles.length > 0 || receiptValuesSaved) &&
+                        ![...correctedPayments, ...paymentsToSave].some(
+                          (payment) => payment.method === 'pix',
+                        )
+                      ) {
+                        setReceiptFiles([]);
+                        setReceiptValues([]);
+                        setItemFiles({});
+                        setPaymentEdits({});
+                        attachmentOperationIdRef.current = createOperationId();
+                        receiptValueOperationIdRef.current =
+                          createOperationId();
+                        setNotice(
+                          'Comprovante salvo. Na seção Comprovantes, aguarde a leitura, escolha a conta e toque em Registrar Pix do comprovante.',
+                        );
+                      } else {
+                        onOpenChange(false);
+                      }
                     } catch (caught) {
                       const savedParts = [
                         participantsSaved ? 'o cliente e vendedor' : '',

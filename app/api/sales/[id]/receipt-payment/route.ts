@@ -13,6 +13,7 @@ import {
   readReceiptPaymentSync,
   requestReceiptPaymentSync,
   settleReceiptPaymentSync,
+  registerFirstReceiptPix,
 } from '@/lib/server/receipt-payment-sync';
 import {
   consumeStoreReadBudget,
@@ -73,6 +74,7 @@ export async function POST(request: Request, context: Context) {
           ![
             'operationId',
             'targetPaymentId',
+            'pixAccountId',
             'expectedPayments',
             'expectedReceipts',
             'expectedRequestId',
@@ -94,8 +96,17 @@ export async function POST(request: Request, context: Context) {
       body.targetPaymentId == null
         ? null
         : operationIdField(body.targetPaymentId);
+    const pixAccountId =
+      body.pixAccountId == null ? null : operationIdField(body.pixAccountId);
+    if (pixAccountId && targetPaymentId)
+      throw new HttpError(
+        400,
+        'Escolha registrar um novo Pix ou ajustar um Pix existente.',
+        'INVALID_FIELDS',
+      );
     const details = JSON.stringify({
       targetPaymentId,
+      ...(pixAccountId ? { pixAccountId } : {}),
       expectedPayments: body.expectedPayments,
       expectedReceipts: body.expectedReceipts,
       expectedRequestId: body.expectedRequestId,
@@ -130,23 +141,61 @@ export async function POST(request: Request, context: Context) {
     if (!state)
       throw new HttpError(404, 'Venda não encontrada.', 'SALE_NOT_FOUND');
     if (replay) return json({ ...publicState(state), replayed: true });
+    const completedFirstPix = () =>
+      db
+        .prepare(`SELECT 1 AS ok FROM audit_events WHERE id=? AND actor_user_id=? AND store_id=?
+      AND entity_id=? AND action='sale.receipt_payment_requested' AND details_json=?`)
+        .bind(operationId, session.id, storeId, saleId, details)
+        .first();
     if (
       state.sale.status !== 'completed' ||
       state.sale.paymentsJson !== body.expectedPayments ||
       state.sale.receiptsJson !== body.expectedReceipts ||
       (state.request?.requestId ?? null) !== body.expectedRequestId
-    )
+    ) {
+      if (pixAccountId && (await completedFirstPix()))
+        return json({
+          ...publicState((await readReceiptPaymentSync(db, storeId, saleId))!),
+          replayed: true,
+        });
       throw new HttpError(
         409,
         'A venda mudou. Confira os valores atualizados e tente novamente.',
         'SALE_CHANGED',
       );
+    }
     if (!state.complete)
       throw new HttpError(
         409,
         'Aguarde a leitura ou corrija os comprovantes sem valor.',
         'RECEIPTS_PENDING',
       );
+    if (pixAccountId) {
+      const now = Date.now();
+      await consumeStoreWriteBudget(db, now, storeId, 6);
+      try {
+        await registerFirstReceiptPix(
+          db,
+          { storeId, saleId, actorId: session.id, subject: session },
+          state,
+          { operationId, pixAccountId, requestDetails: details },
+          now,
+        );
+      } catch (error) {
+        const committed = await completedFirstPix();
+        if (committed)
+          return json({
+            ...publicState(
+              (await readReceiptPaymentSync(db, storeId, saleId))!,
+            ),
+            replayed: true,
+          });
+        throw error;
+      }
+      return json(
+        publicState((await readReceiptPaymentSync(db, storeId, saleId))!),
+      );
+    }
     const pixPayments = state.payments.filter((p) => p.method === 'pix');
     const target = targetPaymentId
       ? pixPayments.find((p) => p.id === targetPaymentId)

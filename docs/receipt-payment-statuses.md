@@ -4,7 +4,9 @@
 
 - Um novo envio de comprovantes ou correção explícita de valores cria uma solicitação persistida de atualização do pagamento, desde que o usuário tenha permissão de pagamentos.
 - O servidor espera todos os comprovantes ativos terem valores positivos; nunca usa uma soma parcial. Fotos de aparelhos não entram nessa soma.
-- Com um pagamento Pix, ajusta apenas seu valor e mantém a conta. Com vários Pix, exige a escolha explícita de qual Pix absorve a diferença. Dinheiro nunca é alvo dessa atualização: o total recebido passa a ser dinheiro preservado + comprovantes. Sem Pix cadastrado, solicita revisão, sem converter dinheiro em Pix nem inventar uma conta.
+- Com um pagamento Pix, ajusta apenas seu valor e mantém a conta. Com vários Pix, exige a escolha explícita de qual Pix absorve a diferença. Dinheiro nunca é alvo dessa atualização: o total recebido passa a ser dinheiro preservado + comprovantes. Sem Pix cadastrado, a seção Comprovantes oferece escolher a conta ativa e **Registrar Pix do comprovante**. Usa o valor lido, sem convertê-lo a partir do dinheiro nem inventar uma conta.
+- Ao salvar um comprovante depois de uma venda sem Pix, a edição permanece aberta para concluir essa etapa. A leitura pode terminar com a tela fechada; ao reabrir, o valor e a opção de registro continuam disponíveis. Apenas ler um comprovante não comprova crédito bancário.
+- Registrar o primeiro Pix valida novamente todos os pagamentos, comprovantes, solicitação atual, conta da mesma loja e permissões. Pagamento, totais e auditoria são gravados juntos. Cliques repetidos não duplicam o Pix e reenvios antigos não desfazem uma alteração manual posterior.
 - Uma edição manual de pagamento posterior invalida a solicitação anterior, inclusive se a leitura terminar depois. Repetir uma operação antiga não reativa a solicitação.
 - Se pagamento e comprovantes forem salvos juntos, a correção manual prevalece. A proteção persiste nas tentativas após falha parcial.
 - Usuários sem permissão de pagamentos não podem aproveitar uma solicitação pendente de outra pessoa para modificar valores financeiros.

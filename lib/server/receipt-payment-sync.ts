@@ -4,6 +4,7 @@ import {
   type PermissionSubject,
 } from '../permissions.ts';
 import { paymentMethodTotals } from '../receipt-reconciliation.ts';
+import { HttpError } from './http.ts';
 
 type Payment = {
   id: string;
@@ -120,6 +121,182 @@ export async function readReceiptPaymentSync(
     total,
     request: results[1].results[0] as RequestRow | undefined,
   };
+}
+
+// Explicit first Pix: a receipt identifies the amount, never the destination account.
+// The caller handles operation replay before invoking this atomic creation path.
+export async function registerFirstReceiptPix(
+  db: D1Database,
+  scope: {
+    storeId: string;
+    saleId: string;
+    actorId: string;
+    subject: PermissionSubject;
+  },
+  state: NonNullable<Awaited<ReturnType<typeof readReceiptPaymentSync>>>,
+  input: { operationId: string; pixAccountId: string; requestDetails: string },
+  now: number,
+) {
+  const { storeId, saleId, actorId } = scope;
+  if (
+    !can(scope.subject, 'sales.payments') ||
+    !can(scope.subject, 'sales.receipts')
+  )
+    throw new HttpError(
+      403,
+      'É necessário acesso a comprovantes e pagamentos.',
+      'PERMISSION_DENIED',
+    );
+  if (
+    state.sale.status !== 'completed' ||
+    state.payments.some((p) => p.method === 'pix')
+  )
+    throw new HttpError(
+      409,
+      'A venda mudou. Atualize os pagamentos antes de registrar o Pix.',
+      'SALE_CHANGED',
+    );
+  const receivedAfter = state.cashCents + state.total;
+  if (
+    !state.complete ||
+    !Number.isSafeInteger(state.total) ||
+    state.total < 1 ||
+    state.total > 1_000_000_000 ||
+    !Number.isSafeInteger(receivedAfter) ||
+    receivedAfter > 100_000_000_000
+  )
+    throw new HttpError(
+      409,
+      'Aguarde a leitura ou corrija os comprovantes antes de registrar o Pix.',
+      'RECEIPTS_PENDING',
+    );
+  const account = await db
+    .prepare(
+      'SELECT name FROM pix_accounts WHERE id=? AND store_id=? AND active=1',
+    )
+    .bind(input.pixAccountId, storeId)
+    .first<{ name: string }>();
+  if (!account)
+    throw new HttpError(
+      409,
+      'Selecione uma conta Pix ativa desta loja.',
+      'PIX_ACCOUNT_INVALID',
+    );
+  const actor = await db
+    .prepare(
+      'SELECT role,permissions_json AS permissionsJson,active FROM users WHERE id=? AND store_id=?',
+    )
+    .bind(actorId, storeId)
+    .first<{
+      role: PermissionSubject['role'];
+      permissionsJson: string | null;
+      active: number;
+    }>();
+  const actorSubject = actor && {
+    role: actor.role,
+    permissions: resolvePermissions(actor.role, actor.permissionsJson),
+  };
+  if (
+    !actor ||
+    actor.active !== 1 ||
+    !actorSubject ||
+    !can(actorSubject, 'sales.payments') ||
+    !can(actorSubject, 'sales.receipts')
+  )
+    throw new HttpError(
+      403,
+      'Seu acesso a pagamentos ou comprovantes mudou.',
+      'PERMISSION_DENIED',
+    );
+  const paymentId = crypto.randomUUID();
+  const additionDetails = JSON.stringify({
+    paymentId,
+    method: 'pix',
+    pixAccountId: input.pixAccountId,
+    accountName: account.name,
+    amountCents: state.total,
+    previousReceivedCents: state.sale.receivedTotalCents,
+    receivedTotalCents: receivedAfter,
+    receiptRequestId: input.operationId,
+    receipts: state.receipts,
+  });
+  try {
+    await db.batch([
+      db
+        .prepare(`INSERT INTO audit_events (id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+        VALUES(?,?,?,'sale.receipt_payment_requested','sale',CASE WHEN
+        EXISTS(SELECT 1 FROM sales WHERE id=? AND store_id=? AND status='completed' AND received_total_cents=?)
+        AND ${paymentSnapshot}=? AND ${receiptSnapshot}=?
+        AND NOT EXISTS(SELECT 1 FROM payments WHERE sale_id=? AND store_id=? AND method='pix')
+        AND (SELECT request_id FROM sale_receipt_payment_sync WHERE sale_id=? AND store_id=?) IS ?
+        AND EXISTS(SELECT 1 FROM pix_accounts WHERE id=? AND store_id=? AND active=1 AND name=?)
+        AND EXISTS(SELECT 1 FROM users WHERE id=? AND store_id=? AND active=1 AND role=? AND permissions_json IS ?)
+        THEN ? ELSE NULL END,?,?)`)
+        .bind(
+          input.operationId,
+          storeId,
+          actorId,
+          saleId,
+          storeId,
+          state.sale.receivedTotalCents,
+          saleId,
+          storeId,
+          state.sale.paymentsJson,
+          saleId,
+          storeId,
+          state.sale.receiptsJson,
+          saleId,
+          storeId,
+          saleId,
+          storeId,
+          state.request?.requestId ?? null,
+          input.pixAccountId,
+          storeId,
+          account.name,
+          actorId,
+          storeId,
+          actor.role,
+          actor.permissionsJson,
+          saleId,
+          input.requestDetails,
+          now,
+        ),
+      db
+        .prepare(`INSERT INTO payments(id,store_id,sale_id,method,pix_account_id,account_name,amount_cents,created_at)
+        VALUES(?,?,?,'pix',?,?,?,?)`)
+        .bind(
+          paymentId,
+          storeId,
+          saleId,
+          input.pixAccountId,
+          account.name,
+          state.total,
+          now,
+        ),
+      db
+        .prepare(
+          `UPDATE sales SET received_total_cents=?,received_difference_cents=?-products_total_cents WHERE id=? AND store_id=?`,
+        )
+        .bind(receivedAfter, receivedAfter, saleId, storeId),
+      db
+        .prepare(`INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+        VALUES(?,?,?,'sale.payment_added','sale',?,?,?)`)
+        .bind(paymentId, storeId, actorId, saleId, additionDetails, now),
+      db
+        .prepare(`INSERT INTO sale_receipt_payment_sync(sale_id,store_id,request_id,requested_by,target_payment_id,status,updated_at)
+        VALUES(?,?,?,?,?,'applied',?) ON CONFLICT(sale_id) DO UPDATE SET request_id=excluded.request_id,
+        requested_by=excluded.requested_by,target_payment_id=excluded.target_payment_id,status='applied',updated_at=excluded.updated_at`)
+        .bind(saleId, storeId, input.operationId, actorId, paymentId, now),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && /constraint failed/i.test(error.message))
+      throw new HttpError(
+        409,
+        'A venda ou a conta mudou. Atualize e confira antes de registrar o Pix.',
+        'SALE_CHANGED',
+      );
+    throw error;
+  }
 }
 
 // Durable, race-safe settlement. All payment rows remain consistent with sale totals.

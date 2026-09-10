@@ -7,7 +7,7 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import { requestJson } from '@/lib/client-api';
-import type { SalePaymentRecord } from '@/lib/pdv-types';
+import type { PixAccountRecord, SalePaymentRecord } from '@/lib/pdv-types';
 import { paymentMethodTotals } from '@/lib/receipt-reconciliation';
 const formatMoney = (cents: number) =>
   (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -29,6 +29,7 @@ type State = {
 export function ReceiptPaymentSync({
   saleId,
   productsTotalCents,
+  pixAccounts,
   csrfToken,
   canUse,
   disabled,
@@ -36,6 +37,7 @@ export function ReceiptPaymentSync({
 }: {
   saleId: string;
   productsTotalCents: number;
+  pixAccounts: PixAccountRecord[];
   csrfToken: string;
   canUse: boolean;
   disabled: boolean;
@@ -46,6 +48,7 @@ export function ReceiptPaymentSync({
 }) {
   const [state, setState] = useState<State>();
   const [target, setTarget] = useState('');
+  const [newPixAccountId, setNewPixAccountId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
@@ -115,6 +118,11 @@ export function ReceiptPaymentSync({
   }, [saleId, revision]);
   if (!state || state.saleStatus !== 'completed') return null;
   const pixPayments = state.payments.filter((p) => p.method === 'pix');
+  const firstPix = pixPayments.length === 0;
+  const activeAccounts = pixAccounts.filter((account) => account.active);
+  const newPixAccount = activeAccounts.find(
+    (account) => account.id === newPixAccountId,
+  );
   const { pixCents, cashCents } = paymentMethodTotals(state.payments);
   const targetId =
     pixPayments.find((p) => p.id === target)?.id ||
@@ -125,15 +133,21 @@ export function ReceiptPaymentSync({
   return (
     <div className="mt-3 rounded-xl border bg-muted/30 p-3 text-sm">
       <p className="font-semibold">
-        {state.status === 'applied'
-          ? 'Pix atualizado pelos comprovantes'
-          : state.status === 'pending'
-            ? 'Atualização do Pix pendente'
-            : 'Pix e comprovantes'}
+        {firstPix && state.complete
+          ? 'Comprovante lido · falta registrar o Pix'
+          : state.status === 'applied'
+            ? 'Pix atualizado pelos comprovantes'
+            : state.status === 'pending'
+              ? 'Atualização do Pix pendente'
+              : 'Pix e comprovantes'}
       </p>
       <p className="mt-1 text-muted-foreground">
-        {pixPayments.length === 0
-          ? 'Nenhum Pix informado. O dinheiro é conferido manualmente e não será alterado pelos comprovantes.'
+        {firstPix
+          ? state.complete
+            ? canUse
+              ? 'Escolha a conta que recebeu o Pix e registre o pagamento abaixo. O valor já foi lido; dinheiro não será alterado.'
+              : 'Um usuário com acesso a pagamentos e comprovantes precisa escolher a conta para registrar este Pix.'
+            : 'Após salvar e ler o comprovante, escolha a conta para registrar o primeiro Pix. Dinheiro é conferido manualmente.'
           : state.status === 'pending'
             ? 'O Pix será atualizado quando todos os comprovantes tiverem valor. Dinheiro permanece como informado manualmente.'
             : state.status === 'applied'
@@ -150,13 +164,12 @@ export function ReceiptPaymentSync({
         </p>
       )}
       {canUse &&
-        pixPayments.length > 0 &&
         state.complete &&
         difference !== 0 &&
-        state.status !== 'pending' && (
+        (firstPix || state.status !== 'pending') && (
           <div className="mt-3 space-y-2">
             <p className="text-sm">
-              O Pix passará para{' '}
+              {firstPix ? 'Será registrado um Pix de ' : 'O Pix passará para '}
               <strong>{formatMoney(state.receiptTotalCents)}</strong>, mantendo{' '}
               {formatMoney(cashCents)} em dinheiro. O total pago será{' '}
               <strong>{formatMoney(receivedAfter)}</strong>
@@ -165,6 +178,24 @@ export function ReceiptPaymentSync({
                 : '.'}
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
+              {firstPix && (
+                <NativeSelect
+                  aria-label="Conta que recebeu o Pix do comprovante"
+                  value={newPixAccountId}
+                  disabled={disabled || busy}
+                  onChange={(event) => setNewPixAccountId(event.target.value)}
+                  className="min-w-0 flex-1"
+                >
+                  <NativeSelectOption value="">
+                    Escolha a conta que recebeu
+                  </NativeSelectOption>
+                  {activeAccounts.map((account) => (
+                    <NativeSelectOption key={account.id} value={account.id}>
+                      {account.name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              )}
               {pixPayments.length > 1 && (
                 <NativeSelect
                   aria-label="Pagamento a ajustar pelos comprovantes"
@@ -191,12 +222,16 @@ export function ReceiptPaymentSync({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={disabled || busy || !targetId}
+                disabled={
+                  disabled || busy || (firstPix ? !newPixAccount : !targetId)
+                }
                 onClick={async () => {
                   setBusy(true);
                   setError('');
                   const payload = {
-                    targetPaymentId: targetId,
+                    ...(firstPix
+                      ? { pixAccountId: newPixAccount!.id }
+                      : { targetPaymentId: targetId }),
                     expectedPayments: state.expectedPayments,
                     expectedReceipts: state.expectedReceipts,
                     expectedRequestId: state.requestId,
@@ -235,12 +270,27 @@ export function ReceiptPaymentSync({
                   }
                 }}
               >
-                {busy ? 'Atualizando…' : 'Usar total dos comprovantes'}
+                {busy
+                  ? 'Registrando…'
+                  : firstPix
+                    ? 'Registrar Pix do comprovante'
+                    : 'Usar total dos comprovantes'}
               </Button>
             </div>
+            {firstPix && activeAccounts.length === 0 && (
+              <p className="text-amber-800">
+                Cadastre ou ative uma conta em Cadastros › Contas para registrar
+                este Pix.
+              </p>
+            )}
+            {disabled && (
+              <p className="text-muted-foreground">
+                Salve as alterações da venda antes de registrar o Pix.
+              </p>
+            )}
           </div>
         )}
-      {state.status === 'review' && (
+      {!firstPix && state.status === 'review' && (
         <p className="mt-2 text-amber-800">
           Confira os pagamentos. A diferença não foi distribuída automaticamente
           entre contas ou formas de pagamento.
