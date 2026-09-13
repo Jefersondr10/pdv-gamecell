@@ -4,6 +4,8 @@ export const RECEIPT_ACTIVITY_IDLE_POLL_MS = 120_000;
 export const RECEIPT_ACTIVITY_PENDING_POLL_MS = 60_000;
 export const RECEIPT_SALE_IDLE_POLL_MS = 120_000;
 export const RECEIPT_SALE_PENDING_POLL_MS = 120_000;
+export const RECEIPT_SALE_BURST_POLL_MS = 3_000;
+export const RECEIPT_SALE_BURST_WINDOW_MS = 30_000;
 export const RECEIPT_POLL_RETRY_MS = 60_000;
 export const RECEIPT_ACTIVITY_READ_COST = 1;
 export const RECEIPT_SALE_READ_COST = 2;
@@ -46,11 +48,20 @@ export function hasPendingReceiptWork(state: ReceiptSalePollingState) {
   );
 }
 
+export function receiptSalePollDelay(
+  state: ReceiptSalePollingState,
+  burstUntil: number,
+  now = Date.now(),
+) {
+  if (now < burstUntil) return RECEIPT_SALE_BURST_POLL_MS;
+  return hasPendingReceiptWork(state)
+    ? RECEIPT_SALE_PENDING_POLL_MS
+    : RECEIPT_SALE_IDLE_POLL_MS;
+}
+
 export function receiptPollingBudgetPerHour(openSaleDetails: number) {
   const hour = 3_600_000;
-  const activityRequests = Math.ceil(
-    hour / RECEIPT_ACTIVITY_PENDING_POLL_MS,
-  );
+  const activityRequests = Math.ceil(hour / RECEIPT_ACTIVITY_PENDING_POLL_MS);
   const saleRequests =
     Math.max(0, Math.trunc(openSaleDetails)) *
     Math.ceil(hour / RECEIPT_SALE_PENDING_POLL_MS);

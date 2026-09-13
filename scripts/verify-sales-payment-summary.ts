@@ -74,6 +74,8 @@ const sale = (
         recipientBank: payment.accountName,
         recipientDocument: null,
         transactionId: `E${payment.id.padEnd(31, '0').slice(0, 31)}`,
+        alternateTransactionId: null,
+        observedTransactionId: null,
         paidAtText: '09/09/2026 12:00',
         state: 'completed' as const,
         automaticEligible: true,

@@ -3,7 +3,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { SqliteDatabase } from '../lib/server/node/sqlite.mjs';
 import {
   extractReceiptDocument,
+  parseReceiptDocument,
   preferReceiptReading,
+  receiptEvidenceKey,
+  shortReceiptDate,
 } from '../lib/receipt-document.ts';
 import { processReceiptJob } from '../lib/server/node/receipt-jobs.mjs';
 import { retryReceipt } from '../lib/server/retry-receipt.ts';
@@ -35,6 +38,312 @@ assert.equal(document.details.recipientBank, 'Banco Recebedor');
 assert.equal(document.details.payerBank, 'Mercado Pago');
 assert.equal(document.details.recipientDocument, '12345678000199');
 assert.equal(document.details.automaticEligible, true);
+
+const mercadoPagoWithoutCanonicalE2e = extractReceiptDocument(`
+Mercado Pago
+Comprovante de Pix
+13/setembro/2026 às 13:41:02
+R$ 4.400
+Origem e destino
+Empresa pagadora LTDA
+Mercado Pago
+CNPJ: 00.000.000/0001-00
+bind
+Empresa recebedora LTDA
+MT INSTITUICAO DE PAGAMENTO SA
+CNPJ: 11.111.111/0001-11
+N.º transação do Mercado Pago
+123456789012
+ID de transação Pix
+E105735212026091316408nhD9LqTjdZz
+`);
+assert.equal(mercadoPagoWithoutCanonicalE2e.amountCents, 440000);
+assert.equal(mercadoPagoWithoutCanonicalE2e.details.transactionId, null);
+assert.equal(
+  mercadoPagoWithoutCanonicalE2e.details.alternateTransactionId,
+  'mercado-pago:123456789012',
+);
+assert.equal(
+  mercadoPagoWithoutCanonicalE2e.details.recipientName,
+  'Empresa recebedora LTDA',
+);
+assert.equal(mercadoPagoWithoutCanonicalE2e.details.automaticEligible, true);
+
+const itauSisPagText = `
+08 set. 2026, 12:08:24, via SISPAG no app Itaú
+tipo de transferência
+PIX TRANSFERENCIA
+valor da transferência
+R$ 4.250,00
+de
+Empresa pagadora LTDA
+agência 0001 conta 00001-1
+CPF ou CNPJ 00.000.000/0001-00
+para
+Empresa recebedora LTDA
+MT IP S.A.
+CPF ou CNPJ 11.111.111/0001-11
+chave 11111111-1111-1111-1111-111111111111
+ID da transação
+E60701190202609081507DY5H11W7NYC
+controle 123456789
+autenticação do comprovante
+`;
+const itauSisPag = extractReceiptDocument(itauSisPagText);
+assert.equal(itauSisPag.amountCents, 425000);
+assert.equal(itauSisPag.details.state, 'completed');
+assert.equal(itauSisPag.details.automaticEligible, true);
+assert.equal(itauSisPag.details.paidAtText, '08 set. 2026, 12:08:24');
+assert.equal(
+  shortReceiptDate(itauSisPag.details.paidAtText),
+  '08/09/2026 · 12:08',
+);
+assert.equal(
+  extractReceiptDocument(`${itauSisPagText}\nAgendado`).details
+    .automaticEligible,
+  false,
+);
+
+const truncatedInterId = extractReceiptDocument(`
+Comprovante de Pix
+Pix realizado
+10/09/2026 10:20
+Valor da transferência
+R$ 4.350,00
+Pagador
+Empresa pagadora
+Recebedor
+Empresa recebedora
+ID datransaç...
+E${'6'.repeat(31)}
+`);
+assert.equal(truncatedInterId.details.transactionId, `E${'6'.repeat(31)}`);
+assert.equal(truncatedInterId.details.automaticEligible, true);
+
+const pagBankText = `
+Comprovante de envio de Pix
+Valor R$ 4.500,00
+Código da transação Pix
+E${'7'.repeat(31)}
+`;
+const pagBank = extractReceiptDocument(pagBankText);
+assert.equal(pagBank.details.transactionId, `E${'7'.repeat(31)}`);
+assert.equal(pagBank.details.state, 'completed');
+assert.equal(pagBank.details.automaticEligible, true);
+assert.equal(
+  extractReceiptDocument(`${pagBankText}\nEm processamento`).details
+    .automaticEligible,
+  false,
+);
+assert.equal(
+  extractReceiptDocument(
+    `${pagBankText}\n${pagBankText.replace('4.500,00', '5.500,00')}`,
+  ).details.automaticEligible,
+  false,
+  'repeated PagBank sections with different amounts are ambiguous',
+);
+const brokenPagBankHeading = pagBankText.replace(
+  'Comprovante de envio de Pix',
+  'Comprovante de\nenvio Pix',
+);
+assert.equal(
+  extractReceiptDocument(
+    `${brokenPagBankHeading}\n${brokenPagBankHeading.replace('4.500,00', '5.500,00')}`,
+  ).details.automaticEligible,
+  false,
+  'broken OCR headings still separate receipts with different amounts',
+);
+
+const mercadoPagoBlock = (institutionId: string) => `
+Mercado Pago
+Comprovante de Pix
+13/setembro/2026 às 13:41:02
+R$ 4.400
+Origem e destino
+Empresa pagadora LTDA
+Mercado Pago
+CNPJ: 00.000.000/0001-00
+Empresa recebedora LTDA
+MT INSTITUICAO DE PAGAMENTO SA
+CNPJ: 11.111.111/0001-11
+N.º transação do Mercado Pago
+${institutionId}
+`;
+assert.equal(
+  extractReceiptDocument(
+    `${mercadoPagoBlock('123456789012')}\n${mercadoPagoBlock('999999999999')}`,
+  ).details.automaticEligible,
+  false,
+);
+assert.equal(
+  extractReceiptDocument(
+    `${mercadoPagoBlock('123456789012')}\n${mercadoPagoBlock('123456789012')}`,
+  ).details.ambiguous,
+  false,
+);
+const mercadoReading = (providerId: string, canonicalCharacter: string) =>
+  extractReceiptDocument(`
+${mercadoPagoBlock(providerId)}
+ID de transação Pix
+E${canonicalCharacter.repeat(31)}
+`);
+const canonicalOnlyReading = (canonicalCharacter: string) =>
+  extractReceiptDocument(`
+Comprovante de Pix
+Pix realizado
+R$ 4.400,00
+ID de transação Pix
+E${canonicalCharacter.repeat(31)}
+`);
+assert.equal(
+  preferReceiptReading([
+    mercadoReading('123456789012', 'D'),
+    canonicalOnlyReading('D'),
+  ]).details.automaticEligible,
+  true,
+  'readings that share the canonical E2E describe the same payment',
+);
+assert.equal(
+  preferReceiptReading([
+    mercadoReading('123456789012', 'D'),
+    mercadoReading('123456789012', 'F'),
+  ]).details.automaticEligible,
+  true,
+  'readings that share the provider transaction number describe the same payment',
+);
+assert.equal(
+  preferReceiptReading([
+    mercadoReading('123456789012', 'D'),
+    mercadoReading('999999999999', 'F'),
+  ]).details.automaticEligible,
+  false,
+  'readings with disjoint transaction identities must remain under review',
+);
+
+for (const santanderIdLabel of ['ID/Transação', 'IDfTransação']) {
+  const santander = extractReceiptDocument(`
+Comprovante do pagamento
+Tipo de transferência: Pix
+Valor R$ 4.600,00
+${santanderIdLabel}
+E${'8'.repeat(31)}
+`);
+  assert.equal(santander.details.transactionId, `E${'8'.repeat(31)}`);
+  assert.equal(santander.details.state, 'completed');
+  assert.equal(santander.details.automaticEligible, true);
+}
+
+const splitPicPayId = `E${'9'.repeat(31)}`;
+const picPay = extractReceiptDocument(`
+Comprovante de Pix
+Pix realizado
+Valor R$ 4.700,00
+ID da transação
+${splitPicPayId.slice(0, 28)}
+${splitPicPayId.slice(28)}
+`);
+assert.equal(picPay.details.transactionId, splitPicPayId);
+assert.equal(picPay.details.automaticEligible, true);
+
+const bradescoCompletedText = `
+Comprovante de transferência
+Dados de quem recebeu
+Nome: Empresa recebedora LTDA
+Instituição Destino: MT IP S.A.
+Dados da Transferência
+Valor
+R$ 4.800,00
+Identificação:
+E${'A'.repeat(31)}
+Debitado da
+Instituição Origem: BANCO BRADESCO S.A.
+`;
+const bradescoCompleted = extractReceiptDocument(bradescoCompletedText);
+assert.equal(bradescoCompleted.details.state, 'completed');
+assert.equal(bradescoCompleted.details.automaticEligible, true);
+assert.equal(bradescoCompleted.details.payerBank, 'BANCO BRADESCO S.A.');
+assert.equal(
+  extractReceiptDocument(
+    `${bradescoCompletedText}\nOperação sujeita a análise. O crédito será efetuado em instantes.`,
+  ).details.automaticEligible,
+  false,
+);
+
+const observedId = `E${'B'.repeat(32)}`;
+const interWithStableLongId = () =>
+  extractReceiptDocument(`
+Comprovante de Pix
+Pix realizado
+Valor R$ 4.900,00
+ID da transação
+${observedId}
+`);
+assert.equal(interWithStableLongId().details.automaticEligible, false);
+const consensusInter = preferReceiptReading([
+  interWithStableLongId(),
+  interWithStableLongId(),
+]);
+assert.equal(consensusInter.details.automaticEligible, true);
+assert.equal(
+  consensusInter.details.alternateTransactionId,
+  `ocr-consensus:${observedId}`,
+);
+assert.equal(
+  receiptEvidenceKey(consensusInter.details),
+  `ocr-consensus:${observedId}`,
+);
+const canonicalBeforeObservedConsensus = preferReceiptReading([
+  extractReceiptDocument(text(4, undefined, undefined, '4.900,00')),
+  interWithStableLongId(),
+  interWithStableLongId(),
+]);
+assert.equal(
+  canonicalBeforeObservedConsensus.details.alternateTransactionId,
+  null,
+);
+assert.equal(
+  receiptEvidenceKey(canonicalBeforeObservedConsensus.details),
+  `E${String(4).padStart(31, '0')}`,
+);
+const canonicalBeforeConflictingObserved = preferReceiptReading([
+  extractReceiptDocument(text(4, undefined, undefined, '4.900,00')),
+  interWithStableLongId(),
+  extractReceiptDocument(`
+Comprovante de Pix
+Pix realizado
+Valor R$ 4.900,00
+ID da transação
+E${'C'.repeat(32)}
+`),
+]);
+assert.equal(
+  canonicalBeforeConflictingObserved.details.automaticEligible,
+  true,
+);
+assert.equal(canonicalBeforeConflictingObserved.details.ambiguous, false);
+const conflictingObserved = preferReceiptReading([
+  interWithStableLongId(),
+  extractReceiptDocument(`
+Comprovante de Pix
+Pix realizado
+Valor R$ 4.900,00
+ID da transação
+E${'C'.repeat(32)}
+`),
+]);
+assert.equal(conflictingObserved.details.automaticEligible, false);
+assert.equal(conflictingObserved.details.ambiguous, true);
+
+for (const invalidId of [
+  `E${'D'.repeat(30)}`,
+  `E${'D'.repeat(32)}`,
+  `E${'D'.repeat(30)}!`,
+]) {
+  assert.equal(
+    parseReceiptDocument({ ...document.details, transactionId: invalidId }),
+    null,
+  );
+}
 assert.equal(
   extractReceiptDocument(text(1, undefined, undefined, '19.650')).amountCents,
   1965000,
@@ -59,6 +368,18 @@ for (const negative of [
 assert.equal(
   extractReceiptDocument(text() + '\n' + text(2)).details.automaticEligible,
   false,
+);
+assert.equal(
+  extractReceiptDocument(text() + '\n' + text()).details.automaticEligible,
+  true,
+  'the same identifier and amount repeated by OCR are not ambiguous',
+);
+assert.equal(
+  extractReceiptDocument(
+    `${text()}\n${text(1, undefined, undefined, '5.100,00')}`,
+  ).details.automaticEligible,
+  false,
+  'the same identifier cannot hide two different transaction amounts',
 );
 assert.equal(
   extractReceiptDocument(
@@ -412,6 +733,155 @@ assert.equal(
     .prepare('SELECT transaction_id AS id FROM receipt_payment_links')
     .get()!.id,
   document.details.transactionId,
+);
+// Mercado Pago's own labelled transaction number remains the durable identity
+// when OCR alternates between a malformed and a canonical-looking Pix E2E.
+seed(0, 440000);
+const mercadoWithCanonical = (character: string) =>
+  extractReceiptDocument(`
+${mercadoPagoBlock('123456789012')}
+ID de transação Pix
+E${character.repeat(31)}
+`);
+const mercadoFirstReading = mercadoWithCanonical('D');
+const historicalMercadoDetails = {
+  ...mercadoFirstReading.details,
+  alternateTransactionId: null,
+};
+adapter.database
+  .prepare(
+    `INSERT INTO attachments(id,store_id,kind,sale_id,r2_key,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at,receipt_details_json,created_by,created_at) VALUES('mp','shop','receipt','sale','mp','mp.png','image/png',4,440000,'ocr',1,?,'owner',1)`,
+  )
+  .run(JSON.stringify(historicalMercadoDetails));
+await sync();
+const mercadoPaymentId = (await state())!.payments.find(
+  (payment) => payment.method === 'pix',
+)!.id;
+adapter.database
+  .prepare("UPDATE attachments SET receipt_details_json=? WHERE id='mp'")
+  .run(JSON.stringify(mercadoFirstReading.details));
+await sync();
+await check(440000, 1);
+assert.equal(
+  (await state())!.payments.find((payment) => payment.method === 'pix')!.id,
+  mercadoPaymentId,
+);
+assert.equal(
+  adapter.database
+    .prepare(
+      "SELECT transaction_id AS id FROM receipt_payment_links WHERE attachment_id='mp'",
+    )
+    .get()!.id,
+  'mercado-pago:123456789012',
+);
+assert.deepEqual(
+  adapter.database
+    .prepare(
+      "SELECT json_extract(details_json,'$.transactionId') AS id FROM audit_events WHERE entity_id='mp' AND action='sale.receipt_transaction_claimed' ORDER BY id",
+    )
+    .all()
+    .map((row) => row.id)
+    .sort((a, b) => String(a).localeCompare(String(b))),
+  [`E${'D'.repeat(31)}`, 'mercado-pago:123456789012'].sort(),
+);
+adapter.database.exec(
+  "INSERT INTO sales(id,store_id,number,customer_name,seller_user_id,seller_name,products_total_cents,received_total_cents,received_difference_cents,reference_total_cents,price_difference_cents,created_at) VALUES('mp-second','shop',2,'Segundo','owner','Teste',440000,0,-440000,440000,0,1)",
+);
+const mercadoSecondReading = mercadoWithCanonical('F');
+adapter.database
+  .prepare(
+    `INSERT INTO attachments(id,store_id,kind,sale_id,r2_key,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at,receipt_details_json,created_by,created_at) VALUES('mp-other','shop','receipt','mp-second','mp-other','mp-other.png','image/png',4,440000,'ocr',1,?,'owner',1)`,
+  )
+  .run(JSON.stringify(mercadoSecondReading.details));
+await adapter.batch(
+  requestReceiptPaymentSync(
+    db,
+    { ...scope, saleId: 'mp-second' },
+    'same-mercado-provider-id',
+    Date.now(),
+  ),
+);
+await settleReceiptPaymentSync(db, 'shop', 'mp-second');
+assert.equal(
+  (await readReceiptPaymentSync(db, 'shop', 'mp-second'))!.request?.status,
+  'review',
+);
+assert.equal(
+  (await readReceiptPaymentSync(db, 'shop', 'mp-second'))!.sale
+    .receivedTotalCents,
+  0,
+);
+adapter.database.exec("DELETE FROM attachments WHERE id='mp-other'");
+const sameCanonicalWithoutProviderId = extractReceiptDocument(`
+Comprovante de Pix
+Pix realizado
+R$ 4.400,00
+ID de transação Pix
+E${'D'.repeat(31)}
+`);
+adapter.database
+  .prepare(
+    `INSERT INTO attachments(id,store_id,kind,sale_id,r2_key,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at,receipt_details_json,created_by,created_at) VALUES('mp-canonical-copy','shop','receipt','mp-second','mp-canonical-copy','mp-canonical-copy.png','image/png',4,440000,'ocr',1,?,'owner',1)`,
+  )
+  .run(JSON.stringify(sameCanonicalWithoutProviderId.details));
+await adapter.batch(
+  requestReceiptPaymentSync(
+    db,
+    { ...scope, saleId: 'mp-second' },
+    'same-mercado-canonical-id',
+    Date.now(),
+  ),
+);
+await settleReceiptPaymentSync(db, 'shop', 'mp-second');
+assert.equal(
+  (await readReceiptPaymentSync(db, 'shop', 'mp-second'))!.request?.status,
+  'review',
+);
+assert.equal(
+  (await readReceiptPaymentSync(db, 'shop', 'mp-second'))!.sale
+    .receivedTotalCents,
+  0,
+);
+adapter.database.exec("DELETE FROM attachments WHERE id='mp-canonical-copy'");
+// A linked receipt may lose its ID in a later OCR pass. Keep the established
+// link instead of creating a second Pix or dropping an already proved receipt.
+const idlessReread = extractReceiptDocument(
+  'Comprovante de Pix\nPix realizado\nR$ 4.400,00',
+);
+assert.equal(idlessReread.details.automaticEligible, false);
+adapter.database
+  .prepare("UPDATE attachments SET receipt_details_json=? WHERE id='mp'")
+  .run(JSON.stringify(idlessReread.details));
+await sync();
+await check(440000, 1);
+assert.equal(
+  (await state())!.payments.find((payment) => payment.method === 'pix')!.id,
+  mercadoPaymentId,
+);
+adapter.database.exec("DELETE FROM attachments WHERE id='mp'");
+adapter.database
+  .prepare(
+    `INSERT INTO attachments(id,store_id,kind,sale_id,r2_key,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at,receipt_details_json,created_by,created_at) VALUES('mp-after-delete','shop','receipt','mp-second','mp-after-delete','mp-after-delete.png','image/png',4,440000,'ocr',1,?,'owner',1)`,
+  )
+  .run(JSON.stringify(sameCanonicalWithoutProviderId.details));
+await adapter.batch(
+  requestReceiptPaymentSync(
+    db,
+    { ...scope, saleId: 'mp-second' },
+    'durable-mercado-alias-claim',
+    Date.now(),
+  ),
+);
+await settleReceiptPaymentSync(db, 'shop', 'mp-second');
+assert.equal(
+  (await readReceiptPaymentSync(db, 'shop', 'mp-second'))!.request?.status,
+  'review',
+  'a provider receipt alias remains claimed after its original attachment is deleted',
+);
+assert.equal(
+  (await readReceiptPaymentSync(db, 'shop', 'mp-second'))!.sale
+    .receivedTotalCents,
+  0,
 );
 for (const mutation of [
   "UPDATE attachments SET receipt_details_json=json_set(receipt_details_json,'$.state','scheduled')",

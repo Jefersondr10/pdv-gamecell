@@ -1,4 +1,27 @@
-import { parseReceiptDocument } from '../receipt-document.ts';
+import {
+  parseReceiptDocument,
+  receiptEvidenceAliases,
+} from '../receipt-document.ts';
+
+const receiptIdentitySql = (
+  alias: string,
+  field: 'transactionId' | 'alternateTransactionId',
+) => {
+  const doc = `CASE WHEN json_valid(${alias}.receipt_details_json) THEN ${alias}.receipt_details_json ELSE '{}' END`;
+  return `json_extract(${doc},'$.${field}')`;
+};
+
+const receiptMatchesIdentitySql = (alias: string, identity: string) => {
+  const canonical = receiptIdentitySql(alias, 'transactionId');
+  const alternate = receiptIdentitySql(alias, 'alternateTransactionId');
+  return `((${canonical} IS NOT NULL AND ${canonical}=${identity}) OR (${alternate} IS NOT NULL AND ${alternate}=${identity}))`;
+};
+
+const receiptsShareIdentitySql = (left: string, right: string) => {
+  const rightCanonical = receiptIdentitySql(right, 'transactionId');
+  const rightAlternate = receiptIdentitySql(right, 'alternateTransactionId');
+  return `(${receiptMatchesIdentitySql(left, rightCanonical)} OR ${receiptMatchesIdentitySql(left, rightAlternate)})`;
+};
 
 // Use the same hard evidence checks before both automatic and explicit Pix
 // registration. Choosing an account does not turn a scheduled/duplicate Pix into payment.
@@ -9,12 +32,11 @@ export const receiptConflictSql = `NOT EXISTS (
  SELECT store_id,entity_id AS attachment_id,json_extract(details_json,'$.transactionId') AS transaction_id
  FROM audit_events WHERE action='sale.receipt_transaction_claimed' AND json_valid(details_json)
  ) claim ON claim.store_id=own.store_id
- AND claim.transaction_id=json_extract(CASE WHEN json_valid(own.receipt_details_json) THEN own.receipt_details_json ELSE '{}' END,'$.transactionId')
+ AND ${receiptMatchesIdentitySql('own', 'claim.transaction_id')}
  WHERE own.store_id=? AND own.sale_id=? AND own.kind='receipt' AND claim.attachment_id<>own.id
 ) AND NOT EXISTS (
  SELECT 1 FROM attachments own JOIN attachments other ON other.store_id=own.store_id AND other.kind='receipt' AND other.id<>own.id
- AND json_extract(CASE WHEN json_valid(own.receipt_details_json) THEN own.receipt_details_json ELSE '{}' END,'$.transactionId')=
- json_extract(CASE WHEN json_valid(other.receipt_details_json) THEN other.receipt_details_json ELSE '{}' END,'$.transactionId')
+ AND ${receiptsShareIdentitySql('own', 'other')}
  WHERE own.store_id=? AND own.sale_id=? AND own.kind='receipt'
 )`;
 
@@ -35,37 +57,36 @@ export function receiptClaimStatements(
   now: number,
 ) {
   return receipts.flatMap((receipt) => {
-    const identifiedId = parseReceiptDocument(receipt.details)?.transactionId;
-    const transactionId =
-      identifiedId && /^E[A-Za-z0-9]{31}$/.test(identifiedId)
-        ? identifiedId
-        : null;
-    return [
-      db
-        .prepare(`INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+    const transactionIds = receiptEvidenceAliases(
+      parseReceiptDocument(receipt.details),
+    );
+    return (transactionIds.length ? transactionIds : [null]).map(
+      (transactionId) =>
+        db
+          .prepare(`INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
       SELECT ?,?,?,'sale.receipt_transaction_claimed','attachment',?,?,?
       WHERE EXISTS(SELECT 1 FROM audit_events WHERE id=? AND store_id=? AND entity_id=? AND details_json=?)
       AND NOT EXISTS(SELECT 1 FROM audit_events WHERE store_id=? AND entity_id=? AND action='sale.receipt_transaction_claimed' AND json_extract(details_json,'$.transactionId') IS ?)`)
-        .bind(
-          crypto.randomUUID(),
-          scope.storeId,
-          scope.actorId,
-          receipt.id,
-          JSON.stringify({
+          .bind(
+            crypto.randomUUID(),
+            scope.storeId,
+            scope.actorId,
+            receipt.id,
+            JSON.stringify({
+              transactionId,
+              saleId: scope.saleId,
+              paymentIds: scope.paymentIds,
+            }),
+            now,
+            guardId,
+            scope.storeId,
+            scope.saleId,
+            guardDetails,
+            scope.storeId,
+            receipt.id,
             transactionId,
-            saleId: scope.saleId,
-            paymentIds: scope.paymentIds,
-          }),
-          now,
-          guardId,
-          scope.storeId,
-          scope.saleId,
-          guardDetails,
-          scope.storeId,
-          receipt.id,
-          transactionId,
-        ),
-    ];
+          ),
+    );
   });
 }
 
@@ -111,7 +132,7 @@ export async function receiptEvidenceProblem(
     return 'Documento sem confirmação de pagamento realizado: confira agendamento, processamento, cancelamento ou estorno.';
   if (documents.some((doc) => doc?.ambiguous))
     return 'A leitura do comprovante ficou ambígua. Reenvie uma imagem legível de uma única transação para conferência.';
-  const ids = documents.map((d) => d?.transactionId).filter(Boolean);
+  const ids = documents.flatMap(receiptEvidenceAliases);
   if (new Set(ids).size !== ids.length)
     return 'Há comprovantes da mesma transação. Não registre o Pix duas vezes.';
   const conflict = await db

@@ -118,7 +118,9 @@ const document: ReceiptDocument = {
   recipientName: null,
   recipientBank: null,
   recipientDocument: null,
-  transactionId: null,
+  transactionId: 'E0000000000000000000000000000001',
+  alternateTransactionId: null,
+  observedTransactionId: null,
   paidAtText: null,
 };
 for (const receiptDetails of [

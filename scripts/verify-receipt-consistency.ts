@@ -34,6 +34,8 @@ const validDocument: ReceiptDocument = {
   recipientBank: null,
   recipientDocument: null,
   transactionId: 'E0000000000000000000000000000001',
+  alternateTransactionId: null,
+  observedTransactionId: null,
   paidAtText: null,
 };
 let adapter = new SqliteDatabase(':memory:');

@@ -3,9 +3,13 @@ import { readFileSync } from 'node:fs';
 import {
   hasPendingReceiptWork,
   maximumReceiptPollRequestsPerHour,
+  receiptSalePollDelay,
   receiptPollingBudgetPerHour,
   RECEIPT_ACTIVITY_IDLE_POLL_MS,
+  RECEIPT_SALE_BURST_POLL_MS,
+  RECEIPT_SALE_BURST_WINDOW_MS,
   RECEIPT_SALE_IDLE_POLL_MS,
+  RECEIPT_SALE_PENDING_POLL_MS,
   type ReceiptSalePollingState,
 } from '../lib/receipt-polling.ts';
 
@@ -52,11 +56,37 @@ const terminal: ReceiptSalePollingState = {
 };
 assert.equal(hasPendingReceiptWork(terminal), false);
 assert.equal(
+  receiptSalePollDelay(terminal, RECEIPT_SALE_BURST_WINDOW_MS, 0),
+  RECEIPT_SALE_BURST_POLL_MS,
+  'a recent upload or reread should temporarily refresh the sale quickly',
+);
+assert.equal(
+  receiptSalePollDelay(
+    terminal,
+    RECEIPT_SALE_BURST_WINDOW_MS,
+    RECEIPT_SALE_BURST_WINDOW_MS,
+  ),
+  RECEIPT_SALE_IDLE_POLL_MS,
+  'a completed sale should return to idle polling after the burst',
+);
+assert.equal(
   hasPendingReceiptWork({
     ...terminal,
     payment: { ...terminal.payment, status: 'pending' },
   }),
   true,
+);
+assert.equal(
+  receiptSalePollDelay(
+    {
+      ...terminal,
+      payment: { ...terminal.payment, status: 'pending' },
+    },
+    0,
+    RECEIPT_SALE_BURST_WINDOW_MS,
+  ),
+  RECEIPT_SALE_PENDING_POLL_MS,
+  'pending work should retain the existing economical interval outside the burst',
 );
 assert.equal(
   hasPendingReceiptWork({
@@ -79,8 +109,7 @@ const combinedRoute = readFileSync(
   'utf8',
 );
 assert.equal(
-  (runtime.match(/\/api\/sales\/\$\{saleId\}\/receipt-ocr/g) ?? [])
-    .length,
+  (runtime.match(/\/api\/sales\/\$\{saleId\}\/receipt-ocr/g) ?? []).length,
   2,
   'the combined sale endpoint should be used once for GET and once for retry POST',
 );
@@ -90,12 +119,20 @@ assert.ok(
   runtime.includes('snapshot && snapshot.saleId === saleId'),
   'a previous sale snapshot must never be rendered for the next sale',
 );
-assert.ok(combinedRoute.includes("const includePayment = can(session, 'sales')"));
+assert.ok(
+  combinedRoute.includes("const includePayment = can(session, 'sales')"),
+);
 assert.ok(combinedRoute.includes('publicReceiptPaymentState(payment)'));
 assert.ok(
   runtime.includes('pdv:receipt-activity:') &&
     runtime.includes("window.addEventListener('storage'"),
   'store activity polling should be shared between browser tabs',
+);
+assert.ok(
+  runtime.includes(
+    'burstUntil.current = Date.now() + RECEIPT_SALE_BURST_WINDOW_MS',
+  ) && runtime.includes('receiptSalePollDelay(result, burstUntil.current)'),
+  'upload and reread events should activate temporary fast sale polling',
 );
 
 console.log(

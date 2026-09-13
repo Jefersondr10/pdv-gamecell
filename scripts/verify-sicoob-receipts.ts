@@ -209,15 +209,17 @@ for (const status of [
 // Repeating a complete receipt/ID is not evidence for two payments. Conflicting
 // OCR identifiers remain reviewable; stopping unnecessary enrichment does not
 // relax the merge or choose between conflicting S/5 identifiers.
-for (const text of [
-  fixture() + '\n' + id,
-  fixture() + '\n' + alternateId,
-  fixture() + '\n' + fixture(),
-]) {
+for (const text of [fixture() + '\n' + alternateId]) {
   const reading = extractReceiptDocument(text);
   assert.equal(reading.details.ambiguous, true);
   assert.equal(income(reading), 0);
 }
+const repeatedId = extractReceiptDocument(fixture() + '\n' + id);
+assert.equal(repeatedId.details.ambiguous, false);
+assert.equal(income(repeatedId), 730000);
+const repeatedReading = extractReceiptDocument(fixture() + '\n' + fixture());
+assert.equal(repeatedReading.details.ambiguous, false);
+assert.equal(income(repeatedReading), 730000);
 assert.equal(
   preferReceiptReading([complete, extractReceiptDocument(fixture(alternateId))])
     .details.ambiguous,

@@ -17,9 +17,12 @@ const receipts = [
     ...attachment,
     receiptAmountCents: 410000,
     receiptAmountSource: 'ocr' as const,
-    receiptDetails: extractReceiptDocument(
-      `Comprovante de Pix\n8/setembro/2026 às 17:51:29.\nR$ 4.100,00\nOrigem e destino\nPagador de demonstração LTDA\nBanco Pagador\nCNPJ:00000000000000\nRecebedor de demonstração LTDA\nBanco Recebedor\nCNPJ:12345678000199\nID de transação Pix\nE${'0'.repeat(31)}`,
-    ).details,
+    receiptDetails: {
+      ...extractReceiptDocument(
+        `Comprovante de Pix\n8/setembro/2026 às 17:51:29.\nR$ 4.100,00\nOrigem e destino\nPagador de demonstração LTDA\nBanco Pagador\nCNPJ:00000000000000\nRecebedor de demonstração LTDA\nBanco Recebedor\nCNPJ:12345678000199\nID de transação Pix\nE${'0'.repeat(31)}`,
+      ).details,
+      alternateTransactionId: 'mercado-pago:123456789012',
+    },
   },
 ];
 const sale = {
@@ -81,6 +84,7 @@ const text = texts.join(' ');
 assert.match(text, /08\/09\/2026.*17:51/);
 assert.match(text, /Pagador de demonstração/);
 assert.match(text, /Recebedor de demonstração/);
+assert.match(text, /ID da transação Mercado Pago.*123456789012/);
 assert.match(text, /7\.100,00/);
 assert.doesNotMatch(text, /9\.999,99|Pix informado|TOTAL DO DIA/);
 assert.match(text, /Conciliado/);

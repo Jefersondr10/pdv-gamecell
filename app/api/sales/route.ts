@@ -936,9 +936,7 @@ export async function POST(request: Request) {
       | undefined;
     const committedSale = numberResult?.results?.[0];
     let number = Number(committedSale?.number);
-    let effectiveReceivedTotalCents = Number(
-      committedSale?.receivedTotalCents,
-    );
+    let effectiveReceivedTotalCents = Number(committedSale?.receivedTotalCents);
     let effectiveReceivedDifferenceCents = Number(
       committedSale?.receivedDifferenceCents,
     );
@@ -1373,10 +1371,7 @@ function assertSameSaleOperation(
     : saved.operationFingerprint
       ? saved.operationFingerprint === legacyOperationFingerprint
       : fallbackMatches;
-  if (
-    saved.originalSellerUserId !== sellerUserId ||
-    !fingerprintMatches
-  ) {
+  if (saved.originalSellerUserId !== sellerUserId || !fingerprintMatches) {
     throw new HttpError(
       409,
       'Esta operação já foi usada em outra venda. Inicie uma nova venda.',
@@ -1811,6 +1806,8 @@ function attachmentRecord(
               recipientBank: null,
               recipientDocument: null,
               transactionId: null,
+              alternateTransactionId: null,
+              observedTransactionId: null,
               paidAtText: null,
             };
     })(),

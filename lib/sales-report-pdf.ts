@@ -5,7 +5,10 @@ import type { AttachmentRecord, SaleRecord } from './pdv-types';
 import { saleDisplayStatus, saleIssues } from './sale-display-status.ts';
 import { saleFinancialSummary } from './sale-financial-summary.ts';
 import { receiptTargetLabel } from './receipt-reconciliation.ts';
-import { shortReceiptDate } from './receipt-document.ts';
+import {
+  receiptTransactionDisplay,
+  shortReceiptDate,
+} from './receipt-document.ts';
 import { summarizeSalesPayments } from './sales-payment-summary.ts';
 import { reportCard, reportColors, reportTones } from './report-pdf-theme.ts';
 import type { RGB } from 'pdf-lib';
@@ -576,8 +579,9 @@ function saleDetails(
             muted: true,
           });
         layout.y += 4;
+        const transaction = receiptTransactionDisplay(doc);
         layout.paragraph(
-          `Identificador Pix: ${doc.transactionId || 'Não identificado'}`,
+          `${transaction.label}: ${transaction.value || 'Não identificado'}`,
           { size: 8, muted: true },
         );
       } else

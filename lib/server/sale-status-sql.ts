@@ -15,9 +15,22 @@ const failed = `EXISTS (${receipts} AND (${invalidReceiptDocumentSql('ar')} OR $
 export const SALE_PIX_TOTAL_SQL = `COALESCE((SELECT SUM(pix_payment.amount_cents) FROM payments pix_payment WHERE pix_payment.sale_id=s.id AND pix_payment.store_id=s.store_id AND pix_payment.method='pix'), 0)`;
 export const SALE_CASH_TOTAL_SQL = `COALESCE((SELECT SUM(p.amount_cents) FROM payments p WHERE p.sale_id=s.id AND p.store_id=s.store_id AND p.method='cash'),0)`;
 export function duplicateReceiptSql(alias: string) {
-  const transaction = (a: string) =>
-    `json_extract(CASE WHEN json_valid(${a}.receipt_details_json) THEN ${a}.receipt_details_json ELSE '{}' END,'$.transactionId')`;
-  return `(${transaction(alias)} IS NOT NULL AND (EXISTS(SELECT 1 FROM attachments other_receipt WHERE other_receipt.kind='receipt' AND other_receipt.store_id=${alias}.store_id AND other_receipt.id<>${alias}.id AND ${transaction('other_receipt')}=${transaction(alias)}) OR EXISTS(SELECT 1 FROM receipt_payment_links claimed WHERE claimed.store_id=${alias}.store_id AND claimed.attachment_id<>${alias}.id AND claimed.transaction_id=${transaction(alias)}) OR EXISTS(SELECT 1 FROM audit_events claimed_event WHERE claimed_event.store_id=${alias}.store_id AND claimed_event.action='sale.receipt_transaction_claimed' AND claimed_event.entity_id<>${alias}.id AND json_extract(CASE WHEN json_valid(claimed_event.details_json) THEN claimed_event.details_json ELSE '{}' END,'$.transactionId')=${transaction(alias)})))`;
+  const identity = (
+    a: string,
+    field: 'transactionId' | 'alternateTransactionId',
+  ) =>
+    `json_extract(CASE WHEN json_valid(${a}.receipt_details_json) THEN ${a}.receipt_details_json ELSE '{}' END,'$.${field}')`;
+  const canonical = identity(alias, 'transactionId');
+  const alternate = identity(alias, 'alternateTransactionId');
+  const sameAttachmentIdentity = (other: string) => {
+    const otherCanonical = identity(other, 'transactionId');
+    const otherAlternate = identity(other, 'alternateTransactionId');
+    return `((${canonical} IS NOT NULL AND (${canonical}=${otherCanonical} OR ${canonical}=${otherAlternate})) OR (${alternate} IS NOT NULL AND (${alternate}=${otherCanonical} OR ${alternate}=${otherAlternate})))`;
+  };
+  const matchesClaim = (claim: string) =>
+    `((${canonical} IS NOT NULL AND ${claim}=${canonical}) OR (${alternate} IS NOT NULL AND ${claim}=${alternate}))`;
+  const auditIdentity = `json_extract(CASE WHEN json_valid(claimed_event.details_json) THEN claimed_event.details_json ELSE '{}' END,'$.transactionId')`;
+  return `((${canonical} IS NOT NULL OR ${alternate} IS NOT NULL) AND (EXISTS(SELECT 1 FROM attachments other_receipt WHERE other_receipt.kind='receipt' AND other_receipt.store_id=${alias}.store_id AND other_receipt.id<>${alias}.id AND ${sameAttachmentIdentity('other_receipt')}) OR EXISTS(SELECT 1 FROM receipt_payment_links claimed WHERE claimed.store_id=${alias}.store_id AND claimed.attachment_id<>${alias}.id AND ${matchesClaim('claimed.transaction_id')}) OR EXISTS(SELECT 1 FROM audit_events claimed_event WHERE claimed_event.store_id=${alias}.store_id AND claimed_event.action='sale.receipt_transaction_claimed' AND claimed_event.entity_id<>${alias}.id AND ${matchesClaim(auditIdentity)})))`;
 }
 // A present OCR document is accepted automatically only when the reader marked
 // it eligible. Historical documents can keep their established value when an
@@ -60,7 +73,16 @@ export function invalidReceiptDocumentSql(alias: string) {
   ) SELECT MAX(units)<=150 FROM receipt_units))`;
   const validField = `(receipt_metadata.type='null' OR (receipt_metadata.type='text' AND ${validLength}))`;
   const metadata = `(SELECT COUNT(DISTINCT receipt_metadata.key) FROM json_each(${doc}) receipt_metadata WHERE receipt_metadata.key IN (${metadataKeys}) AND ${validField})=7`;
-  return `(${alias}.receipt_details_json IS NOT NULL AND NOT COALESCE((json_type(${doc})='object' AND json_extract(${doc},'$.version')=1 AND json_type(${doc},'$.version') IN ('integer','real') AND json_extract(${doc},'$.state')='completed' AND COALESCE(json_type(${doc},'$.blocked'),'null')<>'true' AND COALESCE(json_type(${doc},'$.ambiguous'),'null')<>'true' AND ${metadata}),0))`;
+  const canonicalId = `json_extract(${doc},'$.transactionId')`;
+  const alternateId = `json_extract(${doc},'$.alternateTransactionId')`;
+  const observedId = `json_extract(${doc},'$.observedTransactionId')`;
+  const alphaNumeric = (value: string) =>
+    `(${value}<>'' AND ${value} NOT GLOB '*[^A-Za-z0-9]*')`;
+  const optionalCanonicalId = `(json_type(${doc},'$.transactionId')='null' OR (json_type(${doc},'$.transactionId')='text' AND length(${canonicalId})=32 AND substr(${canonicalId},1,1)='E' AND ${alphaNumeric(`substr(${canonicalId},2)`)}))`;
+  const optionalAlternateId = `(COALESCE(json_type(${doc},'$.alternateTransactionId'),'null')='null' OR (json_type(${doc},'$.alternateTransactionId')='text' AND ((length(${alternateId})=25 AND ${alternateId} GLOB 'mercado-pago:[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]') OR (length(${alternateId})=47 AND substr(${alternateId},1,15)='ocr-consensus:E' AND ${alphaNumeric(`substr(${alternateId},16)`)}))))`;
+  const optionalObservedId = `(COALESCE(json_type(${doc},'$.observedTransactionId'),'null')='null' OR (json_type(${doc},'$.observedTransactionId')='text' AND length(${observedId})=33 AND substr(${observedId},1,1)='E' AND ${alphaNumeric(`substr(${observedId},2)`)}))`;
+  const eligibleHasIdentity = `(json_type(${doc},'$.automaticEligible') IS NOT 'true' OR ${canonicalId} IS NOT NULL OR ${alternateId} IS NOT NULL)`;
+  return `(${alias}.receipt_details_json IS NOT NULL AND NOT COALESCE((json_type(${doc})='object' AND json_extract(${doc},'$.version')=1 AND json_type(${doc},'$.version') IN ('integer','real') AND json_extract(${doc},'$.state')='completed' AND COALESCE(json_type(${doc},'$.blocked'),'null')<>'true' AND COALESCE(json_type(${doc},'$.ambiguous'),'null')<>'true' AND ${metadata} AND ${optionalCanonicalId} AND ${optionalAlternateId} AND ${optionalObservedId} AND ${eligibleHasIdentity}),0))`;
 }
 
 export function untrustedReceiptDocumentSql(alias: string) {
@@ -73,9 +95,9 @@ function receiptEvidenceAcceptedSql(alias: 'a' | 'ar') {
 }
 
 export function effectiveReceiptReviewReasonSql(alias: 'a' | 'ar') {
-  const reasons = DERIVED_RECEIPT_REVIEW_REASONS
-    .map((reason) => `'${reason.replaceAll("'", "''")}'`)
-    .join(',');
+  const reasons = DERIVED_RECEIPT_REVIEW_REASONS.map(
+    (reason) => `'${reason.replaceAll("'", "''")}'`,
+  ).join(',');
   return `(CASE WHEN ${alias}.receipt_review_reason IN (${reasons}) AND ${receiptEvidenceAcceptedSql(alias)} THEN NULL ELSE NULLIF(${alias}.receipt_review_reason,'') END)`;
 }
 

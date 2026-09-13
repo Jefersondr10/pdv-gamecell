@@ -57,7 +57,12 @@ for (const heading of [
 }
 const sequential = `C6BANK\nPix em andamento\n12/09/2026 15:54\nPix realizado!\n12/09/2026 15:55\n${body}`;
 assert.equal(income(sequential), 1394000);
-for (const text of [
+const compactClock = receipt('Pix em Pix\nandamento realizado!').replace(
+  timestamp,
+  '09/09/2026 09/09/2026\n1818 1818',
+);
+assert.equal(income(compactClock), 1394000);
+for (const [index, text] of [
   receipt('Pix em andamento'),
   receipt('Pixem\nandamento'),
   receipt('Pix em Pix\nandamento realizado!').replace(
@@ -105,8 +110,12 @@ for (const text of [
     timestamp,
     'Data da consulta\n' + timestamp,
   ),
-])
-  assert.equal(income(text), 0, text.split('\n').slice(0, 7).join(' '));
+].entries())
+  assert.equal(
+    income(text),
+    0,
+    `${index}: ${text.split('\n').slice(0, 7).join(' ')}`,
+  );
 
 const completed = extractReceiptDocument(
   receipt('Pixem Pix\nandamento realizado!'),

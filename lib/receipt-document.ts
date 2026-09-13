@@ -1,7 +1,7 @@
 import { extractReceiptAmount } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 3;
+export const RECEIPT_READER_REVISION = 4;
 
 export type ReceiptDocument = {
   version: 1;
@@ -11,6 +11,8 @@ export type ReceiptDocument = {
   recipientBank: string | null;
   recipientDocument: string | null;
   transactionId: string | null;
+  alternateTransactionId: string | null;
+  observedTransactionId: string | null;
   paidAtText: string | null;
   state: 'completed' | 'scheduled' | 'cancelled' | 'unknown';
   automaticEligible: boolean;
@@ -25,16 +27,64 @@ export const normalizeReceiptIdentity = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
 
+export function receiptEvidenceAliases(
+  document: ReceiptDocument | null | undefined,
+) {
+  const aliases: string[] = [];
+  if (
+    document?.alternateTransactionId &&
+    /^(?:mercado-pago:\d{12}|ocr-consensus:E[A-Za-z0-9]{32})$/.test(
+      document.alternateTransactionId,
+    )
+  )
+    aliases.push(document.alternateTransactionId);
+  if (
+    document?.transactionId &&
+    /^E[A-Za-z0-9]{31}$/.test(document.transactionId)
+  )
+    aliases.push(document.transactionId.toUpperCase());
+  return [...new Set(aliases)];
+}
+
+export function receiptEvidenceKey(
+  document: ReceiptDocument | null | undefined,
+) {
+  return receiptEvidenceAliases(document)[0] ?? null;
+}
+
+export function receiptTransactionDisplay(
+  document: ReceiptDocument | null | undefined,
+) {
+  const alternate = document?.alternateTransactionId;
+  if (alternate?.startsWith('mercado-pago:'))
+    return {
+      label: 'ID da transação Mercado Pago',
+      value: alternate.slice('mercado-pago:'.length),
+    };
+  if (alternate?.startsWith('ocr-consensus:'))
+    return {
+      label: 'Identificador reconhecido',
+      value: alternate.slice('ocr-consensus:'.length),
+    };
+  return {
+    label: 'Identificador Pix',
+    value: document?.transactionId ?? null,
+  };
+}
+
 function cleanParticipantName(value: string | null | undefined) {
   if (!value) return null;
   // Bank icons can become leading "&" or "<&" in OCR. Only remove the
   // symbol prefix, preserving letters and legitimate names such as A & B.
-  return (
-    value
-      .replace(/^[\s<>&|•·◦]+/u, '')
-      .trim()
-      .slice(0, 150) || null
-  );
+  const cleaned = value
+    .replace(/^[\s<>&|•·◦]+/u, '')
+    .trim()
+    .slice(0, 150);
+  if (!cleaned) return null;
+  // Payment-provider icons occasionally become isolated OCR words. They are
+  // not participant names and must not hide the real name on the next line.
+  if (['bind'].includes(normalizeReceiptIdentity(cleaned))) return null;
+  return cleaned;
 }
 
 const VALID_SHORT_BANK_IDENTITIES = new Set(['bb', 'bv', 'c6', 'xp']);
@@ -71,8 +121,7 @@ export function extractReceiptDocument(text: string) {
   const pixDispatchReceipt =
     /\bcomprovante\s+de\s+envio(?:\s+de)?\s+pix\b/.test(
       normalized.slice(0, 500),
-    ) &&
-    transferDates.length === 1;
+    ) && new Set(transferDates).size === 1;
   const originAccount = lines.findIndex((line) =>
     /^conta\s+de\s+origem$/i.test(line),
   );
@@ -91,38 +140,97 @@ export function extractReceiptDocument(text: string) {
       ? lines.slice(0, recipientBankLine).join('\n').toLowerCase()
       : '';
   const timelineDates = c6Heading.match(/\b\d{2}\/\d{2}\/\d{4}\b/g) ?? [];
-  const timelineTimes = c6Heading.match(/\b\d{2}:\d{2}(?::\d{2})?\b/g) ?? [];
+  const timelineTimes = [
+    ...(c6Heading.match(/\b\d{2}:\d{2}(?::\d{2})?\b/g) ?? []),
+    ...(c6Heading.match(/(?<![\d/])(?:[01]\d|2[0-3])[0-5]\d(?![\d/:])/g) ?? []),
+  ];
   // C6 shows a historical step next to the final step. OCR reads across the
   // columns: "Pix em Pix / andamento realizado!". Both steps must be dated;
   // an undated future step is not evidence that the transfer completed.
   const c6Timeline = c6 && /andamento/.test(c6Heading);
   const sequentialTimeline =
-    /\bpix\s*em\s+andamento\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?\s+pix\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?\b/;
+    /\bpix\s*em\s+andamento\s+\d{2}\/\d{2}\/\d{4}\s+(?:\d{2}:\d{2}(?::\d{2})?|(?:[01]\d|2[0-3])[0-5]\d)\s+pix\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+(?:\d{2}:\d{2}(?::\d{2})?|(?:[01]\d|2[0-3])[0-5]\d)\b/;
   const c6Completed =
     c6Timeline &&
+    !/\bdata\s+da\s+consulta\b/.test(c6Heading) &&
     timelineDates.length === 2 &&
     timelineTimes.length === 2 &&
-    (/\b(?:pix|ix)\s*em\s+(?:pix|px)\s+andamento\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?[\s,;|]+\d{2}:\d{2}(?::\d{2})?\b/.test(
+    (/\b(?:pix|ix)\s*em\s+(?:pix|px)\s+andamento\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}\s+(?:\d{2}:\d{2}(?::\d{2})?|(?:[01]\d|2[0-3])[0-5]\d)[\s,;|]+(?:\d{2}:\d{2}(?::\d{2})?|(?:[01]\d|2[0-3])[0-5]\d)\b/.test(
       c6Heading,
     ) ||
       sequentialTimeline.test(c6Heading));
-  const currentStateText =
-    c6Completed && sequentialTimeline.test(c6Heading)
-      ? normalized.replace(sequentialTimeline, (timeline) =>
-          timeline.replace(/^pix\s*em\s+andamento\b/, ''),
-        )
-      : normalized;
-  const idLabel = lines.findIndex((line) =>
-    /(?:id|identificador)\s+(?:de\s+|da\s+)?transa[cç][aã]o(?:\s+pix)?|end\s*to\s*end|e2e/i.test(
-      line,
-    ) ||
-    // Low-resolution C6 images often turn "ID da Transação" into
-    // "ID ca Transação". Restrict this tolerance to the already identified
-    // C6 layout so unrelated long codes never become Pix evidence.
-    (c6 && /^[il1]d\s+[cd][ae]\s+transa[cç][aã]o(?:\s+pix)?$/i.test(line)),
+  const currentStateText = c6Completed
+    ? normalized.replace(sequentialTimeline, (timeline) =>
+        timeline.replace(/^pix\s*em\s+andamento\b/, ''),
+      )
+    : normalized;
+  const idLabel = lines.findIndex(
+    (line) =>
+      /(?:id|identificador)(?:\s*\/\s*|\s+)(?:de\s+|da\s*)?transa[cç](?:[aã]o|\.{2,}|…)(?:\s+pix)?|c[oó]digo\s+da\s+transa[cç][aã]o\s+pix|^[il1]d[f/]\s*transa[cç][aã]o|identifica[cç][aã]o\s*:|end\s*to\s*end|e2e/i.test(
+        line,
+      ) ||
+      // Low-resolution C6 images often turn "ID da Transação" into
+      // "ID ca Transação". Restrict this tolerance to the already identified
+      // C6 layout so unrelated long codes never become Pix evidence.
+      (c6 && /^[il1]d\s*[cd][ae]\s*transa[cç][aã]o(?:\s+pix)?$/i.test(line)),
   );
-  const ids = idLabel < 0 ? [] : (text.match(/\bE[A-Za-z0-9]{31}\b/g) ?? []);
-  const singleTransaction = new Set(ids.map((id) => id.toUpperCase())).size === 1;
+  // Pix EndToEndId is kept strict. Some providers also print their own
+  // strongly-labelled transaction number; retain that as a separate durable
+  // identity instead of pretending a malformed OCR token is an E2E id.
+  const joinedId = (() => {
+    if (idLabel < 0) return null;
+    let candidate = '';
+    for (const line of lines.slice(idLabel + 1, idLabel + 4)) {
+      const fragment = line.replace(/\s+/g, '');
+      if (!candidate) {
+        if (!/^E[A-Za-z0-9]+$/.test(fragment)) continue;
+        candidate = fragment;
+      } else if (/^[A-Za-z0-9]+$/.test(fragment) && candidate.length < 32) {
+        candidate += fragment;
+      } else break;
+      if (candidate.length >= 32) break;
+    }
+    return /^E[A-Za-z0-9]{31}$/.test(candidate) ? candidate : null;
+  })();
+  const ids =
+    idLabel < 0
+      ? []
+      : [...(text.match(/\bE[A-Za-z0-9]{31}\b/g) ?? []), joinedId].filter(
+          (id): id is string => Boolean(id),
+        );
+  const uniqueIds = [...new Set(ids.map((id) => id.toUpperCase()))];
+  const observedIds =
+    idLabel < 0
+      ? []
+      : [
+          ...new Set(
+            (text.match(/\bE[A-Za-z0-9]{32}\b/g) ?? []).map((id) =>
+              id.toUpperCase(),
+            ),
+          ),
+        ];
+  const mercadoPagoTransactionLabels = lines
+    .map((line, index) =>
+      /transa[cç][aã]o\s+do\s+mercado\s+pago/i.test(line) ? index : -1,
+    )
+    .filter((index) => index >= 0);
+  const mercadoPagoTransactionNumbers = [
+    ...new Set(
+      mercadoPagoTransactionLabels.flatMap(
+        (index) =>
+          lines
+            .slice(index, index + 3)
+            .join(' ')
+            .match(/\b\d{12}\b/g) ?? [],
+      ),
+    ),
+  ];
+  const alternateTransactionId =
+    mercadoPagoTransactionNumbers.length === 1
+      ? `mercado-pago:${mercadoPagoTransactionNumbers[0]}`
+      : null;
+  const singleTransaction =
+    uniqueIds.length === 1 || Boolean(alternateTransactionId);
   const receiptHeading = normalized.slice(0, 700);
   // Some banks call a completed transfer "pagamento", "transação" or
   // "operação" instead of "Pix realizado". Accept those layouts only when
@@ -140,12 +248,38 @@ export function extractReceiptDocument(text: string) {
     /\b(?:pix|pagamento|transferencia|transacao|operacao)\b[\s\S]{0,160}\b(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|transferid[oa]|confirmad[oa])\b/.test(
       normalized,
     );
+  // Itaú's corporate SISPag receipt describes a completed Pix by its
+  // transfer type and authentication footer, without the generic phrases used
+  // by consumer apps. Require the complete labelled layout plus a unique E2E.
+  const itauSisPagCompleted =
+    uniqueIds.length === 1 &&
+    /\bvia\s+sispag\s+no\s+app\s+itau\b/.test(normalized) &&
+    /\btipo\s+de\s+transferencia\b/.test(normalized) &&
+    /\bpix\s+transferencia\b/.test(normalized) &&
+    /\bautenticacao\s+do\s+comprovante\b/.test(normalized);
+  const providerDispatchCompleted =
+    uniqueIds.length === 1 &&
+    ((/\bcomprovante\s+de\s+envio(?:\s+de)?\s+pix\b/.test(receiptHeading) &&
+      /\bcodigo\s+da\s+transacao\s+pix\b/.test(normalized)) ||
+      (/\bcomprovante\s+(?:do|de)\s+pagamento\b/.test(receiptHeading) &&
+        /\btipo\s+de\s+transferencia\s*:?\s*pix\b/.test(normalized)));
+  const bradescoDebitedCompleted =
+    uniqueIds.length === 1 &&
+    /\bdados\s+de\s+quem\s+recebeu\b/.test(normalized) &&
+    /\bdados\s+da\s+transferencia\b/.test(normalized) &&
+    /\bdebitado\s+da\b/.test(normalized) &&
+    /\binstituicao\s+origem\b[\s\S]{0,80}\bbradesco\b/.test(normalized);
+  const labelledEffectiveStatus =
+    singleTransaction &&
+    /\bsituacao\s*:?[\s\S]{0,30}\b(?:efetivad[oa]|concluid[oa]|realizad[oa])\b/.test(
+      normalized,
+    );
   const rejected =
     /\b(cancelad[oa]|estornad[oa]|recusad[oa]|negad[oa])\b|\bnao\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|transferid[oa]|autorizad[oa]|aprovad[oa])\b/.test(
       normalized,
     );
   const pending =
-    /em\s+andamento|pixem\s+andamento|em processamento|em analise|\bpendente\b|\bfalha\b|aguardando|nao foi possivel|erro na/.test(
+    /em\s+andamento|pixem\s+andamento|em processamento|em analise|sujeit[oa]\s+a\s+analise|credito\s+sera\s+efetuado\s+em\s+instantes|\bpendente\b|\bfalha\b|aguardando|nao foi possivel|erro na/.test(
       currentStateText,
     );
   const state: ReceiptDocument['state'] =
@@ -157,22 +291,30 @@ export function extractReceiptDocument(text: string) {
           ? 'unknown'
           : c6Completed
             ? 'completed'
-            : c6Timeline
-              ? 'unknown'
-              : pixDispatchReceipt ||
-                  labelledCompletedReceipt ||
-                  (/comprovante\s+(?:de|da)\s+transferencia\b/.test(
-                    normalized.slice(0, 500),
-                  ) &&
-                    /\bpix\b/.test(normalized)) ||
-                  /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
-                    normalized,
-                  )
+            : itauSisPagCompleted
+              ? 'completed'
+              : providerDispatchCompleted
                 ? 'completed'
-                : 'unknown';
+                : bradescoDebitedCompleted
+                  ? 'completed'
+                  : labelledEffectiveStatus
+                    ? 'completed'
+                    : c6Timeline
+                      ? 'unknown'
+                      : pixDispatchReceipt ||
+                          labelledCompletedReceipt ||
+                          (/comprovante\s+(?:de|da)\s+transferencia\b/.test(
+                            normalized.slice(0, 500),
+                          ) &&
+                            /\bpix\b/.test(normalized)) ||
+                          /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
+                            normalized,
+                          )
+                        ? 'completed'
+                        : 'unknown';
   const participant = (block: string[]) => {
     const fieldLabel =
-      /^(?:nome|cpf(?:\s*\/\s*cnpj)?|cnpj|banco|institui[cç][aã]o(?:\s+financeira)?|ag[eê]ncia|conta|chave|tipo|valor|data|hora|id|identificador|autentica[cç][aã]o)(?:\s*:|\s*$)/i;
+      /^(?:nome|cpf(?:\s*\/\s*cnpj)?|cnpj|banco|institui[cç][aã]o(?:\s+(?:financeira|destino|origem))?|ag[eê]ncia|conta|chave|tipo|valor|data|hora|id|identificador|autentica[cç][aã]o)(?:\s*:|\s*$)/i;
     const labelledValue = (label: RegExp) => {
       const index = block.findIndex((line) => label.test(line));
       if (index < 0) return null;
@@ -194,11 +336,12 @@ export function extractReceiptDocument(text: string) {
             ) &&
             !/^(cpf|cnpj|banco|institui|ag[eê]ncia|conta|chave|tipo|valor|data|id |n[º°.]|pix)/i.test(
               line,
-            ),
+            ) &&
+            cleanParticipantName(line) !== null,
         );
     const bank =
       labelledValue(
-        /^(?:banco|institui[cç][aã]o(?:\s+financeira)?)\s*(?::\s*|$)/i,
+        /^(?:banco|institui[cç][aã]o(?:\s+(?:financeira|destino|origem))?)\s*(?::\s*|$)/i,
       ) ??
       block.find(
         (line) =>
@@ -220,10 +363,10 @@ export function extractReceiptDocument(text: string) {
   };
   const key = (line: string) => normalizeReceiptIdentity(line);
   const from = lines.findIndex((line) =>
-    /^(origem|dadosdopagador|pagador|quempagou|de)$/.test(key(line)),
+    /^(origem|dadosdopagador|pagador|quempagou|de|debitadoda)$/.test(key(line)),
   );
   const to = lines.findIndex((line) =>
-    /^(destino|dadosdorecebedor|recebedor|quemrecebeu|favorecido|beneficiario|para)$/.test(
+    /^(destino|dadosdorecebedor|dadosdequemrecebeu|recebedor|quemrecebeu|favorecido|beneficiario|para)$/.test(
       key(line),
     ),
   );
@@ -236,10 +379,10 @@ export function extractReceiptDocument(text: string) {
   const stop = (block: string[]) => {
     const end = block.findIndex(
       (line) =>
-        /^(id\s|n[º°.]|identificador|autentica|dados da transa|atendimento|ouvidoria)/i.test(
+        /^(id\s|n[º°.]|identifica|autentica|dados da transa|atendimento|ouvidoria)/i.test(
           line,
         ) ||
-        /^(origem|destino|dadosdopagador|pagador|quempagou|de|dadosdorecebedor|recebedor|quemrecebeu|favorecido|beneficiario|para)$/.test(
+        /^(origem|destino|dadosdopagador|pagador|quempagou|de|debitadoda|dadosdorecebedor|dadosdequemrecebeu|recebedor|quemrecebeu|favorecido|beneficiario|para)$/.test(
           key(line),
         ),
     );
@@ -274,9 +417,7 @@ export function extractReceiptDocument(text: string) {
     if (bankAt > originAccount)
       payer = {
         name: nameBeforeBank(bankAt),
-        bank: cleanParticipantBank(
-          lines[bankAt].replace(/^banco\s*:\s*/i, ''),
-        ),
+        bank: cleanParticipantBank(lines[bankAt].replace(/^banco\s*:\s*/i, '')),
         document: null,
       };
   }
@@ -294,47 +435,84 @@ export function extractReceiptDocument(text: string) {
   }
   const dates = transferDates.length
     ? transferDates
-    : (text.match(
-        /\b\d{1,2}[/-](?:\d{1,2}|[a-zç]+)[/-]\d{4}\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
-      ) ?? []);
+    : [
+        ...(text.match(
+          /\b\d{1,2}[/-](?:\d{1,2}|[a-zç]+)[/-]\d{4}\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
+        ) ?? []),
+        ...(text.match(
+          /\b\d{1,2}\s+(?:jan(?:eiro)?|fev(?:ereiro)?|mar(?:[cç]o)?|abr(?:il)?|mai(?:o)?|jun(?:ho)?|jul(?:ho)?|ago(?:sto)?|set(?:embro)?|out(?:ubro)?|nov(?:embro)?|dez(?:embro)?)\.?\s+\d{4}\s*,?\s*\d{1,2}:\d{2}(?::\d{2})?\b/gi,
+        ) ?? []),
+      ];
   const participantStarts = [paired, from, to].filter((i) => i >= 0);
   const heading = participantStarts.length
     ? lines.slice(0, Math.min(...participantStarts)).join('\n')
     : '';
+  const receiptSectionStarts = lines
+    .map((line, index) =>
+      /^(?:comprovante|confirma[cç][aã]o)\s+(?:(?:de|do|da)\s+)?(?:pix|envio(?:\s+de)?\s+pix|transfer[eê]ncia|pagamento|transa[cç][aã]o)\b/i.test(
+        `${line} ${lines[index + 1] ?? ''}`,
+      )
+        ? index
+        : -1,
+    )
+    .filter((index) => index >= 0);
+  const receiptSectionAmounts = receiptSectionStarts
+    .map((start, index) => {
+      const next = receiptSectionStarts[index + 1] ?? lines.length;
+      return extractReceiptAmount(
+        lines.slice(start, Math.min(next, start + 40)).join('\n'),
+      );
+    })
+    .filter(Boolean);
   const headingAmounts = heading
     .split('\n')
     .filter((line) => /R\s*[$S]/i.test(line))
     .map((line) => extractReceiptAmount(line))
     .filter(Boolean);
-  const c6CurrencyAmounts = c6
-    ? lines
-        .filter((line) => /R\s*[$S]/i.test(line))
-        .map((line) => extractReceiptAmount(line))
-        .filter(Boolean)
-    : [];
+  const strongLayoutCurrencyAmounts =
+    c6 || bradescoDebitedCompleted
+      ? lines
+          .filter((line) => /R\s*[$S]/i.test(line))
+          .map((line) => extractReceiptAmount(line))
+          .filter(Boolean)
+      : [];
   const suggestion =
     extractReceiptAmount(heading) ?? extractReceiptAmount(text);
-  const c6ValueIndexes = lines
+  const valueIndexes = lines
     .map((line, index) => (/^valor\s*:?$/i.test(line) ? index : -1))
     .filter((index) => index >= 0);
-  const c6LabelledAmount =
-    c6ValueIndexes.length === 1
-      ? extractReceiptAmount(lines[c6ValueIndexes[0] + 1] ?? '')
+  const labelledAmount =
+    valueIndexes.length === 1
+      ? extractReceiptAmount(lines[valueIndexes[0] + 1] ?? '')
       : null;
+  const uniqueHeadingAmounts = new Set(
+    headingAmounts.map((amount) => amount!.amountCents),
+  );
+  const uniqueReceiptSectionAmounts = new Set(
+    receiptSectionAmounts.map((amount) => amount!.amountCents),
+  );
+  const uniqueStrongLayoutCurrencyAmounts = new Set(
+    strongLayoutCurrencyAmounts.map((amount) => amount!.amountCents),
+  );
   const ambiguous =
-    ids.length > 1 ||
-    headingAmounts.length > 1 ||
-    c6CurrencyAmounts.length > 1;
+    uniqueIds.length > 1 ||
+    observedIds.length > 1 ||
+    (uniqueIds.length > 0 && observedIds.length > 0) ||
+    mercadoPagoTransactionNumbers.length > 1 ||
+    uniqueHeadingAmounts.size > 1 ||
+    uniqueReceiptSectionAmounts.size > 1 ||
+    uniqueStrongLayoutCurrencyAmounts.size > 1;
   const uniqueAmount =
     !ambiguous &&
     suggestion !== null &&
     (suggestion.confidence === 'high' ||
-      (headingAmounts.length === 1 &&
+      (uniqueHeadingAmounts.size === 1 &&
         headingAmounts[0]!.amountCents === suggestion.amountCents) ||
-      (c6 &&
-        (c6LabelledAmount?.amountCents === suggestion.amountCents ||
-          (c6CurrencyAmounts.length === 1 &&
-            c6CurrencyAmounts[0]!.amountCents === suggestion.amountCents))));
+      ((c6 || bradescoDebitedCompleted) &&
+        (labelledAmount?.amountCents === suggestion.amountCents ||
+          (uniqueStrongLayoutCurrencyAmounts.size === 1 &&
+            strongLayoutCurrencyAmounts[0]!.amountCents ===
+              suggestion.amountCents))));
   const details: ReceiptDocument = {
     version: 1,
     payerName: payer.name,
@@ -342,12 +520,13 @@ export function extractReceiptDocument(text: string) {
     recipientName: recipient.name,
     recipientBank: recipient.bank,
     recipientDocument: recipient.document,
-    transactionId:
-      new Set(ids).size === 1 ? (ids[0]?.toUpperCase() ?? null) : null,
+    transactionId: uniqueIds.length === 1 ? uniqueIds[0] : null,
+    alternateTransactionId,
+    observedTransactionId: observedIds.length === 1 ? observedIds[0] : null,
     paidAtText: new Set(dates).size === 1 ? (dates[0] ?? null) : null,
     state,
     automaticEligible:
-      state === 'completed' && ids.length === 1 && uniqueAmount,
+      state === 'completed' && singleTransaction && uniqueAmount,
     ambiguous,
     blocked:
       state === 'scheduled' || state === 'cancelled' || pending || rejected,
@@ -382,8 +561,18 @@ export function parseReceiptDocument(value: unknown): ReceiptDocument | null {
       'recipientBank',
       'recipientDocument',
       'transactionId',
+      'alternateTransactionId',
+      'observedTransactionId',
       'paidAtText',
     ] as const) {
+      if (
+        (field === 'alternateTransactionId' ||
+          field === 'observedTransactionId') &&
+        doc[field] === undefined
+      ) {
+        result[field] = null;
+        continue;
+      }
       if (
         doc[field] !== null &&
         (typeof doc[field] !== 'string' || doc[field].length > 150)
@@ -391,6 +580,24 @@ export function parseReceiptDocument(value: unknown): ReceiptDocument | null {
         return null;
       result[field] = doc[field];
     }
+    if (
+      result.transactionId !== null &&
+      !/^E[A-Za-z0-9]{31}$/.test(result.transactionId)
+    )
+      return null;
+    if (
+      result.alternateTransactionId !== null &&
+      !/^(?:mercado-pago:\d{12}|ocr-consensus:E[A-Za-z0-9]{32})$/.test(
+        result.alternateTransactionId,
+      )
+    )
+      return null;
+    if (result.automaticEligible && !receiptEvidenceKey(result)) return null;
+    if (
+      result.observedTransactionId !== null &&
+      !/^E[A-Za-z0-9]{32}$/.test(result.observedTransactionId)
+    )
+      return null;
     // Normalize saved readings at the read boundary too, without rewriting
     // the original document or changing amounts, bank data or identifiers.
     result.payerName = cleanParticipantName(result.payerName);
@@ -425,9 +632,15 @@ export function shortReceiptDate(value: string | null) {
   );
   const time = value.match(/(\d{1,2}):(\d{2})(?::\d{2})?/);
   if (!date) return value;
-  const month = /^\d+$/.test(date[2])
-    ? Number(date[2])
-    : months.indexOf(date[2]) + 1;
+  const monthToken = date[2].normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const month = /^\d+$/.test(monthToken)
+    ? Number(monthToken)
+    : months.findIndex((name) =>
+        name
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .startsWith(monthToken),
+      ) + 1;
   if (month < 1 || month > 12 || Number(date[1]) < 1 || Number(date[1]) > 31)
     return value;
   return `${date[1].padStart(2, '0')}/${String(month).padStart(2, '0')}/${date[3]}${time ? ` · ${time[1].padStart(2, '0')}:${time[2]}` : ''}`;
@@ -445,6 +658,12 @@ export function receiptDocumentLines(doc: ReceiptDocument) {
       doc.recipientDocument ? `***${doc.recipientDocument.slice(-4)}` : null,
     ],
     ['Identificador Pix', doc.transactionId],
+    [
+      'Identificador da instituição',
+      doc.alternateTransactionId?.startsWith('mercado-pago:')
+        ? doc.alternateTransactionId.slice('mercado-pago:'.length)
+        : null,
+    ],
   ].map(([label, value]) => `${label}: ${value || 'Não identificado'}`);
 }
 
@@ -494,7 +713,7 @@ export function preferReceiptReading(
   // transaction id or eligibility from the enrichment candidate.
   const bankEnrichment =
     preferred.details.automaticEligible && !preferred.details.recipientBank
-      ? found.find((candidate) => {
+      ? (found.find((candidate) => {
           if (
             candidate === preferred ||
             candidate.amountCents !== preferred.amountCents ||
@@ -514,28 +733,63 @@ export function preferReceiptReading(
             preferred.details.recipientDocument ===
               candidate.details.recipientDocument;
           return sameName || sameDocument;
-        })?.details.recipientBank ?? null
+        })?.details.recipientBank ?? null)
       : null;
   const amountConflict =
     new Set(found.map((reading) => reading.amountCents)).size > 1;
-  const idConflict =
-    new Set(
-      found.map((reading) => reading.details.transactionId).filter(Boolean),
-    ).size > 1;
+  const evidenceAliasSets = found
+    .map((reading) => new Set(receiptEvidenceAliases(reading.details)))
+    .filter((aliases) => aliases.size > 0);
+  const connectedAliases = new Set(evidenceAliasSets[0] ?? []);
+  const disconnectedAliasSets = evidenceAliasSets.slice(1);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let index = disconnectedAliasSets.length - 1; index >= 0; index--) {
+      const aliases = disconnectedAliasSets[index];
+      if (![...aliases].some((alias) => connectedAliases.has(alias))) continue;
+      aliases.forEach((alias) => connectedAliases.add(alias));
+      disconnectedAliasSets.splice(index, 1);
+      changed = true;
+    }
+  }
+  const idConflict = disconnectedAliasSets.length > 0;
+  const observedIds = found
+    .map((reading) => reading.details.observedTransactionId)
+    .filter((id): id is string => Boolean(id));
+  const observedConsensus =
+    observedIds.length >= 2 && new Set(observedIds).size === 1
+      ? observedIds[0]
+      : null;
+  const consensusEligible =
+    Boolean(observedConsensus) &&
+    evidenceAliasSets.length === 0 &&
+    found.every(
+      (reading) =>
+        reading.amountCents === preferred.amountCents &&
+        reading.details.state === 'completed' &&
+        !reading.details.blocked &&
+        !reading.details.ambiguous,
+    );
   const blocked = readings.some((reading) => reading.details.blocked);
   const ambiguous =
     amountConflict ||
     idConflict ||
+    (evidenceAliasSets.length === 0 && new Set(observedIds).size > 1) ||
     readings.some((reading) => reading.details.ambiguous);
   return {
     ...preferred,
     details: {
       ...preferred.details,
       recipientBank: preferred.details.recipientBank ?? bankEnrichment,
+      alternateTransactionId:
+        preferred.details.alternateTransactionId ??
+        (consensusEligible ? `ocr-consensus:${observedConsensus}` : null),
       blocked,
       ambiguous,
       automaticEligible:
-        preferred.details.automaticEligible && !blocked && !ambiguous,
+        (preferred.details.automaticEligible || consensusEligible) &&
+        !blocked &&
+        !ambiguous,
     },
   };
 }

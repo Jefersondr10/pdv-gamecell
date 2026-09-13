@@ -1,4 +1,8 @@
-import type { ReceiptDocument } from './receipt-document.ts';
+import {
+  receiptEvidenceAliases,
+  receiptEvidenceKey,
+  type ReceiptDocument,
+} from './receipt-document.ts';
 import { hasEffectiveReceiptReviewReason } from './receipt-review-reasons.ts';
 
 type Receipt = {
@@ -20,12 +24,13 @@ export function receiptIncomeCents(receipt: Receipt) {
   const doc = receipt.receiptDetails;
   const acceptedEvidence = Boolean(
     Number.isSafeInteger(amount) &&
-      amount! > 0 &&
-      (!doc ||
-        (!doc.blocked &&
-          !doc.ambiguous &&
-          doc.state === 'completed' &&
-          (doc.automaticEligible || Boolean(receipt.receiptPaymentId)))),
+    amount! > 0 &&
+    (!doc ||
+      (!doc.blocked &&
+        !doc.ambiguous &&
+        doc.state === 'completed' &&
+        ((doc.automaticEligible && Boolean(receiptEvidenceKey(doc))) ||
+          Boolean(receipt.receiptPaymentId)))),
   );
   if (
     !acceptedEvidence ||
@@ -45,11 +50,13 @@ export function saleReceiptIncome(sale: Sale) {
     0,
   );
   const pixCents = sale.receipts.reduce((sum, receipt) => {
-    const id = receipt.receiptDetails?.transactionId;
-    const duplicate =
-      id &&
-      sale.receipts.filter((r) => r.receiptDetails?.transactionId === id)
-        .length > 1;
+    const aliases = receiptEvidenceAliases(receipt.receiptDetails);
+    const duplicate = aliases.some(
+      (alias) =>
+        sale.receipts.filter((candidate) =>
+          receiptEvidenceAliases(candidate.receiptDetails).includes(alias),
+        ).length > 1,
+    );
     return sum + (duplicate ? 0 : receiptIncomeCents(receipt));
   }, 0);
   return {
@@ -77,13 +84,15 @@ export function receiptDrivenPayments(sale: {
   return [
     ...sale.receipts.flatMap((receipt) => {
       const amountCents = receiptIncomeCents(receipt);
-      const transactionId = receipt.receiptDetails?.transactionId;
+      const transactionAliases = receiptEvidenceAliases(receipt.receiptDetails);
       if (
         !amountCents ||
-        (transactionId &&
-          sale.receipts.filter(
-            (r) => r.receiptDetails?.transactionId === transactionId,
-          ).length > 1)
+        transactionAliases.some(
+          (alias) =>
+            sale.receipts.filter((candidate) =>
+              receiptEvidenceAliases(candidate.receiptDetails).includes(alias),
+            ).length > 1,
+        )
       )
         return [];
       const registered = sale.payments.find(

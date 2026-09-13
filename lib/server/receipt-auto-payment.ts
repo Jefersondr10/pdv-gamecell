@@ -1,6 +1,8 @@
 import {
   normalizeReceiptIdentity,
   parseReceiptDocument,
+  receiptEvidenceAliases,
+  receiptEvidenceKey,
 } from '../receipt-document.ts';
 import type { readReceiptPaymentSync } from './receipt-payment-sync.ts';
 import {
@@ -198,7 +200,7 @@ export async function settleAutomaticReceiptPayments(
     return review(
       'O documento indica agendamento, cancelamento ou estorno. Confira o pagamento.',
     );
-  const ids = documents.map((d) => d?.transactionId).filter(Boolean);
+  const ids = documents.flatMap(receiptEvidenceAliases);
   if (new Set(ids).size !== ids.length)
     return review(
       'Há comprovantes da mesma transação nesta venda. Confira os anexos duplicados.',
@@ -224,7 +226,8 @@ export async function settleAutomaticReceiptPayments(
     .filter(
       (receipt, index) =>
         receipt.details !== null &&
-        !documents[index]?.automaticEligible &&
+        (!documents[index]?.automaticEligible ||
+          !receiptEvidenceKey(documents[index])) &&
         !historicallyLinkedIds.has(receipt.id),
     )
     .map((receipt) => receipt.id);
@@ -335,11 +338,17 @@ export async function settleAutomaticReceiptPayments(
         'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
         [receipt.id],
       );
-    const transactionId = doc?.transactionId ?? `receipt:${receipt.id}`;
+    const readTransactionId = receiptEvidenceKey(doc);
+    const transactionId =
+      readTransactionId ?? link?.transactionId ?? `receipt:${receipt.id}`;
+    const readTransactionAliases = new Set(
+      [doc?.transactionId, doc?.alternateTransactionId].filter(Boolean),
+    );
     if (
       link &&
       link.transactionId !== transactionId &&
-      link.transactionId !== `receipt:${receipt.id}`
+      link.transactionId !== `receipt:${receipt.id}` &&
+      !readTransactionAliases.has(link.transactionId)
     )
       return review(
         'A identificação da transação mudou na releitura. Confira o pagamento registrado.',
@@ -357,7 +366,13 @@ export async function settleAutomaticReceiptPayments(
     const account =
       matches.length === 1
         ? matches[0]
-        : { id: null, name: doc?.recipientBank || 'Banco não identificado' };
+        : {
+            id: null,
+            name:
+              doc?.recipientName ||
+              doc?.recipientBank ||
+              'Recebedor não identificado',
+          };
     const claim = await db
       .prepare(
         'SELECT attachment_id AS attachmentId FROM receipt_payment_links WHERE store_id=? AND transaction_id=?',
@@ -383,6 +398,12 @@ export async function settleAutomaticReceiptPayments(
     return review('Valor fora do limite. Confira os pagamentos.');
   const now = Date.now();
   const auditId = `receipt-auto:${request.requestId}`;
+  const auditDetails = JSON.stringify({
+    before: current.payments,
+    receiptIds: receipts.map((r) => r.id),
+    receivedTotalCents: received,
+    cashPreservedCents: current.cashCents,
+  });
   const paymentSql = `(SELECT json_group_array(json_object('id',id,'method',method,'pixAccountId',pix_account_id,'accountName',account_name,'amountCents',amount_cents)) FROM (SELECT * FROM payments WHERE sale_id=? AND store_id=? ORDER BY id))`;
   const statements = [
     db
@@ -424,16 +445,29 @@ export async function settleAutomaticReceiptPayments(
         storeId,
         saleId,
         saleId,
-        JSON.stringify({
-          before: current.payments,
-          receiptIds: receipts.map((r) => r.id),
-          receivedTotalCents: received,
-          cashPreservedCents: current.cashCents,
-        }),
+        auditDetails,
         now,
       ),
   ];
   for (const p of planned) {
+    if (
+      receiptEvidenceAliases(parseReceiptDocument(p.receipt.details)).length
+    )
+      statements.push(
+        ...receiptClaimStatements(
+          db,
+          {
+            storeId,
+            saleId,
+            actorId: request.requestedBy,
+            paymentIds: [p.paymentId],
+          },
+          [p.receipt],
+          auditId,
+          auditDetails,
+          now,
+        ),
+      );
     if (p.link) {
       if (p.link.transactionId !== p.transactionId)
         statements.push(
@@ -446,7 +480,7 @@ export async function settleAutomaticReceiptPayments(
               storeId,
               saleId,
               p.paymentId,
-              `receipt:${p.receipt.id}`,
+              p.link.transactionId,
             ),
         );
       statements.push(

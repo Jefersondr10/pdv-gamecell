@@ -10,12 +10,12 @@ import {
 } from 'react';
 import { requestJson } from '@/lib/client-api';
 import {
-  hasPendingReceiptWork,
+  receiptSalePollDelay,
   RECEIPT_ACTIVITY_IDLE_POLL_MS,
   RECEIPT_ACTIVITY_PENDING_POLL_MS,
   RECEIPT_POLL_RETRY_MS,
   RECEIPT_SALE_IDLE_POLL_MS,
-  RECEIPT_SALE_PENDING_POLL_MS,
+  RECEIPT_SALE_BURST_WINDOW_MS,
   type ReceiptPaymentPollingState,
   type ReceiptSalePollingState,
   type ServerReceiptJob,
@@ -93,8 +93,8 @@ export function ServerReceiptProvider({
       if (!forceNetwork) {
         const cached = cachedActivity();
         if (cached) {
-          const remaining = intervalFor(cached.pending) -
-            (Date.now() - cached.checkedAt);
+          const remaining =
+            intervalFor(cached.pending) - (Date.now() - cached.checkedAt);
           if (remaining > 0) {
             announce(cached);
             schedule(remaining);
@@ -179,18 +179,27 @@ export function useServerReceiptJobs(
     failure && failure.saleId === saleId ? failure : undefined;
   const error = visibleFailure?.message ?? '';
   const [revision, setRevision] = useState(0);
+  const burstUntil = useRef(0);
   const callback = useRef(onValues);
   useEffect(() => {
     callback.current = onValues;
   }, [onValues]);
   useEffect(() => {
     if (!enabled || !saleId) return;
+    burstUntil.current = 0;
     const refresh = () => setRevision((current) => current + 1);
-    window.addEventListener('pdv:receipts-saved', refresh);
+    const refreshAfterReceiptAction = () => {
+      burstUntil.current = Date.now() + RECEIPT_SALE_BURST_WINDOW_MS;
+      refresh();
+    };
+    window.addEventListener('pdv:receipts-saved', refreshAfterReceiptAction);
     window.addEventListener('pdv:receipt-activity-changed', refresh);
     window.addEventListener('online', refresh);
     return () => {
-      window.removeEventListener('pdv:receipts-saved', refresh);
+      window.removeEventListener(
+        'pdv:receipts-saved',
+        refreshAfterReceiptAction,
+      );
       window.removeEventListener('pdv:receipt-activity-changed', refresh);
       window.removeEventListener('online', refresh);
     };
@@ -221,8 +230,7 @@ export function useServerReceiptJobs(
           if (previous && previous !== signature)
             window.dispatchEvent(new Event('pdv:sales-changed'));
           previous = signature;
-          if (hasPendingReceiptWork(result))
-            delay = RECEIPT_SALE_PENDING_POLL_MS;
+          delay = receiptSalePollDelay(result, burstUntil.current);
         }
       } catch {
         delay = RECEIPT_POLL_RETRY_MS;
@@ -260,7 +268,6 @@ export function useServerReceiptJobs(
           expectedGeneration: job.generation,
         }),
       });
-      setRevision((current) => current + 1);
       window.dispatchEvent(new Event('pdv:receipts-saved'));
       window.dispatchEvent(new Event('pdv:sales-changed'));
     } catch (error) {

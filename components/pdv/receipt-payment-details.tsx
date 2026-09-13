@@ -1,5 +1,8 @@
 import type { ReceiptAttachmentRecord } from '@/lib/pdv-types';
-import { shortReceiptDate } from '@/lib/receipt-document';
+import {
+  receiptTransactionDisplay,
+  shortReceiptDate,
+} from '@/lib/receipt-document';
 
 export function ReceiptPaymentDetails({
   receipts,
@@ -90,9 +93,10 @@ export function ReceiptPaymentDetails({
                 </div>
               </div>
               <div className="border-t pt-2 text-xs text-muted-foreground">
-                <p>Identificador Pix</p>
+                <p>{receiptTransactionDisplay(receipt.receiptDetails).label}</p>
                 <p className="mt-1 break-all font-mono">
-                  {receipt.receiptDetails.transactionId || 'Não identificado'}
+                  {receiptTransactionDisplay(receipt.receiptDetails).value ||
+                    'Não identificado'}
                 </p>
               </div>
             </div>
