@@ -218,6 +218,13 @@ const lowResolutionC6 = extractReceiptDocument(
 );
 assert.equal(lowResolutionC6.details.automaticEligible, true);
 assert.equal(lowResolutionC6.details.payerBank, '336 - Banco Có SA.');
+const croppedBankSuffix = extractReceiptDocument(
+  receipt('Pixem Pix\nandamento realizado!').replace(
+    'Banco C6 S.A.',
+    'Banco C6',
+  ),
+);
+assert.equal(croppedBankSuffix.details.automaticEligible, true);
 assert.equal(
   parseReceiptDocument({ ...completed.details, recipientBank: 'és' })
     ?.recipientBank,
