@@ -97,6 +97,16 @@ export function useServerReceiptJobs(
   }, [onValues]);
   useEffect(() => {
     if (!enabled || !saleId) return;
+    const refresh = () => setRevision((current) => current + 1);
+    window.addEventListener('pdv:receipts-saved', refresh);
+    window.addEventListener('online', refresh);
+    return () => {
+      window.removeEventListener('pdv:receipts-saved', refresh);
+      window.removeEventListener('online', refresh);
+    };
+  }, [enabled, saleId]);
+  useEffect(() => {
+    if (!enabled || !saleId) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     let previous = '';

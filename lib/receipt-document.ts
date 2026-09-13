@@ -45,18 +45,22 @@ export function extractReceiptDocument(text: string) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
+  const rejected =
+    /\b(cancelad[oa]|estornad[oa]|recusad[oa]|negad[oa])\b|\bnao\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|autorizad[oa]|aprovad[oa])\b/.test(
+      normalized,
+    );
+  const pending =
+    /em processamento|em analise|\bpendente\b|\bfalha\b|aguardando|nao foi possivel|erro na/.test(
+      normalized,
+    );
   const state: ReceiptDocument['state'] =
     /\b(agendad[oa]|agendamento|programad[oa])\b/.test(normalized)
       ? 'scheduled'
-      : /\b(cancelad[oa]|estornad[oa]|nao realizad[oa]|nao concluid[oa]|recusad[oa])\b/.test(
-            normalized,
-          )
+      : rejected
         ? 'cancelled'
-        : /em processamento|em analise|\bpendente\b|\bfalha\b|aguardando|nao efetivad[oa]|nao foi possivel|nao enviado|erro na/.test(
-              normalized,
-            )
+        : pending
           ? 'unknown'
-          : /comprovante\s+(?:de\s+)?pix|pix\s+(?:enviado|realizado|concluido)|(?:pagamento|transferencia)\s+(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
+          : /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
                 normalized,
               )
             ? 'completed'
@@ -180,11 +184,7 @@ export function extractReceiptDocument(text: string) {
       state === 'completed' && ids.length === 1 && uniqueAmount,
     ambiguous,
     blocked:
-      state === 'scheduled' ||
-      state === 'cancelled' ||
-      /em processamento|em analise|\bpendente\b|\bfalha\b|aguardando|nao efetivad[oa]|nao foi possivel|nao enviado|erro na/.test(
-        normalized,
-      ),
+      state === 'scheduled' || state === 'cancelled' || pending || rejected,
   };
   return {
     amountCents: suggestion?.amountCents ?? null,
@@ -290,6 +290,13 @@ export function preferReceiptReading(
         reading.details.automaticEligible &&
         reading.details.recipientBank &&
         reading.details.recipientDocument,
+    ) ??
+    found.find((reading) => reading.details.automaticEligible) ??
+    found.find(
+      (reading) =>
+        reading.details.state === 'completed' &&
+        !reading.details.blocked &&
+        !reading.details.ambiguous,
     ) ??
     found[0] ??
     readings[0];

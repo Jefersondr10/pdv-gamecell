@@ -6,6 +6,8 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { extractReceiptDocument } from '../lib/receipt-document.ts';
 const directory = await mkdtemp(join(tmpdir(), 'pdv-isolated-validation-'));
 const database = new DatabaseSync(join(directory, 'pdv.sqlite'));
 for (const file of (await readdir('drizzle'))
@@ -24,6 +26,35 @@ database
 database.close();
 const port = 32421;
 const origin = `http://127.0.0.1:${port}`;
+// Controlled OCR adapter: exercises the real queued worker and HTTP flow,
+// without sending a synthetic test image to an external service.
+let releaseReading;
+const readingGate = new Promise((resolve) => {
+  releaseReading = resolve;
+});
+const ocr = createServer(async (request, response) => {
+  for await (const chunk of request) {
+    /* consume the uploaded test file */
+  }
+  await readingGate;
+  const reading = extractReceiptDocument(`Pronto! Seu pagamento foi realizado.
+Comprovante do Pix
+12/09/2026 14:30:00
+Valor: R$ 7.100,00
+Pagador
+Nome: Cliente fictício
+Banco: Banco de teste
+Recebedor
+Nome: Loja fictícia
+Banco: Banco recebedor
+CPF/CNPJ: ***.123.***-**
+ID de transação Pix
+E0000000000000000000000000000099`);
+  response
+    .writeHead(200, { 'content-type': 'application/json' })
+    .end(JSON.stringify(reading));
+});
+await new Promise((resolve) => ocr.listen(0, '127.0.0.1', resolve));
 const env = {
   ...process.env,
   NODE_ENV: 'production',
@@ -31,7 +62,7 @@ const env = {
   HOST: '127.0.0.1',
   APP_ORIGIN: origin,
   PDV_DATA_DIR: directory,
-  RECEIPT_OCR_ENGINE_URL: '',
+  RECEIPT_OCR_ENGINE_URL: `http://127.0.0.1:${ocr.address().port}`,
   MIGRATION_TARGET_ORIGIN: '',
   MIGRATION_READ_ONLY: '',
   PRODUCTION_MAINTENANCE: '',
@@ -87,7 +118,9 @@ try {
     const response = await fetch(origin + path, {
       method,
       headers,
-      ...(method === 'GET' ? {} : { body: form ?? (json ? JSON.stringify(json) : undefined) }),
+      ...(method === 'GET'
+        ? {}
+        : { body: form ?? (json ? JSON.stringify(json) : undefined) }),
     });
     const body = await response.json();
     if (!response.ok && response.status !== status)
@@ -176,6 +209,39 @@ try {
   assert.equal((await list(zero.id)).receivedTotalCents, 0);
   assert.ok((await list(zero.id)).issueKeys.includes('pending_payment'));
   assert.equal((await list(mixed.id)).receivedTotalCents, 300000);
+  // A late receipt has NO manually supplied amount or bank.
+  const late = new FormData();
+  late.set('operationId', crypto.randomUUID());
+  late.append('receipts', photo(), 'late-receipt.png');
+  await call('/api/sales/' + zero.id + '/attachments', {
+    method: 'POST',
+    form: late,
+  });
+  assert.equal(
+    (await list(zero.id)).receivedTotalCents,
+    0,
+    'pending OCR does not invent income',
+  );
+  releaseReading();
+  let completed;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    completed = await list(zero.id);
+    if (completed.receivedTotalCents === 710000) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  assert.equal(
+    completed.receivedTotalCents,
+    710000,
+    'late OCR automatically credits Pix',
+  );
+  assert.equal(completed.displayStatus.key, 'reconciled');
+  assert.equal(completed.receipts[0].receiptAmountSource, 'ocr');
+  const synced = await call('/api/sales/' + zero.id + '/receipt-payment');
+  assert.equal(
+    synced.receivedTotalCents,
+    710000,
+    'edit/payment view agrees with sales list',
+  );
   const form = new FormData();
   form.set('operationId', crypto.randomUUID());
   form.set(
@@ -192,6 +258,17 @@ try {
   assert.equal(received.displayStatus.key, 'reconciled');
   assert.equal(received.receipts.length, 1);
   const fixture = new DatabaseSync(join(directory, 'pdv.sqlite'));
+  for (const saleId of [zero.id, mixed.id]) {
+    const unit = fixture
+      .prepare('SELECT status, sale_id FROM inventory_units WHERE sale_id=?')
+      .get(saleId);
+    assert.equal(
+      unit.status,
+      'sold',
+      'sale without receipt still decrements stock',
+    );
+    assert.equal(unit.sale_id, saleId);
+  }
   const rawBefore = fixture
     .prepare('SELECT received_total_cents AS amount FROM sales WHERE id=?')
     .get(mixed.id).amount;
@@ -271,8 +348,11 @@ try {
   );
   fixture.close();
   console.log(
-    'PASS HTTP: sale without receipt, cash + receipt automatic reconciliation, legacy Pix ignored, cash addition with correct balance, new/manual Pix rejected and reread resets income. Test database isolated.',
+    'PASS HTTP: sale without receipt decrements stock; late upload with no amount runs queued OCR and reconciles; cash + receipt, legacy Pix ignored, correct balance, manual Pix rejected, reread resets income. Test database isolated.',
   );
 } finally {
   server.kill();
+  releaseReading();
+  ocr.closeAllConnections();
+  ocr.close();
 }

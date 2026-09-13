@@ -64,6 +64,34 @@ type StockRow = ProductRecord & {
   photos: AttachmentRecord[];
 };
 
+// Stock can change on another terminal while this screen stays open.
+function useStockRefresh(refresh: () => Promise<void>) {
+  useEffect(() => {
+    let running = false;
+    const resume = async () => {
+      if (running || document.hidden || navigator.onLine === false) return;
+      running = true;
+      try {
+        await refresh();
+      } finally {
+        running = false;
+      }
+    };
+    const timer = window.setInterval(() => void resume(), 30_000);
+    window.addEventListener('focus', resume);
+    window.addEventListener('online', resume);
+    window.addEventListener('pdv:sales-changed', resume);
+    document.addEventListener('visibilitychange', resume);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', resume);
+      window.removeEventListener('online', resume);
+      window.removeEventListener('pdv:sales-changed', resume);
+      document.removeEventListener('visibilitychange', resume);
+    };
+  }, [refresh]);
+}
+
 export function StockProductionView({
   data,
   onChanged,
@@ -125,6 +153,9 @@ export function StockProductionView({
   const [summary, setSummary] = useState<StockSummaryRecord[]>([]);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState('');
+  const summaryRequestIdRef = useRef(0);
+  const summaryLoadedRef = useRef(false);
+  const detailsRequestIdRef = useRef(0);
   const [details, setDetails] = useState<InventoryDetailRecord[]>([]);
   const [detailsTotal, setDetailsTotal] = useState<number | null>(null);
   const [detailsCursor, setDetailsCursor] = useState<string | null>(null);
@@ -190,27 +221,42 @@ export function StockProductionView({
   };
 
   const loadSummary = useCallback(async () => {
-    setSummaryLoading(true);
+    const requestId = ++summaryRequestIdRef.current;
+    if (!summaryLoadedRef.current) setSummaryLoading(true);
     setSummaryError('');
     try {
       const result = await requestJson<StockSummaryResponse>(
         '/api/inventory?view=summary',
       );
+      if (requestId !== summaryRequestIdRef.current) return;
+      summaryLoadedRef.current = true;
       setSummary(result.rows);
     } catch (error) {
-      setSummaryError(messageOf(error));
+      if (requestId === summaryRequestIdRef.current)
+        setSummaryError(messageOf(error));
     } finally {
-      setSummaryLoading(false);
+      if (requestId === summaryRequestIdRef.current) setSummaryLoading(false);
     }
   }, []);
 
+  const refreshStock = useCallback(async () => {
+    // Keep an open report as one snapshot instead of changing its totals
+    // underneath the serials already loaded for that report.
+    if (!reportOpen) await loadSummary();
+  }, [loadSummary, reportOpen]);
+  useStockRefresh(refreshStock);
+
   useEffect(() => {
     const timer = window.setTimeout(() => void loadSummary(), 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      summaryRequestIdRef.current += 1;
+    };
   }, [loadSummary]);
 
   const loadDetails = useCallback(async () => {
     if (detailsLoading) return;
+    const requestId = ++detailsRequestIdRef.current;
     setDetailsStarted(true);
     setDetailsLoading(true);
     setDetailsError('');
@@ -220,6 +266,7 @@ export function StockProductionView({
       const result = await requestJson<InventoryPage>(
         `/api/inventory?${params.toString()}`,
       );
+      if (requestId !== detailsRequestIdRef.current) return;
       setDetails((current) => {
         const byId = new Map(current.map((item) => [item.id, item]));
         result.items.forEach((item) => byId.set(item.id, item));
@@ -228,9 +275,10 @@ export function StockProductionView({
       if (result.total !== null) setDetailsTotal(result.total);
       setDetailsCursor(result.nextCursor);
     } catch (error) {
-      setDetailsError(messageOf(error));
+      if (requestId === detailsRequestIdRef.current)
+        setDetailsError(messageOf(error));
     } finally {
-      setDetailsLoading(false);
+      if (requestId === detailsRequestIdRef.current) setDetailsLoading(false);
     }
   }, [detailsCursor, detailsLoading]);
 
@@ -289,7 +337,15 @@ export function StockProductionView({
                 editingPrices ||
                 priceSaving
               }
-              onClick={() => {
+              onClick={async () => {
+                await loadSummary();
+                detailsRequestIdRef.current += 1;
+                setDetails([]);
+                setDetailsCursor(null);
+                setDetailsTotal(null);
+                setDetailsStarted(false);
+                setDetailsLoading(false);
+                setDetailsError('');
                 setReportGeneratedAt(Date.now());
                 setReportOpen(true);
               }}
@@ -630,7 +686,7 @@ export function StockProductionView({
           key={selectedRow.id}
           onOpenChange={(open) => !open && setSelectedRow(null)}
           onOpenSale={onOpenSale}
-          row={selectedRow}
+          row={rows.find((row) => row.id === selectedRow.id) ?? selectedRow}
         />
       )}
     </Page>
@@ -663,6 +719,8 @@ function StockProductDetails({
   const [unitLoadingId, setUnitLoadingId] = useState('');
   const requestIdRef = useRef(0);
   const unitRequestIdRef = useRef(0);
+  const loadedCountRef = useRef(0);
+  const pageLoadingRef = useRef(false);
 
   useEffect(
     () => () => {
@@ -678,9 +736,11 @@ function StockProductDetails({
   }, [queryDraft]);
 
   const loadPage = useCallback(
-    async (nextCursor: string | null) => {
+    async (nextCursor: string | null, background = false) => {
+      if (background && pageLoadingRef.current) return;
+      pageLoadingRef.current = true;
       const requestId = ++requestIdRef.current;
-      setLoading(true);
+      if (!background) setLoading(true);
       setError('');
       try {
         const params = new URLSearchParams({
@@ -694,10 +754,28 @@ function StockProductDetails({
           `/api/inventory?${params.toString()}`,
         );
         if (requestId !== requestIdRef.current) return;
+        // Refresh every page the operator has already opened, not just page 1.
+        while (
+          background &&
+          result.nextCursor &&
+          result.items.length < loadedCountRef.current
+        ) {
+          params.set('cursor', result.nextCursor);
+          const next = await requestJson<InventoryPage>(
+            `/api/inventory?${params.toString()}`,
+          );
+          if (requestId !== requestIdRef.current) return;
+          result.items.push(...next.items);
+          result.nextCursor = next.nextCursor;
+        }
         setItems((current) => {
-          if (!nextCursor) return result.items;
+          if (!nextCursor) {
+            loadedCountRef.current = result.items.length;
+            return result.items;
+          }
           const byId = new Map(current.map((item) => [item.id, item]));
           result.items.forEach((item) => byId.set(item.id, item));
+          loadedCountRef.current = byId.size;
           return Array.from(byId.values());
         });
         if (result.total !== null) setTotal(result.total);
@@ -708,15 +786,46 @@ function StockProductDetails({
         setError(messageOf(caught));
         setStarted(true);
       } finally {
-        if (requestId === requestIdRef.current) setLoading(false);
+        if (requestId === requestIdRef.current) {
+          pageLoadingRef.current = false;
+          setLoading(false);
+        }
       }
     },
     [query, row.id, status],
   );
 
+  const selectedUnitId = selectedUnit?.id;
+  const refreshPage = useCallback(async () => {
+    await loadPage(null, true);
+    if (!selectedUnitId) return;
+    const requestId = unitRequestIdRef.current;
+    try {
+      const params = new URLSearchParams({
+        unitId: selectedUnitId,
+        status: 'all',
+        includePhotos: '1',
+        limit: '10',
+      });
+      const result = await requestJson<InventoryPage>(
+        `/api/inventory?${params.toString()}`,
+      );
+      if (requestId !== unitRequestIdRef.current) return;
+      setSelectedUnit((current) =>
+        current?.id === selectedUnitId
+          ? (result.items.find((unit) => unit.id === selectedUnitId) ?? current)
+          : current,
+      );
+    } catch {
+      /* Preserve the last detail on a temporary network failure. */
+    }
+  }, [loadPage, selectedUnitId]);
+  useStockRefresh(refreshPage);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setItems([]);
+      loadedCountRef.current = 0;
       setCursor(null);
       setTotal(null);
       setStarted(false);

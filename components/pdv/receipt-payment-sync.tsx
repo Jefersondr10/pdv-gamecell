@@ -14,6 +14,7 @@ type State = {
   receiptTotalCents: number;
   payments: SalePaymentRecord[];
   expectedPayments: string;
+  expectedReceipts: string;
 };
 export function ReceiptPaymentSync({
   saleId,
@@ -56,6 +57,8 @@ export function ReceiptPaymentSync({
           setState(next);
           const signature = JSON.stringify([
             next.expectedPayments,
+            next.expectedReceipts,
+            next.receivedTotalCents,
             next.status,
             next.requestId,
           ]);

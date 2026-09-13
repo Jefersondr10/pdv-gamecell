@@ -1511,13 +1511,8 @@ function EditSaleDialog({
   const [itemFiles, setItemFiles] = useState<Record<string, File[]>>({});
   const [preparing, setPreparing] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'cash' | ''>('');
-  const [paymentPixAccountId] = useState(
-    () => data.pixAccounts.find((account) => account.active)?.id ?? '',
-  );
-  const [paymentAmount, setPaymentAmount] = useState(() =>
-    formatMoneyInput(Math.max(0, -(sale?.receivedDifferenceCents ?? 0))),
-  );
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const paymentMethod = paymentAmount.trim() ? 'cash' : '';
   const paymentOperationIdRef = useRef(createOperationId());
   const [queuedPayments, setQueuedPayments] = useState<QueuedPayment[]>([]);
   const [visiblePayments, setVisiblePayments] = useState<SalePaymentRecord[]>(
@@ -1586,9 +1581,6 @@ function EditSaleDialog({
       (status.active || status.id === currentStatusId) &&
       !isAutomaticStatusName(status.name),
   );
-  const activePixAccounts = data.pixAccounts.filter(
-    (account) => account.active,
-  );
   const additionalPaymentCents = parseMoneyInput(paymentAmount);
   const correctedPayments = visiblePayments.map((payment) => {
     const edit = paymentEdits[payment.id];
@@ -1639,8 +1631,7 @@ function EditSaleDialog({
   const paymentReady =
     paymentMethod !== '' &&
     additionalPaymentCents > 0 &&
-    additionalPaymentCents <= remainingPaymentCents &&
-    (paymentMethod !== 'pix' || Boolean(paymentPixAccountId));
+    additionalPaymentCents <= remainingPaymentCents;
   const changedSavedReceiptValues = activeReceipts.flatMap((receipt) => {
     if (!dirtyReceipts.has(receipt.id)) return [];
     const value = savedReceiptValues[receipt.id] ?? {
@@ -1683,14 +1674,9 @@ function EditSaleDialog({
     if (!paymentReady || !paymentMethod) return null;
     return {
       operationId: paymentOperationIdRef.current,
-      method: paymentMethod,
-      pixAccountId: paymentMethod === 'pix' ? paymentPixAccountId : null,
-      accountName:
-        paymentMethod === 'pix'
-          ? (activePixAccounts.find(
-              (account) => account.id === paymentPixAccountId,
-            )?.name ?? null)
-          : null,
+      method: 'cash',
+      pixAccountId: null,
+      accountName: null,
       amountCents: additionalPaymentCents,
     };
   };
@@ -1699,12 +1685,7 @@ function EditSaleDialog({
     const draft = currentPaymentDraft();
     if (!draft) return;
     setQueuedPayments((current) => [...current, draft]);
-    const nextRemaining = Math.max(
-      0,
-      remainingPaymentCents - draft.amountCents,
-    );
-    setPaymentMethod('');
-    setPaymentAmount(formatMoneyInput(nextRemaining));
+    setPaymentAmount('');
     paymentOperationIdRef.current = createOperationId();
   };
 
@@ -2018,7 +1999,7 @@ function EditSaleDialog({
                           </span>
                           <strong>{formatMoney(payment.amountCents)}</strong>
                           <Button
-                            aria-label="Remover novo pagamento"
+                            aria-label="Remover recebimento em dinheiro"
                             className="size-7"
                             onClick={() => {
                               setQueuedPayments((current) =>
@@ -2063,8 +2044,8 @@ function EditSaleDialog({
                   )}
                   {queuedPaymentCents > pendingPaymentCents && (
                     <p role="alert" className="mt-2 text-sm text-destructive">
-                      Os novos pagamentos excedem o saldo após a correção.
-                      Remova os novos pagamentos e distribua o saldo novamente.
+                      O dinheiro acrescentado excede o saldo após a correção.
+                      Revise os recebimentos antes de salvar.
                     </p>
                   )}
                   {correctedReceivedCents > sale.productsTotalCents && (
@@ -2078,38 +2059,13 @@ function EditSaleDialog({
                   )}
 
                   {remainingPaymentCents > 0 && (
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      <div>
-                        <label
-                          className="text-sm font-semibold"
-                          htmlFor={`sale-${sale.id}-payment-method`}
-                        >
-                          Forma do novo pagamento
-                        </label>
-                        <NativeSelect
-                          className="mt-1 h-11 w-full [&_select]:h-11"
-                          id={`sale-${sale.id}-payment-method`}
-                          onChange={(event) =>
-                            setPaymentMethod(
-                              event.target.value as 'pix' | 'cash' | '',
-                            )
-                          }
-                          value={paymentMethod}
-                        >
-                          <NativeSelectOption value="">
-                            Selecione
-                          </NativeSelectOption>
-                          <NativeSelectOption value="cash">
-                            Dinheiro
-                          </NativeSelectOption>
-                        </NativeSelect>
-                      </div>
+                    <div className="mt-3">
                       <div>
                         <label
                           className="text-sm font-semibold"
                           htmlFor={`sale-${sale.id}-payment-amount`}
                         >
-                          Valor a acrescentar
+                          Adicionar recebimento em dinheiro
                         </label>
                         <Input
                           aria-describedby={
@@ -2121,6 +2077,7 @@ function EditSaleDialog({
                           className="mt-1 h-11 text-right font-bold"
                           id={`sale-${sale.id}-payment-amount`}
                           inputMode="decimal"
+                          placeholder="Valor recebido em dinheiro"
                           onChange={(event) =>
                             setPaymentAmount(event.target.value)
                           }
@@ -2139,17 +2096,13 @@ function EditSaleDialog({
                         id={`sale-${sale.id}-payment-error`}
                       >
                         Informe um valor entre R$ 0,01 e{' '}
-                        {formatMoney(remainingPaymentCents)}
-                        {paymentMethod === 'pix' && !paymentPixAccountId
-                          ? ' e selecione uma conta Pix.'
-                          : '.'}
+                        {formatMoney(remainingPaymentCents)}.
                       </p>
                     )}
                   {remainingPaymentCents > 0 && (
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs font-semibold text-muted-foreground">
-                        Ainda falta distribuir{' '}
-                        {formatMoney(remainingPaymentCents)}.
+                        Falta receber {formatMoney(remainingPaymentCents)}.
                       </p>
                       <Button
                         disabled={!paymentReady}
@@ -2158,15 +2111,14 @@ function EditSaleDialog({
                         type="button"
                         variant="outline"
                       >
-                        <Plus /> Adicionar pagamento
+                        <Plus /> Adicionar dinheiro
                       </Button>
                     </div>
                   )}
                   {queuedPayments.length > 0 && remainingPaymentCents === 0 && (
                     <p className="mt-3 rounded-xl bg-success/10 px-3 py-2 text-xs font-semibold text-success">
-                      O saldo foi distribuído entre {queuedPayments.length}{' '}
-                      {queuedPayments.length === 1 ? 'pagamento' : 'pagamentos'}
-                      .
+                      Recebimento em dinheiro adicionado. Salve as alterações
+                      para confirmar.
                     </p>
                   )}
                 </section>
@@ -2609,11 +2561,10 @@ function EditSaleDialog({
                               paymentDraft.operationId,
                           ),
                         );
-                        setPaymentAmount(formatMoneyInput(latestPending));
+                        setPaymentAmount('');
                       }
                       if (paymentsToSave.length > 0) {
-                        setPaymentAmount(formatMoneyInput(latestPending));
-                        setPaymentMethod('');
+                        setPaymentAmount('');
                         paymentOperationIdRef.current = createOperationId();
                       }
                       if (selectedStatusId !== currentStatusId) {
