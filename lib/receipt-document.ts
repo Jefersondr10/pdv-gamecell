@@ -1,7 +1,7 @@
 import { extractReceiptAmount } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 5;
+export const RECEIPT_READER_REVISION = 6;
 
 export type ReceiptDocument = {
   version: 1;
@@ -391,6 +391,15 @@ export function extractReceiptDocument(text: string) {
   };
   if (from >= 0) payer = participant(stop(lines.slice(from + 1, from + 12)));
   if (to >= 0) recipient = participant(stop(lines.slice(to + 1, to + 12)));
+  if (itauSisPagCompleted && to >= 0 && !recipient.bank) {
+    const institution = stop(lines.slice(to + 1, to + 12)).find(
+      (line) =>
+        line !== recipient.name &&
+        /\b(?:ip|institui[cç][aã]o\s+(?:de\s+)?pagamento)\b/i.test(line),
+    );
+    if (institution)
+      recipient = { ...recipient, bank: cleanParticipantBank(institution) };
+  }
   if (c6 && recipientBankLine > 0) {
     const bankAt = lines.findIndex(
       (line, i) => i > originAccount && /^banco\s*:/i.test(line),

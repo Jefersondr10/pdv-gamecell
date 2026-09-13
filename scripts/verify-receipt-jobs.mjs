@@ -126,6 +126,35 @@ assert.equal(
   'a completed ineligible reading retries only once per reader revision',
 );
 
+// A safe old reading is retried once when the receiving bank is missing, so
+// newer bank-layout recognition can enrich existing sales automatically.
+seed();
+mode = 'ok';
+const oldEligibleWithoutBank = extractReceiptDocument(
+  'Comprovante de transferência\nPix\nValor R$ 2.840,00\nIdentificador da transação\nE0000000000000000000000000000001',
+).details;
+assert.equal(oldEligibleWithoutBank.automaticEligible, true);
+assert.equal(oldEligibleWithoutBank.recipientBank, null);
+db.database
+  .prepare(
+    "UPDATE attachments SET receipt_amount_cents=284000,receipt_amount_source='ocr',receipt_details_json=?",
+  )
+  .run(JSON.stringify(oldEligibleWithoutBank));
+db.database
+  .prepare(
+    "INSERT INTO receipt_ocr_jobs(attachment_id,status,attempts,generation,next_attempt_at,created_at,updated_at,reader_revision) VALUES('receipt','done',1,1,1,1,1,?)",
+  )
+  .run(RECEIPT_READER_REVISION - 1);
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(job().generation, 2);
+assert.equal(job().status, 'done');
+assert.equal(job().reader_revision, RECEIPT_READER_REVISION);
+assert.equal(
+  await processReceiptJob(db, files, 'http://isolated.test', clock),
+  false,
+  'missing-bank enrichment retries only once per reader revision',
+);
+
 seed();
 mode = 'ok';
 db.database

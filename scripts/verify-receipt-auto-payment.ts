@@ -92,6 +92,7 @@ const itauSisPag = extractReceiptDocument(itauSisPagText);
 assert.equal(itauSisPag.amountCents, 425000);
 assert.equal(itauSisPag.details.state, 'completed');
 assert.equal(itauSisPag.details.automaticEligible, true);
+assert.equal(itauSisPag.details.recipientBank, 'MT IP S.A.');
 assert.equal(itauSisPag.details.paidAtText, '08 set. 2026, 12:08:24');
 assert.equal(
   shortReceiptDate(itauSisPag.details.paidAtText),
