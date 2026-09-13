@@ -200,6 +200,17 @@ const shortC6 = extractReceiptDocument(
   ),
 );
 assert.equal(shortC6.details.recipientBank, 'C6');
+const corruptedIdLabel = extractReceiptDocument(
+  receipt('Pixem Pix\nandamento realizado!').replace(
+    'ID da Transação',
+    'ID ca Transação',
+  ),
+);
+assert.equal(corruptedIdLabel.details.automaticEligible, true);
+assert.equal(
+  corruptedIdLabel.details.transactionId,
+  'E0000000000000000000000000000001',
+);
 assert.equal(
   parseReceiptDocument({ ...completed.details, recipientBank: 'és' })
     ?.recipientBank,

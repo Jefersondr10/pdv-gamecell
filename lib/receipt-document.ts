@@ -113,7 +113,11 @@ export function extractReceiptDocument(text: string) {
   const idLabel = lines.findIndex((line) =>
     /(?:id|identificador)\s+(?:de\s+|da\s+)?transa[cç][aã]o(?:\s+pix)?|end\s*to\s*end|e2e/i.test(
       line,
-    ),
+    ) ||
+    // Low-resolution C6 images often turn "ID da Transação" into
+    // "ID ca Transação". Restrict this tolerance to the already identified
+    // C6 layout so unrelated long codes never become Pix evidence.
+    (c6 && /^[il1]d\s+[cd][ae]\s+transa[cç][aã]o(?:\s+pix)?$/i.test(line)),
   );
   const ids = idLabel < 0 ? [] : (text.match(/\bE[A-Za-z0-9]{31}\b/g) ?? []);
   const singleTransaction = new Set(ids.map((id) => id.toUpperCase())).size === 1;
