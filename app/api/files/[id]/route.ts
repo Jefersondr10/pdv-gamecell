@@ -2,6 +2,7 @@ import { requireSession } from '@/lib/server/auth';
 import { assertPermission } from '@/lib/server/permissions';
 import { apiError, HttpError } from '@/lib/server/http';
 import { runtime } from '@/lib/server/runtime';
+import { attachmentReadPermissions } from '@/lib/server/attachment-permissions';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,9 +28,10 @@ export async function GET(
       }>();
     if (!metadata)
       throw new HttpError(404, 'Arquivo não encontrado.', 'NOT_FOUND');
-    if (metadata.kind === 'entry_photo')
-      assertPermission(session, 'stock', 'entries');
-    else assertPermission(session, 'sales', 'overview');
+    const permissions = attachmentReadPermissions(metadata.kind);
+    if (!permissions)
+      throw new HttpError(404, 'Arquivo não encontrado.', 'NOT_FOUND');
+    assertPermission(session, ...permissions);
     const object = await runtime().FILES.get(metadata.r2Key);
     if (!object?.body)
       throw new HttpError(404, 'Arquivo não encontrado.', 'NOT_FOUND');

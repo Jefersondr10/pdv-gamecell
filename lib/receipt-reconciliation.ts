@@ -1,3 +1,5 @@
+import type { ReceiptDocument } from './receipt-document.ts';
+
 export type ReceiptAmountSource = 'ocr' | 'manual';
 
 export function receiptTargetLabel(cashCents: number) {
@@ -35,11 +37,24 @@ export function deriveReceiptReconciliation(
     amountCents?: number | null;
     receiptAmountCents?: number | null;
     receiptReviewReason?: string | null;
+    receiptDetails?: ReceiptDocument | null;
+    receiptPaymentId?: string | null;
   }>,
   pixTotalCents: number,
 ): ReceiptReconciliation {
-  const values = receipts.map(
-    (receipt) => receipt.receiptAmountCents ?? receipt.amountCents ?? null,
+  const invalidDocument = (receipt: (typeof receipts)[number]) =>
+    Boolean(
+      receipt.receiptDetails &&
+      (receipt.receiptDetails.blocked ||
+        receipt.receiptDetails.ambiguous ||
+        receipt.receiptDetails.state !== 'completed' ||
+        (!receipt.receiptDetails.automaticEligible &&
+          !receipt.receiptPaymentId)),
+    );
+  const values = receipts.map((receipt) =>
+    invalidDocument(receipt)
+      ? null
+      : (receipt.receiptAmountCents ?? receipt.amountCents ?? null),
   );
   const validAmount = (value: number | null): value is number =>
     value !== null && Number.isSafeInteger(value) && value > 0;
@@ -50,8 +65,9 @@ export function deriveReceiptReconciliation(
     (sum, value) => sum + (validAmount(value) ? value : 0),
     0,
   );
-  const reviewReceiptCount = receipts.filter((receipt) =>
-    Boolean(receipt.receiptReviewReason),
+  const reviewReceiptCount = receipts.filter(
+    (receipt) =>
+      invalidDocument(receipt) || Boolean(receipt.receiptReviewReason),
   ).length;
   if (reviewReceiptCount)
     return {

@@ -11,6 +11,7 @@ import {
 import { runtime } from '@/lib/server/runtime';
 import {
   readReceiptPaymentSync,
+  publicReceiptPaymentState,
   requestReceiptPaymentSync,
   settleReceiptPaymentSync,
   registerFirstReceiptPix,
@@ -22,26 +23,6 @@ import {
 } from '@/lib/server/rate-limit';
 
 type Context = { params: Promise<{ id: string }> };
-function publicState(
-  state: NonNullable<Awaited<ReturnType<typeof readReceiptPaymentSync>>>,
-) {
-  const receiptTotal = state.sale.effectiveReceiptTotalCents;
-  return {
-    status: state.request?.status ?? 'manual',
-    requestId: state.request?.requestId ?? null,
-    updatedAt: state.request?.updatedAt ?? null,
-    saleStatus: state.sale.status,
-    receivedTotalCents: receiptTotal + state.cashCents,
-    productsTotalCents: state.sale.productsTotalCents,
-    receiptTotalCents: receiptTotal,
-    pixCents: state.pixCents,
-    cashCents: state.cashCents,
-    complete: state.complete,
-    payments: state.payments,
-    expectedPayments: state.sale.paymentsJson,
-    expectedReceipts: state.sale.receiptsJson,
-  };
-}
 export async function GET(request: Request, context: Context) {
   try {
     const session = await requireSession(request);
@@ -51,7 +32,7 @@ export async function GET(request: Request, context: Context) {
     const state = await readReceiptPaymentSync(db, session.storeId!, id);
     if (!state)
       throw new HttpError(404, 'Venda não encontrada.', 'SALE_NOT_FOUND');
-    return json(publicState(state));
+    return json(publicReceiptPaymentState(state));
   } catch (error) {
     return apiError(error);
   }
@@ -142,7 +123,8 @@ export async function POST(request: Request, context: Context) {
     const state = await readReceiptPaymentSync(db, storeId, saleId);
     if (!state)
       throw new HttpError(404, 'Venda não encontrada.', 'SALE_NOT_FOUND');
-    if (replay) return json({ ...publicState(state), replayed: true });
+    if (replay)
+      return json({ ...publicReceiptPaymentState(state), replayed: true });
     const completedFirstPix = () =>
       db
         .prepare(`SELECT 1 AS ok FROM audit_events WHERE id=? AND actor_user_id=? AND store_id=?
@@ -157,7 +139,9 @@ export async function POST(request: Request, context: Context) {
     ) {
       if (pixAccountId && (await completedFirstPix()))
         return json({
-          ...publicState((await readReceiptPaymentSync(db, storeId, saleId))!),
+          ...publicReceiptPaymentState(
+            (await readReceiptPaymentSync(db, storeId, saleId))!,
+          ),
           replayed: true,
         });
       throw new HttpError(
@@ -187,7 +171,7 @@ export async function POST(request: Request, context: Context) {
         const committed = await completedFirstPix();
         if (committed)
           return json({
-            ...publicState(
+            ...publicReceiptPaymentState(
               (await readReceiptPaymentSync(db, storeId, saleId))!,
             ),
             replayed: true,
@@ -195,7 +179,9 @@ export async function POST(request: Request, context: Context) {
         throw error;
       }
       return json(
-        publicState((await readReceiptPaymentSync(db, storeId, saleId))!),
+        publicReceiptPaymentState(
+          (await readReceiptPaymentSync(db, storeId, saleId))!,
+        ),
       );
     }
     const pixPayments = state.payments.filter((p) => p.method === 'pix');
@@ -265,7 +251,9 @@ export async function POST(request: Request, context: Context) {
     }
     await settleReceiptPaymentSync(db, storeId, saleId).catch(() => {});
     return json(
-      publicState((await readReceiptPaymentSync(db, storeId, saleId))!),
+      publicReceiptPaymentState(
+        (await readReceiptPaymentSync(db, storeId, saleId))!,
+      ),
     );
   } catch (error) {
     return apiError(error);

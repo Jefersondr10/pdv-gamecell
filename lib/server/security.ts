@@ -34,6 +34,13 @@ export async function hmac(value: string, secret: string) {
   return toBase64Url(new Uint8Array(signature));
 }
 
+export function credentialLoginAttemptKey(storeCode: string, login: string) {
+  return hmac(
+    `credential\u0000${storeCode}\u0000${login}`,
+    requiredSecret('RATE_LIMIT_SECRET_V1'),
+  );
+}
+
 export async function hashPassword(
   password: string,
   salt = randomToken(16),

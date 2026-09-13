@@ -9,6 +9,12 @@ import {
   receiptAllocationProblem,
   receiptClaimStatements,
 } from './receipt-evidence-safety.ts';
+import {
+  duplicateReceiptSql,
+  effectiveReceiptReviewReasonSql,
+  invalidReceiptDocumentSql,
+  linkedReceiptPaymentSql,
+} from './sale-status-sql.ts';
 
 type State = NonNullable<Awaited<ReturnType<typeof readReceiptPaymentSync>>>;
 type Actor = { role: string; permissionsJson: string | null };
@@ -27,6 +33,23 @@ type Account = {
   active: number;
 };
 type Link = { attachmentId: string; paymentId: string; transactionId: string };
+
+// Include this in the attachment mutation's batch. It clears only obsolete
+// evidence warnings, never a manual-payment/allocation warning or a payment.
+export function cleanupResolvedReceiptReviews(
+  db: D1Database,
+  storeId: string,
+  saleId: string,
+  guardAuditId?: string,
+) {
+  return db
+    .prepare(`UPDATE attachments AS ar
+    SET receipt_review_reason=${effectiveReceiptReviewReasonSql('ar')}
+    WHERE ar.store_id=? AND ar.sale_id=? AND ar.kind='receipt'
+    AND ar.receipt_review_reason IS NOT NULL
+    AND (? IS NULL OR EXISTS(SELECT 1 FROM audit_events cleanup_guard WHERE cleanup_guard.id=? AND cleanup_guard.store_id=ar.store_id AND cleanup_guard.entity_id=ar.sale_id))`)
+    .bind(storeId, saleId, guardAuditId ?? null, guardAuditId ?? null);
+}
 
 // New receipt-driven payments use one durable evidence claim per Pix. Legacy
 // manually entered Pix payments are never imported a second time.
@@ -55,7 +78,10 @@ export async function settleAutomaticReceiptPayments(
   const accounts: Account[] = JSON.parse(accountsJson);
   const links: Link[] = JSON.parse(linksJson);
   const pix = current.payments.filter((p) => p.method === 'pix');
-  const review = async (reason: string) => {
+  const review = async (
+    reason: string,
+    affectedIds = receipts.map((r) => r.id),
+  ) => {
     const now = Date.now();
     try {
       await db.batch([
@@ -73,13 +99,20 @@ export async function settleAutomaticReceiptPayments(
             storeId,
             evidenceJson,
             saleId,
-            JSON.stringify({ reason }),
+            JSON.stringify({ reason, receiptIds: affectedIds }),
             now,
           ),
         db
-          .prepare(`UPDATE attachments SET receipt_review_reason=? WHERE sale_id=? AND store_id=? AND kind='receipt'
+          .prepare(`UPDATE attachments AS ar SET receipt_review_reason=CASE WHEN ar.id IN (SELECT value FROM json_each(?)) THEN ? ELSE ${effectiveReceiptReviewReasonSql('ar')} END WHERE sale_id=? AND store_id=? AND kind='receipt'
         AND EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND request_id=? AND status='pending')`)
-          .bind(reason, saleId, storeId, saleId, request.requestId),
+          .bind(
+            JSON.stringify(affectedIds),
+            reason,
+            saleId,
+            storeId,
+            saleId,
+            request.requestId,
+          ),
         db
           .prepare(
             `UPDATE sale_receipt_payment_sync SET status='review',updated_at=? WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending'`,
@@ -96,13 +129,32 @@ export async function settleAutomaticReceiptPayments(
     return true;
   };
   const documents = receipts.map((r) => parseReceiptDocument(r.details));
+  const malformedIds = receipts
+    .filter((r, index) => r.details !== null && !documents[index])
+    .map((r) => r.id);
+  if (malformedIds.length)
+    return review(
+      'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
+      malformedIds,
+    );
   const evidenceProblem = await receiptEvidenceProblem(
     db,
     storeId,
     saleId,
     receipts,
   );
-  if (evidenceProblem) return review(evidenceProblem);
+  if (evidenceProblem) {
+    const affected = await db
+      .prepare(
+        `SELECT ar.id FROM attachments ar WHERE ar.store_id=? AND ar.sale_id=? AND ar.kind='receipt' AND (${invalidReceiptDocumentSql('ar')} OR ${duplicateReceiptSql('ar')})`,
+      )
+      .bind(storeId, saleId)
+      .all<{ id: string }>();
+    return review(
+      evidenceProblem,
+      affected.results.map((r) => r.id),
+    );
+  }
   const allocationProblem = await receiptAllocationProblem(
     db,
     storeId,
@@ -110,7 +162,32 @@ export async function settleAutomaticReceiptPayments(
     receipts,
     current.payments,
   );
-  if (allocationProblem) return review(allocationProblem);
+  if (allocationProblem) {
+    const claims = await db
+      .prepare(`SELECT entity_id AS attachmentId,details_json AS details FROM audit_events
+        WHERE store_id=? AND action='sale.receipt_transaction_claimed' AND json_valid(details_json) AND json_extract(details_json,'$.saleId')=?`)
+      .bind(storeId, saleId)
+      .all<{ attachmentId: string; details: string }>();
+    const affectedIds = claims.results
+      .filter((claim) => {
+        if (!receipts.some((receipt) => receipt.id === claim.attachmentId))
+          return false;
+        const { paymentIds } = JSON.parse(claim.details) as {
+          paymentIds?: unknown;
+        };
+        return (
+          !Array.isArray(paymentIds) ||
+          !paymentIds.length ||
+          paymentIds.some(
+            (id) =>
+              typeof id !== 'string' ||
+              !pix.some((payment) => payment.id === id),
+          )
+        );
+      })
+      .map((claim) => claim.attachmentId);
+    return review(allocationProblem, affectedIds);
+  }
   if (documents.some((d) => d && ['scheduled', 'cancelled'].includes(d.state)))
     return review(
       'O documento indica agendamento, cancelamento ou estorno. Confira o pagamento.',
@@ -120,9 +197,35 @@ export async function settleAutomaticReceiptPayments(
     return review(
       'Há comprovantes da mesma transação nesta venda. Confira os anexos duplicados.',
     );
-  if (links.some((l) => !pix.some((p) => p.id === l.paymentId)))
+  const missingPayments = links.filter(
+    (l) => !pix.some((p) => p.id === l.paymentId),
+  );
+  if (missingPayments.length)
     return review(
       'O pagamento deste comprovante foi alterado manualmente. Confira os pagamentos; dinheiro não será convertido em Pix.',
+      missingPayments.map((link) => link.attachmentId),
+    );
+  const historicallyLinked = await db
+    .prepare(
+      `SELECT ar.id FROM attachments ar WHERE ar.store_id=? AND ar.sale_id=? AND ar.kind='receipt' AND ${linkedReceiptPaymentSql('ar')} IS NOT NULL`,
+    )
+    .bind(storeId, saleId)
+    .all<{ id: string }>();
+  const historicallyLinkedIds = new Set(
+    historicallyLinked.results.map((row) => row.id),
+  );
+  const unsafeAutomaticIds = receipts
+    .filter(
+      (receipt, index) =>
+        receipt.details !== null &&
+        !documents[index]?.automaticEligible &&
+        !historicallyLinkedIds.has(receipt.id),
+    )
+    .map((receipt) => receipt.id);
+  if (unsafeAutomaticIds.length)
+    return review(
+      'A leitura não contém identificação suficiente para conciliação automática. Releia o comprovante.',
+      unsafeAutomaticIds,
     );
   // The established explicit/manual allocation path remains available for old sales.
   if (
@@ -218,6 +321,7 @@ export async function settleAutomaticReceiptPayments(
     if (doc && (doc.blocked || doc.ambiguous || doc.state !== 'completed'))
       return review(
         'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
+        [receipt.id],
       );
     const transactionId = doc?.transactionId ?? `receipt:${receipt.id}`;
     if (
@@ -227,6 +331,7 @@ export async function settleAutomaticReceiptPayments(
     )
       return review(
         'A identificação da transação mudou na releitura. Confira o pagamento registrado.',
+        [receipt.id],
       );
     const matches = accounts.filter(
       (a) =>
@@ -250,6 +355,7 @@ export async function settleAutomaticReceiptPayments(
     if (claim && claim.attachmentId !== receipt.id)
       return review(
         'Esta transação já foi registrada por outro comprovante. Ela não será somada novamente.',
+        [receipt.id],
       );
     planned.push({
       receipt,

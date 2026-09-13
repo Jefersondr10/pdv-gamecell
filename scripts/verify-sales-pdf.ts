@@ -291,7 +291,7 @@ console.log(
   'PASS: vector sales PDFs, levels, cancellation totals, linked attachments, rotation, long sales, limits and download errors.',
 );
 
-// Payment equality alone must not be called Quitado while receipts differ.
+// A typed Pix amount never overrides the safe receipt total.
 const discrepant = sale(10);
 discrepant.productsTotalCents = 3473000;
 discrepant.receivedTotalCents = 3473000;
@@ -321,12 +321,14 @@ for (let pageNo = 1; pageNo <= textPdf.numPages; pageNo++) {
     .join(' ');
 }
 assert.match(textContent, /Verificar comprovante/);
-assert.match(textContent, /Pagamento informado igual ao valor da venda/);
-assert.match(textContent, /80,00 abaixo do Pix informado/);
+assert.match(textContent, /34\.650,00 Total recebido/);
+assert.match(textContent, /Falta receber R\$ 80,00/);
+assert.match(textContent, /80,00 abaixo do valor da venda/);
+assert.doesNotMatch(textContent, /Pagamento informado igual ao valor da venda/);
 assert.doesNotMatch(textContent, /Quitado/);
 await textTask.destroy();
 console.log(
-  'PASS: PDF shows automatic status and R$80 discrepancy, never false Quitado.',
+  'PASS: PDF derives received value from safe receipts and shows the R$80 shortage.',
 );
 
 const identified = sale(30);
@@ -394,7 +396,7 @@ assert.ok(
   orderText.indexOf(identified.customerName) < orderText.indexOf('Produtos'),
 );
 assert.ok(
-  orderText.indexOf('Produtos') < orderText.indexOf('Pagamentos informados'),
+  orderText.indexOf('Produtos') < orderText.indexOf('Comprovantes e dinheiro'),
 );
 assert.ok(
   orderText.indexOf('Banco recebedor: Banco Recebedor') <

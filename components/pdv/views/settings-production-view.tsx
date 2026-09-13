@@ -8,7 +8,7 @@ import {
 import { createOperationId } from '@/lib/client-operation-id';
 import { LegacyReceiptReview } from '@/components/pdv/legacy-receipt-review';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { can, defaultPermissions } from '@/lib/permissions';
 import {
   PermissionFields,
@@ -79,7 +79,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { messageOf, requestJson } from '@/lib/client-api';
 import { displayCommercialCode } from '@/lib/commercial-code';
 import { ProductEditor } from './catalog-production-view';
-import { parseMoneyInput } from '@/lib/money';
+import { parseProductPriceInput } from '@/lib/product-prices';
 import {
   type BootstrapData,
   type OrderStatusColor,
@@ -306,6 +306,7 @@ function ProductsDialog({
   const [price, setPrice] = useState(
     selected ? moneyInput(selected.defaultPriceCents) : '',
   );
+  const [expectedPrice, setExpectedPrice] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (key: keyof typeof values, value: string) =>
@@ -364,7 +365,10 @@ function ProductsDialog({
                       .split(/[\n,;]+/)
                       .map((code) => code.trim())
                       .filter(Boolean),
-                    defaultPriceCents: parseMoneyInput(values.price),
+                    defaultPriceCents: parseProductPriceInput(
+                      values.price,
+                      true,
+                    ),
                   });
                   setValues({
                     model: '',
@@ -469,6 +473,7 @@ function ProductsDialog({
                   filter={matchesProductSearch}
                   onValueChange={(product) => {
                     setSelectedId(product?.id ?? '');
+                    setExpectedPrice(product?.defaultPriceCents ?? 0);
                     setPrice(
                       product ? moneyInput(product.defaultPriceCents) : '',
                     );
@@ -566,11 +571,17 @@ function ProductsDialog({
                         setBusy(true);
                         setError('');
                         try {
+                          const defaultPriceCents =
+                            parseProductPriceInput(price);
                           await patchJson(
                             `/api/products/${selected.id}`,
                             data.csrfToken,
-                            { defaultPriceCents: parseMoneyInput(price) },
+                            {
+                              defaultPriceCents,
+                              expected: { defaultPriceCents: expectedPrice },
+                            },
                           );
+                          setExpectedPrice(defaultPriceCents);
                           await onChanged();
                         } catch (caught) {
                           setError(messageOf(caught));
@@ -621,14 +632,23 @@ function ClientsDialog({
     notes: '',
   });
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState('');
   const set = (key: keyof typeof values, value: string) => {
     setOperationId(createOperationId());
     setValues((current) => ({ ...current, [key]: value }));
   };
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="flex max-h-[92dvh] max-w-xl flex-col overflow-hidden">
+    <Dialog
+      onOpenChange={(next) => {
+        if (!busyRef.current) onOpenChange(next);
+      }}
+      open={open}
+    >
+      <DialogContent
+        className="flex max-h-[92dvh] max-w-xl flex-col overflow-hidden"
+        showCloseButton={!busy}
+      >
         <DialogHeader>
           <DialogTitle>Clientes</DialogTitle>
           <DialogDescription>
@@ -641,6 +661,8 @@ function ClientsDialog({
             className="grid gap-2 rounded-2xl border bg-muted/25 p-3 sm:grid-cols-2"
             onSubmit={async (event) => {
               event.preventDefault();
+              if (busyRef.current) return;
+              busyRef.current = true;
               setBusy(true);
               setError('');
               try {
@@ -654,12 +676,14 @@ function ClientsDialog({
               } catch (caught) {
                 setError(messageOf(caught));
               } finally {
+                busyRef.current = false;
                 setBusy(false);
               }
             }}
           >
             <Field label="Nome">
               <Input
+                disabled={busy}
                 onChange={(event) => set('name', event.target.value)}
                 required
                 value={values.name}
@@ -667,12 +691,14 @@ function ClientsDialog({
             </Field>
             <Field label="Telefone (opcional)">
               <Input
+                disabled={busy}
                 onChange={(event) => set('phone', event.target.value)}
                 value={values.phone}
               />
             </Field>
             <Field label="E-mail (opcional)">
               <Input
+                disabled={busy}
                 onChange={(event) => set('email', event.target.value)}
                 type="email"
                 value={values.email}
@@ -681,6 +707,7 @@ function ClientsDialog({
             <div className="sm:col-span-2">
               <Field label="Observação (opcional)">
                 <Textarea
+                  disabled={busy}
                   onChange={(event) => set('notes', event.target.value)}
                   value={values.notes}
                 />
@@ -1015,12 +1042,21 @@ function UsersDialog({
   const [resetTarget, setResetTarget] = useState<UserRecord | null>(null);
   const [resetPassword, setResetPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState('');
   const set = (key: keyof typeof values, value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-[90dvh] sm:max-w-2xl sm:rounded-2xl">
+    <Dialog
+      onOpenChange={(next) => {
+        if (!busyRef.current) onOpenChange(next);
+      }}
+      open={open}
+    >
+      <DialogContent
+        className="flex h-dvh max-h-dvh max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-[90dvh] sm:max-w-2xl sm:rounded-2xl"
+        showCloseButton={!busy}
+      >
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
           <DialogTitle>Usuários da loja</DialogTitle>
           <DialogDescription>
@@ -1033,7 +1069,11 @@ function UsersDialog({
             <p className="font-bold">
               Código da loja: <code>{data.store.code}</code>
             </p>
-            <Button onClick={() => setShowNew((value) => !value)} size="sm">
+            <Button
+              disabled={busy}
+              onClick={() => setShowNew((value) => !value)}
+              size="sm"
+            >
               <Plus /> Novo usuário
             </Button>
           </div>
@@ -1042,6 +1082,8 @@ function UsersDialog({
               className="mb-4 grid gap-3 rounded-2xl border bg-muted/25 p-4 sm:grid-cols-2"
               onSubmit={async (event) => {
                 event.preventDefault();
+                if (busyRef.current) return;
+                busyRef.current = true;
                 setBusy(true);
                 setError('');
                 try {
@@ -1063,12 +1105,14 @@ function UsersDialog({
                 } catch (caught) {
                   setError(messageOf(caught));
                 } finally {
+                  busyRef.current = false;
                   setBusy(false);
                 }
               }}
             >
               <Field label="Nome">
                 <Input
+                  disabled={busy}
                   onChange={(event) => set('displayName', event.target.value)}
                   required
                   value={values.displayName}
@@ -1077,6 +1121,7 @@ function UsersDialog({
               <Field label="Usuário">
                 <Input
                   autoCapitalize="none"
+                  disabled={busy}
                   onChange={(event) => set('username', event.target.value)}
                   required
                   value={values.username}
@@ -1084,6 +1129,7 @@ function UsersDialog({
               </Field>
               <Field label="Senha inicial">
                 <Input
+                  disabled={busy}
                   minLength={10}
                   onChange={(event) => set('password', event.target.value)}
                   required
@@ -1094,6 +1140,7 @@ function UsersDialog({
               <Field label="Função">
                 <NativeSelect
                   className="h-10 w-full [&_select]:h-10"
+                  disabled={busy}
                   onChange={(event) => {
                     set('role', event.target.value);
                     setNewPermissions(
@@ -1188,6 +1235,8 @@ function UsersDialog({
                       <Button
                         disabled={busy}
                         onClick={async () => {
+                          if (busyRef.current) return;
+                          busyRef.current = true;
                           setBusy(true);
                           setError('');
                           try {
@@ -1200,6 +1249,7 @@ function UsersDialog({
                           } catch (caught) {
                             setError(messageOf(caught));
                           } finally {
+                            busyRef.current = false;
                             setBusy(false);
                           }
                         }}
@@ -1229,6 +1279,7 @@ function UsersDialog({
               </p>
               <Input
                 className="mt-2 bg-white"
+                disabled={busy}
                 minLength={10}
                 onChange={(event) => setResetPassword(event.target.value)}
                 placeholder="Senha com letras e números"
@@ -1237,6 +1288,7 @@ function UsersDialog({
               />
               <div className="mt-2 flex justify-end gap-2">
                 <Button
+                  disabled={busy}
                   onClick={() => {
                     setResetTarget(null);
                     setResetPassword('');
@@ -1249,6 +1301,8 @@ function UsersDialog({
                 <Button
                   disabled={resetPassword.length < 10 || busy}
                   onClick={async () => {
+                    if (busyRef.current) return;
+                    busyRef.current = true;
                     setBusy(true);
                     setError('');
                     try {
@@ -1263,6 +1317,7 @@ function UsersDialog({
                     } catch (caught) {
                       setError(messageOf(caught));
                     } finally {
+                      busyRef.current = false;
                       setBusy(false);
                     }
                   }}
@@ -1275,7 +1330,13 @@ function UsersDialog({
           )}
         </div>
         <DialogFooter className="shrink-0 border-t p-3">
-          <Button onClick={() => onOpenChange(false)} variant="outline">
+          <Button
+            disabled={busy}
+            onClick={() => {
+              if (!busyRef.current) onOpenChange(false);
+            }}
+            variant="outline"
+          >
             Fechar
           </Button>
         </DialogFooter>
@@ -1297,19 +1358,33 @@ function RecoveryCodesDialog({
   const [codes, setCodes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const generatingRef = useRef(false);
+  const codesPendingRef = useRef(false);
   const close = () => {
+    if (generatingRef.current) return;
+    codesPendingRef.current = false;
     setCurrentPassword('');
     setCodes([]);
     setError('');
     onOpenChange(false);
   };
   return (
-    <Dialog onOpenChange={(next) => !next && close()} open={open}>
-      <DialogContent className="max-w-2xl">
+    <Dialog
+      onOpenChange={(next) => {
+        if (!next && !generatingRef.current && !codesPendingRef.current)
+          close();
+      }}
+      open={open}
+    >
+      <DialogContent
+        className="max-w-2xl"
+        showCloseButton={!busy && codes.length === 0}
+      >
         <DialogHeader>
           <DialogTitle>Códigos de recuperação</DialogTitle>
           <DialogDescription>
-            A nova lista substitui imediatamente todos os códigos anteriores.
+            A nova lista substitui imediatamente todos os códigos anteriores.{' '}
+            Guarde os códigos e confirme antes de concluir e fechar.
           </DialogDescription>
         </DialogHeader>
         {codes.length ? (
@@ -1324,6 +1399,8 @@ function RecoveryCodesDialog({
             className="space-y-3"
             onSubmit={async (event) => {
               event.preventDefault();
+              if (generatingRef.current) return;
+              generatingRef.current = true;
               setBusy(true);
               setError('');
               try {
@@ -1338,11 +1415,13 @@ function RecoveryCodesDialog({
                     body: JSON.stringify({ currentPassword }),
                   },
                 );
+                codesPendingRef.current = true;
                 setCodes(result.recoveryCodes);
                 setCurrentPassword('');
               } catch (caught) {
                 setError(messageOf(caught));
               } finally {
+                generatingRef.current = false;
                 setBusy(false);
               }
             }}
@@ -1351,6 +1430,7 @@ function RecoveryCodesDialog({
             <Field label="Confirme sua senha atual">
               <Input
                 autoComplete="current-password"
+                disabled={busy}
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 required
                 type="password"
@@ -1358,7 +1438,7 @@ function RecoveryCodesDialog({
               />
             </Field>
             <Button className="h-11 w-full" disabled={busy} type="submit">
-              <KeyRound /> Gerar nova lista
+              <KeyRound /> {busy ? 'Gerando lista…' : 'Gerar nova lista'}
             </Button>
           </form>
         )}

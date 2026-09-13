@@ -12,7 +12,11 @@ import { consumeControlWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import { can, resolvePermissions } from '@/lib/permissions';
 import { parsePermissions } from '@/lib/server/permissions';
-import { hashPassword, sha256, validatePassword } from '@/lib/server/security';
+import {
+  credentialLoginAttemptKey,
+  hashPassword,
+  validatePassword,
+} from '@/lib/server/security';
 
 type TargetUser = {
   id: string;
@@ -176,9 +180,7 @@ export async function PATCH(
     bindings.push(now, id, session.storeId, target.updatedAt);
     const credentialAttemptKey =
       body.password !== undefined && target.username && session.storeCode
-        ? await sha256(
-            `credential\u0000${session.storeCode}\u0000${target.username}`,
-          )
+        ? await credentialLoginAttemptKey(session.storeCode, target.username)
         : null;
     try {
       await db.batch([

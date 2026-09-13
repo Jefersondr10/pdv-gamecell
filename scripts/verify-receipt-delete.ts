@@ -8,13 +8,16 @@ import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
 const db = new SqliteDatabase(':memory:');
 db.database.exec(`
 CREATE TABLE sales(id TEXT PRIMARY KEY, store_id TEXT, status TEXT, products_total_cents INTEGER);
-CREATE TABLE payments(id TEXT PRIMARY KEY, sale_id TEXT, amount_cents INTEGER);
+CREATE TABLE payments(id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT, method TEXT, amount_cents INTEGER);
 CREATE TABLE sale_receipt_payment_sync(sale_id TEXT PRIMARY KEY, store_id TEXT, request_id TEXT, status TEXT, updated_at INTEGER);
 CREATE TABLE attachments(id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT REFERENCES sales(id), kind TEXT,
   r2_key TEXT, file_name TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER,
   receipt_amount_source TEXT, receipt_amount_confirmed_by TEXT, receipt_amount_confirmed_at INTEGER);
 CREATE TABLE audit_events(id TEXT PRIMARY KEY, store_id TEXT, actor_user_id TEXT, action TEXT, entity_type TEXT,
   entity_id TEXT NOT NULL, details_json TEXT, created_at INTEGER);
+ALTER TABLE attachments ADD receipt_details_json TEXT;
+ALTER TABLE attachments ADD receipt_review_reason TEXT;
+CREATE TABLE receipt_payment_links(attachment_id TEXT,store_id TEXT,sale_id TEXT,payment_id TEXT,transaction_id TEXT);
 `);
 for (const name of [
   '0009_durable_receipt_jobs',
@@ -41,8 +44,8 @@ function seed() {
   db.database
     .exec(`DELETE FROM attachments; DELETE FROM sales; DELETE FROM payments; DELETE FROM audit_events; DELETE FROM file_deletion_jobs;
     INSERT INTO sales VALUES ('sale1','store1','completed',1500000), ('sale2','store2','completed',10);
-    INSERT INTO payments VALUES ('p1','sale1',1500000);
-    INSERT INTO attachments VALUES
+    INSERT INTO payments VALUES ('p1','store1','sale1','pix',1500000);
+    INSERT INTO attachments(id,store_id,sale_id,kind,r2_key,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_by,receipt_amount_confirmed_at) VALUES
       ('r1','store1','sale1','receipt','private/r1','receipt1.png','image/png',4,500000,'ocr',NULL,1),
       ('r2','store1','sale1','receipt','private/r2','receipt2.png','image/png',4,1000000,'manual','owner1',2),
       ('photo','store1','sale1','item_photo','private/photo','photo.png','image/png',4,NULL,NULL,NULL,NULL),

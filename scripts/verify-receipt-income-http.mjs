@@ -33,7 +33,7 @@ const readingGate = new Promise((resolve) => {
   releaseReading = resolve;
 });
 const ocr = createServer(async (request, response) => {
-  for await (const chunk of request) {
+  for await (const _chunk of request) {
     /* consume the uploaded test file */
   }
   await readingGate;

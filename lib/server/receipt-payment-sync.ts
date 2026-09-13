@@ -142,6 +142,27 @@ export async function readReceiptPaymentSync(
   };
 }
 
+export function publicReceiptPaymentState(
+  state: NonNullable<Awaited<ReturnType<typeof readReceiptPaymentSync>>>,
+) {
+  const receiptTotal = state.sale.effectiveReceiptTotalCents;
+  return {
+    status: state.request?.status ?? 'manual',
+    requestId: state.request?.requestId ?? null,
+    updatedAt: state.request?.updatedAt ?? null,
+    saleStatus: state.sale.status,
+    receivedTotalCents: receiptTotal + state.cashCents,
+    productsTotalCents: state.sale.productsTotalCents,
+    receiptTotalCents: receiptTotal,
+    pixCents: state.pixCents,
+    cashCents: state.cashCents,
+    complete: state.complete,
+    payments: state.payments,
+    expectedPayments: state.sale.paymentsJson,
+    expectedReceipts: state.sale.receiptsJson,
+  };
+}
+
 // Explicit first Pix: a receipt identifies the amount, never the destination account.
 // The caller handles operation replay before invoking this atomic creation path.
 export async function registerFirstReceiptPix(

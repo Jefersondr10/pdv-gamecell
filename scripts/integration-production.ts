@@ -256,7 +256,11 @@ await call(`/api/products/${productId}`, {
   method: 'PATCH',
   cookie: ownerCookie,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ active: true, defaultPriceCents: 500_000 }),
+  body: JSON.stringify({
+    active: true,
+    defaultPriceCents: 500_000,
+    expected: { defaultPriceCents: 500_000 },
+  }),
 });
 const imeiAsSerialForm = new FormData();
 imeiAsSerialForm.set(
@@ -321,14 +325,21 @@ const renameCollision = await call(`/api/clients/${secondClientId}`, {
   cookie: ownerCookie,
   expected: 409,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ name: 'cliente integração' }),
+  body: JSON.stringify({
+    name: 'cliente integração',
+    expected: { name: 'Conect teste' },
+  }),
 });
 assert.equal(renameCollision.body.code, 'CLIENT_ALREADY_EXISTS');
 await call(`/api/clients/${clientId}`, {
   method: 'PATCH',
   cookie: ownerCookie,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-  body: JSON.stringify({ phone: '(11) 99999-0000', active: false }),
+  body: JSON.stringify({
+    phone: '(11) 99999-0000',
+    active: false,
+    expected: { phone: null },
+  }),
 });
 await call('/api/clients', {
   method: 'POST',
@@ -2307,6 +2318,12 @@ await call(`/api/products/${String(existing15.body.id)}`, {
     memory: iphone15.memory,
     defaultPriceCents: 345678,
     active: false,
+    expected: {
+      model: iphone15.model,
+      color: iphone15.color,
+      memory: iphone15.memory,
+      defaultPriceCents: 345678,
+    },
   }),
 });
 const stockBeforeCatalog = await call('/api/inventory?view=summary', {
@@ -2999,6 +3016,7 @@ const saveProductBody = productEditorPayload(
   { ...editedProduct, price: '5.012,34' },
   '5901234123457',
   'Brasil',
+  editedProduct,
 );
 await call(`/api/products/${productId}`, {
   ...editingHeaders,
@@ -3050,6 +3068,7 @@ const badCodeSave = await call(`/api/products/${productId}`, {
   body: JSON.stringify({
     defaultPriceCents: 999,
     addCode: { code: '1234567890123' },
+    expected: { defaultPriceCents: 501234 },
   }),
 });
 assert.equal(badCodeSave.body.code, 'INVALID_CODE');
@@ -3078,6 +3097,7 @@ await call(`/api/products/${productId}`, {
   body: JSON.stringify({
     defaultPriceCents: 999,
     addCode: { code: '4006381333931' },
+    expected: { defaultPriceCents: 501234 },
   }),
 });
 assert.equal(
@@ -3268,6 +3288,7 @@ const codeLimit = await call(
     body: JSON.stringify({
       defaultPriceCents: 98765,
       addCode: { code: syntheticGtin(20), market: 'Brasil' },
+      expected: { defaultPriceCents: 12345 },
     }),
   },
 );

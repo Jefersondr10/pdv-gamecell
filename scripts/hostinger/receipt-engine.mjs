@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   extractReceiptDocument,
+  needsReceiptOcrEnrichment,
   preferReceiptReading,
 } from '../../lib/receipt-document.ts';
 
@@ -106,10 +107,7 @@ createServer(async (request, response) => {
     await writeFile(input, Buffer.concat(chunks), { mode: 0o600 });
     let suggestion = null;
     const readings = [];
-    const needsDetails = () =>
-      !suggestion?.details?.automaticEligible ||
-      !suggestion?.details?.recipientBank ||
-      !suggestion?.details?.recipientDocument;
+    const needsDetails = () => needsReceiptOcrEnrichment(suggestion);
     const remember = (text) => {
       readings.push(extractReceiptDocument(text));
       suggestion = preferReceiptReading(readings);

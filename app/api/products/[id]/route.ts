@@ -13,6 +13,11 @@ import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import { canonicalProductVariationKey } from '@/lib/server/system-catalog-sync';
 import { classifyCommercialCode, normalizeCommercialCode } from '@/lib/gtin';
+import {
+  catalogChanged,
+  catalogEditGuard,
+  PRODUCT_EDIT_COLUMNS,
+} from '@/lib/server/catalog-concurrency';
 
 type SavedProductCode = {
   id: string;
@@ -162,6 +167,18 @@ export async function PATCH(
         );
       }
     }
+    const guard = catalogEditGuard(
+      body.expected,
+      changed,
+      PRODUCT_EDIT_COLUMNS,
+      'products',
+    );
+    const insertGuard = catalogEditGuard(
+      body.expected,
+      changed,
+      PRODUCT_EDIT_COLUMNS,
+      'p',
+    );
     updates.push('updated_at = ?');
     bindings.push(now, id, session.storeId);
     let savedCode: {
@@ -180,7 +197,7 @@ export async function PATCH(
                   `INSERT INTO product_codes (id, store_id, product_id, code, kind, market, created_at)
            SELECT ?, p.store_id, p.id, ?, ?, ?, ? FROM products p
            WHERE p.id = ? AND p.store_id = ? AND
-             (SELECT COUNT(*) FROM product_codes pc WHERE pc.product_id = p.id AND pc.store_id = p.store_id) < 20
+             (SELECT COUNT(*) FROM product_codes pc WHERE pc.product_id = p.id AND pc.store_id = p.store_id) < 20${insertGuard.sql}
            ON CONFLICT(store_id, code) DO NOTHING`,
                 )
                 .bind(
@@ -191,16 +208,18 @@ export async function PATCH(
                   now,
                   id,
                   session.storeId,
+                  ...insertGuard.bindings,
                 ),
             ]
           : []),
         db
           .prepare(
             `UPDATE products SET ${updates.join(', ')}
-             WHERE id = ? AND store_id = ?${addedCode ? ' AND EXISTS (SELECT 1 FROM product_codes WHERE code = ? AND product_id = ? AND store_id = ?)' : ''}`,
+             WHERE id = ? AND store_id = ?${guard.sql}${addedCode ? ' AND EXISTS (SELECT 1 FROM product_codes WHERE code = ? AND product_id = ? AND store_id = ?)' : ''}`,
           )
           .bind(
             ...bindings,
+            ...guard.bindings,
             ...(addedCode ? [addedCode.code, id, session.storeId] : []),
           ),
         db
@@ -227,6 +246,18 @@ export async function PATCH(
             ]
           : []),
       ]);
+      if (
+        Number(results[addedCode ? 1 : 0]?.meta?.changes ?? 0) !== 1 &&
+        guard.sql
+      ) {
+        const matches = await db
+          .prepare(
+            `SELECT id FROM products WHERE id = ? AND store_id = ?${guard.sql}`,
+          )
+          .bind(id, session.storeId, ...guard.bindings)
+          .first();
+        if (!matches) throw catalogChanged();
+      }
       if (addedCode) {
         savedCode =
           (results[3]?.results?.[0] as SavedProductCode | undefined) ?? null;

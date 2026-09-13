@@ -2,6 +2,7 @@ import { stopReceiptPaymentSync } from './receipt-payment-sync.ts';
 import { can, type PermissionSubject } from '../permissions.ts';
 import { HttpError } from './http.ts';
 import { cleanDeletedFile } from './file-deletion.ts';
+import { cleanupResolvedReceiptReviews } from './receipt-auto-payment.ts';
 
 type DeleteInput = {
   operationId: string;
@@ -148,6 +149,7 @@ export async function deleteSaleReceipt(
         .prepare(`DELETE FROM attachments WHERE id = ? AND sale_id = ? AND store_id = ? AND kind = 'receipt'
         AND EXISTS (SELECT 1 FROM audit_events WHERE id = ? AND store_id = ?)`)
         .bind(receiptId, saleId, storeId, operationId, storeId),
+      cleanupResolvedReceiptReviews(db, storeId, saleId, operationId),
     ]);
   } catch (error) {
     // Includes a duplicate retry and a lost response after transaction commit.

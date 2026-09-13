@@ -1,7 +1,7 @@
 import { extractReceiptAmount } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 1;
+export const RECEIPT_READER_REVISION = 2;
 
 export type ReceiptDocument = {
   version: 1;
@@ -48,6 +48,16 @@ export function extractReceiptDocument(text: string) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
+  const transferDates = [
+    ...text.matchAll(
+      /^\s*transferid[oa]\s+em\s+(\d{1,2}\/\d{1,2}\/\d{4}\s+(?:[aà]s\s+)?\d{1,2}:\d{2}(?::\d{2})?)\b/gim,
+    ),
+  ].map((match) => match[1].replace(/\s+/g, ' ').trim());
+  const pixDispatchReceipt =
+    /\bcomprovante\s+de\s+envio(?:\s+de)?\s+pix\b/.test(
+      normalized.slice(0, 500),
+    ) &&
+    transferDates.length === 1;
   const originAccount = lines.findIndex((line) =>
     /^conta\s+de\s+origem$/i.test(line),
   );
@@ -85,8 +95,32 @@ export function extractReceiptDocument(text: string) {
           timeline.replace(/^pix\s*em\s+andamento\b/, ''),
         )
       : normalized;
+  const idLabel = lines.findIndex((line) =>
+    /(?:id|identificador)\s+(?:de\s+|da\s+)?transa[cç][aã]o(?:\s+pix)?|end\s*to\s*end|e2e/i.test(
+      line,
+    ),
+  );
+  const ids = idLabel < 0 ? [] : (text.match(/\bE[A-Za-z0-9]{31}\b/g) ?? []);
+  const singleTransaction = new Set(ids.map((id) => id.toUpperCase())).size === 1;
+  const receiptHeading = normalized.slice(0, 700);
+  // Some banks call a completed transfer "pagamento", "transação" or
+  // "operação" instead of "Pix realizado". Accept those layouts only when
+  // the document also contains one labelled Pix/E2E identifier; the heading
+  // alone is not proof that money moved.
+  const labelledCompletedReceipt =
+    singleTransaction &&
+    /\b(?:comprovante|confirmacao)\b/.test(receiptHeading) &&
+    /\bpix\b/.test(normalized) &&
+    (/\bcomprovante\s+(?:de|do)\s+pagamento(?:\s+pix)?\b/.test(
+      receiptHeading,
+    ) ||
+      /\bcomprovante\s+de\s+transacao\b/.test(receiptHeading) ||
+      /\bconfirmacao\s+de\s+operacao\b/.test(receiptHeading)) &&
+    /\b(?:pix|pagamento|transferencia|transacao|operacao)\b[\s\S]{0,160}\b(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|transferid[oa]|confirmad[oa])\b/.test(
+      normalized,
+    );
   const rejected =
-    /\b(cancelad[oa]|estornad[oa]|recusad[oa]|negad[oa])\b|\bnao\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|autorizad[oa]|aprovad[oa])\b/.test(
+    /\b(cancelad[oa]|estornad[oa]|recusad[oa]|negad[oa])\b|\bnao\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|transferid[oa]|autorizad[oa]|aprovad[oa])\b/.test(
       normalized,
     );
   const pending =
@@ -104,7 +138,9 @@ export function extractReceiptDocument(text: string) {
             ? 'completed'
             : c6Timeline
               ? 'unknown'
-              : (/comprovante\s+(?:de|da)\s+transferencia\b/.test(
+              : pixDispatchReceipt ||
+                  labelledCompletedReceipt ||
+                  (/comprovante\s+(?:de|da)\s+transferencia\b/.test(
                     normalized.slice(0, 500),
                   ) &&
                     /\bpix\b/.test(normalized)) ||
@@ -114,34 +150,47 @@ export function extractReceiptDocument(text: string) {
                 ? 'completed'
                 : 'unknown';
   const participant = (block: string[]) => {
-    const name =
-      block
-        .find((line) => /^nome\s*:/i.test(line))
-        ?.replace(/^nome\s*:\s*/i, '') ??
-      block.find(
-        (line) =>
-          !/^(cpf|cnpj|banco|institui|ag[eê]ncia|conta|chave|tipo|valor|data|id |n[º°.]|pix)/i.test(
-            line,
-          ),
-      );
+    const fieldLabel =
+      /^(?:nome|cpf(?:\s*\/\s*cnpj)?|cnpj|banco|institui[cç][aã]o(?:\s+financeira)?|ag[eê]ncia|conta|chave|tipo|valor|data|hora|id|identificador|autentica[cç][aã]o)(?:\s*:|\s*$)/i;
+    const labelledValue = (label: RegExp) => {
+      const index = block.findIndex((line) => label.test(line));
+      if (index < 0) return null;
+      const inline = block[index].replace(label, '').trim();
+      if (inline) return inline;
+      const next = block[index + 1];
+      return next && !fieldLabel.test(next) ? next : null;
+    };
+    const nameLabel = /^nome\s*(?::\s*|$)/i;
+    const name = block.some((line) => nameLabel.test(line))
+      ? labelledValue(nameLabel)
+      : block.find(
+          (line, index) =>
+            !fieldLabel.test(line) &&
+            !(
+              index > 0 &&
+              fieldLabel.test(block[index - 1]) &&
+              !/:\s*\S/.test(block[index - 1])
+            ) &&
+            !/^(cpf|cnpj|banco|institui|ag[eê]ncia|conta|chave|tipo|valor|data|id |n[º°.]|pix)/i.test(
+              line,
+            ),
+        );
     const bank =
-      block
-        .find((line) =>
-          /^(banco|institui[cç][aã]o(?:\s+financeira)?)\s*:/i.test(line),
-        )
-        ?.replace(/^[^:]+:\s*/, '') ??
+      labelledValue(
+        /^(?:banco|institui[cç][aã]o(?:\s+financeira)?)\s*(?::\s*|$)/i,
+      ) ??
       block.find(
         (line) =>
           /\b(banco|pagamento|mercado pago|nubank|itau|bradesco|santander|inter|caixa|picpay|sicredi|sicoob)\b/i.test(
             line,
           ) &&
           line !== name &&
+          !fieldLabel.test(line) &&
           !/^(cpf|cnpj|chave)/i.test(line),
       );
-    const doc = block
-      .find((line) => /^(?:cpf(?:\/cnpj)?|cnpj)\s*:/i.test(line))
-      ?.replace(/^[^:]+:/, '')
-      .replace(/\D/g, '');
+    const doc = labelledValue(
+      /^(?:cpf(?:\s*\/\s*cnpj)?|cnpj)\s*(?::\s*|$)/i,
+    )?.replace(/\D/g, '');
     return {
       name: cleanParticipantName(name),
       bank: bank?.slice(0, 150) || null,
@@ -219,16 +268,11 @@ export function extractReceiptDocument(text: string) {
       recipient = participant(block.slice(ends[0] + 1, ends[1] + 1));
     }
   }
-  const idLabel = lines.findIndex((line) =>
-    /(?:id|identificador)\s+(?:de\s+|da\s+)?transa[cç][aã]o(?:\s+pix)?|end\s*to\s*end|e2e/i.test(
-      line,
-    ),
-  );
-  const ids = idLabel < 0 ? [] : (text.match(/\bE[A-Za-z0-9]{31}\b/g) ?? []);
-  const dates =
-    text.match(
-      /\b\d{1,2}[/-](?:\d{1,2}|[a-zç]+)[/-]\d{4}\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
-    ) ?? [];
+  const dates = transferDates.length
+    ? transferDates
+    : (text.match(
+        /\b\d{1,2}[/-](?:\d{1,2}|[a-zç]+)[/-]\d{4}\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
+      ) ?? []);
   const participantStarts = [paired, from, to].filter((i) => i >= 0);
   const heading = participantStarts.length
     ? lines.slice(0, Math.min(...participantStarts)).join('\n')
@@ -400,4 +444,12 @@ export function preferReceiptReading(
         preferred.details.automaticEligible && !blocked && !ambiguous,
     },
   };
+}
+
+export function needsReceiptOcrEnrichment(
+  reading: ReturnType<typeof extractReceiptDocument> | null | undefined,
+) {
+  // Banks commonly mask CPF/CNPJ. Once the transaction and recipient bank are
+  // identified, another OCR pass adds no required evidence and can corrupt IDs.
+  return !reading?.details.automaticEligible || !reading.details.recipientBank;
 }

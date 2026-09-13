@@ -66,6 +66,7 @@ type StatusSale = Pick<
     | 'receiptOcrStatus'
     | 'receiptReviewReason'
     | 'receiptDetails'
+    | 'receiptPaymentId'
   >[];
 };
 export function saleIssues(sale: StatusSale) {
@@ -79,7 +80,9 @@ export function saleIssues(sale: StatusSale) {
     receipt.receiptDetails &&
     (receipt.receiptDetails.blocked ||
       receipt.receiptDetails.ambiguous ||
-      receipt.receiptDetails.state !== 'completed')
+      receipt.receiptDetails.state !== 'completed' ||
+      (!receipt.receiptDetails.automaticEligible &&
+        !receipt.receiptPaymentId))
       ? true
       : receipt.receiptAmountCents !== null
         ? !Number.isSafeInteger(receipt.receiptAmountCents) ||
@@ -98,6 +101,7 @@ export function saleIssues(sale: StatusSale) {
     review:
       failed ||
       reconciliation.status === 'divergent' ||
+      Boolean(reconciliation.reviewReceiptCount) ||
       sale.receipts.some((receipt) => Boolean(receipt.receiptReviewReason)),
     reading:
       !failed &&

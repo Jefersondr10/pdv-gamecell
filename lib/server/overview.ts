@@ -9,6 +9,9 @@ import {
   SALE_RECEIVED_TOTAL_SQL,
   acceptedReceiptSql,
   duplicateReceiptSql,
+  effectiveReceiptReviewReasonSql,
+  invalidReceiptDocumentSql,
+  untrustedReceiptDocumentSql,
   validReceiptAmountSql,
 } from './sale-status-sql.ts';
 import {
@@ -86,7 +89,7 @@ export async function readOverview(
     SELECT a.sale_id, COUNT(*) AS receiptCount,
       COALESCE(SUM(CASE WHEN ${acceptedReceiptSql('a')} THEN a.receipt_amount_cents ELSE 0 END), 0) AS receiptCents,
       SUM(CASE WHEN ${validReceiptAmountSql('a')} THEN 0 ELSE 1 END) AS pendingCount,
-      SUM(CASE WHEN a.receipt_review_reason IS NOT NULL OR ${duplicateReceiptSql('a')} OR (a.receipt_amount_cents IS NOT NULL AND NOT ${acceptedReceiptSql('a')}) THEN 1 ELSE 0 END) AS receiptReviewCount
+      SUM(CASE WHEN ${effectiveReceiptReviewReasonSql('a')} IS NOT NULL OR ${invalidReceiptDocumentSql('a')} OR ${untrustedReceiptDocumentSql('a')} OR ${duplicateReceiptSql('a')} OR (a.receipt_amount_cents IS NOT NULL AND NOT ${acceptedReceiptSql('a')}) THEN 1 ELSE 0 END) AS receiptReviewCount
     FROM attachments a JOIN filtered s ON s.id = a.sale_id AND s.store_id = a.store_id
     WHERE a.kind = 'receipt' GROUP BY a.sale_id
   ), cash AS (
@@ -122,7 +125,7 @@ export async function readOverview(
     a.id AS attachmentId, a.file_name AS fileName,
     a.mime_type AS mimeType, a.size_bytes AS sizeBytes, a.receipt_amount_cents AS amountCents,
     a.receipt_amount_source AS amountSource, a.receipt_amount_confirmed_at AS confirmedAt,
-    j.status AS processingStatus, a.receipt_review_reason AS receiptReviewReason
+    j.status AS processingStatus, CASE WHEN ${duplicateReceiptSql('a')} THEN 'Transação repetida em outro comprovante. Confira os anexos.' ELSE COALESCE(${effectiveReceiptReviewReasonSql('a')}, CASE WHEN ${invalidReceiptDocumentSql('a')} THEN 'Confira o documento: pagamento não confirmado ou leitura ambígua.' WHEN ${untrustedReceiptDocumentSql('a')} THEN 'A leitura não contém identificação suficiente para conciliação automática. Releia o comprovante.' END) END AS receiptReviewReason
   FROM summary LEFT JOIN page ON 1 = 1
   LEFT JOIN attachments a ON a.sale_id = page.id AND a.store_id = page.storeId AND a.kind = 'receipt'
   LEFT JOIN receipt_ocr_jobs j ON j.attachment_id = a.id

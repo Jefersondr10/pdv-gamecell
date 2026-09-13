@@ -371,7 +371,7 @@ export function SellWizard({
     if (step === 'items')
       return 'Bipe outro SN ou siga com o pagamento da venda inteira.';
     if (step === 'payments')
-      return 'Adicione somente as formas usadas nesta venda.';
+      return 'Informe somente o dinheiro recebido. O Pix virá do comprovante.';
     if (step === 'receipt') return 'Anexe o comprovante ou pule esta etapa.';
     if (step === 'review')
       return 'Confira a venda completa antes de finalizar.';
@@ -860,9 +860,7 @@ export function SellWizard({
           onAddAnother={scanAnotherItem}
           onNext={() => {
             setStep('payments');
-            setAnnouncement(
-              'Etapa 6. Adicione as formas de pagamento da venda inteira.',
-            );
+            setAnnouncement('Etapa 6. Informe o dinheiro recebido, se houver.');
           }}
           onRemove={removeItem}
           total={total}
@@ -997,9 +995,11 @@ export function SellWizard({
             setStep('done');
             setSaving(false);
             setAnnouncement(
-              payments.length === 0
-                ? 'Venda concluída sem pagamento informado.'
-                : `Venda concluída com recebimento de ${formatMoney(paid)}.`,
+              receiptFiles.length > 0
+                ? 'Venda concluída. O comprovante já está em leitura automática.'
+                : payments.length === 0
+                  ? 'Venda concluída sem pagamento informado.'
+                  : `Venda concluída com recebimento de ${formatMoney(paid)}.`,
             );
           }}
           paid={paid}
@@ -1020,6 +1020,7 @@ export function SellWizard({
           customer={customer}
           onReset={reset}
           productsTotal={total}
+          receiptCount={receiptFiles.length}
           receivedTotal={paid}
         />
       )}
@@ -2015,6 +2016,12 @@ function SaleReview({
     receiptValues,
     Math.max(0, total - paid),
   );
+  const receiptReading =
+    receiptCount > 0 &&
+    paid <= total &&
+    reconciliation.status === 'pending' &&
+    !reconciliation.reviewReceiptCount;
+  const receivedAfterReading = paid + reconciliation.confirmedTotalCents;
   return (
     <Card className={STAGE_CARD_CLASS}>
       <CardContent className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain sm:p-6">
@@ -2083,26 +2090,47 @@ function SaleReview({
               icon={Smartphone}
             />
             <SummaryTile
-              label="Total pago"
-              value={formatMoney(paid)}
+              label="Dinheiro recebido"
+              value={paid > 0 ? formatMoney(paid) : 'Não informado'}
               icon={WalletCards}
             />
           </div>
 
-          {paid !== total && (
+          {receiptReading && (
+            <output
+              className="mt-4 block rounded-xl border border-sky-500/35 bg-sky-50 px-3 py-2 text-sm text-sky-950 dark:bg-sky-500/10 dark:text-sky-100"
+            >
+              <p className="font-bold">Comprovante em leitura</p>
+              <p className="mt-0.5 text-xs">
+                O Pix será identificado pelo comprovante depois que a venda for
+                salva. O valor recebido e o status serão atualizados
+                automaticamente.
+              </p>
+            </output>
+          )}
+
+          {!receiptReading && receivedAfterReading !== total && (
             <div
               className="mt-4 rounded-xl border border-amber-500/35 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-500/10 dark:text-amber-100"
               role="alert"
             >
               <p className="font-bold">
-                {paid < total
-                  ? `Falta receber ${formatMoney(total - paid)}`
-                  : `Recebido a mais ${formatMoney(paid - total)}`}
+                {receivedAfterReading < total
+                  ? `Falta receber ${formatMoney(total - receivedAfterReading)}`
+                  : `Recebido a mais ${formatMoney(receivedAfterReading - total)}`}
               </p>
               <p className="mt-0.5 text-xs">
-                Valor da venda: {formatMoney(total)} · Total pago:{' '}
-                {formatMoney(paid)}. A venda será salva com este aviso e poderá
-                receber pagamentos depois.
+                Valor da venda: {formatMoney(total)}
+                {paid > 0 && <> · Dinheiro recebido: {formatMoney(paid)}</>}
+                {reconciliation.confirmedTotalCents > 0 && (
+                  <>
+                    {' '}
+                    · Pix identificado:{' '}
+                    {formatMoney(reconciliation.confirmedTotalCents)}
+                  </>
+                )}
+                . A venda será salva com este aviso e poderá receber o
+                comprovante depois.
               </p>
             </div>
           )}
@@ -2152,18 +2180,14 @@ function SaleReview({
           </section>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div
-              className={`rounded-2xl p-4 text-sm ${paid !== total ? 'bg-amber-500/10' : 'bg-success/10'}`}
-            >
+            <div className="rounded-2xl bg-success/10 p-4 text-sm">
               <div className="flex items-center justify-between gap-3">
-                <span
-                  className={`font-semibold ${paid !== total ? 'text-amber-900 dark:text-amber-100' : 'text-success'}`}
-                >
+                <span className="font-semibold text-success">
                   {payments.length === 0
-                    ? 'Pagamento pendente'
-                    : `${payments.length} ${payments.length === 1 ? 'pagamento' : 'pagamentos'}`}
+                    ? 'Nenhum dinheiro informado'
+                    : 'Recebido em dinheiro'}
                 </span>
-                <strong>{formatMoney(paid)}</strong>
+                {payments.length > 0 && <strong>{formatMoney(paid)}</strong>}
               </div>
             </div>
             <div className="rounded-2xl bg-muted p-4 text-sm">
@@ -2191,7 +2215,9 @@ function SaleReview({
                     ? `Comprovantes conferem com o ${receiptTargetLabel(paid)}`
                     : reconciliation.status === 'divergent'
                       ? `${(reconciliation.differenceCents ?? 0) < 0 ? 'Falta' : 'Sobra'} ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} nos comprovantes · verificar venda`
-                      : 'Leitura em andamento · você já pode salvar a venda'}
+                      : reconciliation.reviewReceiptCount
+                        ? 'O comprovante precisará ser verificado'
+                        : 'Leitura em andamento · você já pode salvar a venda'}
                 </p>
               )}
             </div>
@@ -2298,11 +2324,13 @@ function ProductDetailVisual({
 function SaleCompletion({
   customer,
   productsTotal,
+  receiptCount,
   receivedTotal,
   onReset,
 }: {
   customer: string;
   productsTotal: number;
+  receiptCount: number;
   receivedTotal: number;
   onReset: () => void;
 }) {
@@ -2319,15 +2347,17 @@ function SaleCompletion({
           Cliente {customer} · produtos de {formatMoney(productsTotal)}.
         </p>
         <p
-          className={`mt-3 rounded-xl px-4 py-3 text-sm font-semibold ${receivedTotal !== productsTotal || receivedTotal === 0 ? 'bg-amber-500/10 text-amber-900 dark:text-amber-100' : 'bg-success/10 text-success'}`}
+          className={`mt-3 rounded-xl px-4 py-3 text-sm font-semibold ${receiptCount > 0 ? 'bg-sky-500/10 text-sky-900 dark:text-sky-100' : receivedTotal !== productsTotal || receivedTotal === 0 ? 'bg-amber-500/10 text-amber-900 dark:text-amber-100' : 'bg-success/10 text-success'}`}
         >
-          {receivedTotal === 0
-            ? 'A venda foi salva com pagamento pendente e o estoque foi atualizado.'
-            : receivedTotal < productsTotal
-              ? `Recebido ${formatMoney(receivedTotal)}. Falta receber ${formatMoney(productsTotal - receivedTotal)}; anexe o comprovante depois em Vendas. O estoque foi atualizado.`
-              : receivedTotal > productsTotal
-                ? `Recebido ${formatMoney(receivedTotal)}. Confira o valor excedente de ${formatMoney(receivedTotal - productsTotal)}. O estoque foi atualizado.`
-                : `Recebimento de ${formatMoney(receivedTotal)} registrado e estoque atualizado.`}
+          {receiptCount > 0
+            ? `${receiptCount} ${receiptCount === 1 ? 'comprovante enviado' : 'comprovantes enviados'} para leitura automática. O Pix, o valor recebido e o status serão atualizados assim que a leitura terminar. O estoque foi atualizado.`
+            : receivedTotal === 0
+              ? 'A venda foi salva com pagamento pendente e o estoque foi atualizado.'
+              : receivedTotal < productsTotal
+                ? `Recebido ${formatMoney(receivedTotal)}. Falta receber ${formatMoney(productsTotal - receivedTotal)}; anexe o comprovante depois em Vendas. O estoque foi atualizado.`
+                : receivedTotal > productsTotal
+                  ? `Recebido ${formatMoney(receivedTotal)}. Confira o valor excedente de ${formatMoney(receivedTotal - productsTotal)}. O estoque foi atualizado.`
+                  : `Recebimento de ${formatMoney(receivedTotal)} registrado e estoque atualizado.`}
         </p>
         <Button className="mt-5 h-12 rounded-xl px-6" onClick={onReset}>
           <RotateCcw /> Fazer nova venda

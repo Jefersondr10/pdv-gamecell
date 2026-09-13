@@ -11,30 +11,9 @@ import {
   timingSafeEqual,
   toBase64Url,
 } from '@/lib/server/security';
+import { MIGRATION_TABLES } from '@/lib/server/database-lifecycle';
 
 export const dynamic = 'force-dynamic';
-const tables = [
-  'stores',
-  'system_catalog_syncs',
-  'users',
-  'sessions',
-  'account_recovery_codes',
-  'login_attempts',
-  'upload_reservations',
-  'products',
-  'product_codes',
-  'clients',
-  'pix_accounts',
-  'order_statuses',
-  'entries',
-  'sales',
-  'inventory_units',
-  'sale_items',
-  'payments',
-  'attachments',
-  'guide_reads',
-  'audit_events',
-];
 const secretKeys = [
   'APP_ORIGIN',
   'GOOGLE_CLIENT_ID',
@@ -97,12 +76,12 @@ export async function POST(request: Request) {
     if (body.action === 'manifest') {
       const schema = await db
         .prepare(`SELECT type, name, tbl_name AS tableName, sql FROM sqlite_schema
-        WHERE sql IS NOT NULL AND type IN ('table', 'index') AND tbl_name IN (${tables.map(() => '?').join(',')})
+        WHERE sql IS NOT NULL AND type IN ('table', 'index') AND tbl_name IN (${MIGRATION_TABLES.map(() => '?').join(',')})
         ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name`)
-        .bind(...tables)
+        .bind(...MIGRATION_TABLES)
         .all();
       const counts = await db.batch(
-        tables.map((name) =>
+        MIGRATION_TABLES.map((name) =>
           db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`),
         ),
       );
@@ -111,7 +90,7 @@ export async function POST(request: Request) {
         capturedAt: Date.now(),
         readOnly: environment.MIGRATION_READ_ONLY === '1',
         schema: schema.results,
-        tables: tables.map((name, index) => ({
+        tables: MIGRATION_TABLES.map((name, index) => ({
           name,
           count: (counts[index].results[0] as { count: number }).count,
         })),
@@ -123,7 +102,9 @@ export async function POST(request: Request) {
     if (
       body.action === 'table' &&
       typeof body.table === 'string' &&
-      tables.includes(body.table)
+      MIGRATION_TABLES.includes(
+        body.table as (typeof MIGRATION_TABLES)[number],
+      )
     ) {
       const offset = integerField(body.offset, 'Página', {
         min: 0,

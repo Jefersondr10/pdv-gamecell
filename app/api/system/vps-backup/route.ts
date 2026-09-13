@@ -2,38 +2,42 @@ import { apiError, HttpError, json } from '@/lib/server/http';
 import { runtime } from '@/lib/server/runtime';
 import { timingSafeEqual } from '@/lib/server/security';
 import { BACKUP_LATE_MS } from '@/lib/backup-status';
+import {
+  RECORD_VPS_BACKUP_HEALTH_SQL,
+  validBackupHealthTime,
+  VPS_BACKUP_HEALTH_MARKER,
+} from '@/lib/server/backup-health';
 
 export const dynamic = 'force-dynamic';
 
 async function backupHealthTime() {
   try {
+    const durable = await runtime()
+      .DB.prepare(
+        'SELECT updated_at AS acceptedAt FROM login_attempts WHERE key_hash=?',
+      )
+      .bind(VPS_BACKUP_HEALTH_MARKER)
+      .first<{ acceptedAt: number }>();
+    const durableTime = validBackupHealthTime(durable?.acceptedAt);
+    if (durableTime !== null) return durableTime;
+    // Compatibility for the first request after upgrading from the former R2
+    // marker. New writes use the atomic database marker below.
     const object = await runtime().FILES.get('vps-backup-health/latest.json');
     const value = object
       ? (await object.json<{ acceptedAt?: unknown }>()).acceptedAt
       : null;
-    return typeof value === 'number' &&
-      Number.isFinite(value) &&
-      value > 0 &&
-      value <= Date.now() + 60_000
-      ? value
-      : null;
+    return validBackupHealthTime(value);
   } catch {
     return null;
   }
 }
 
 async function recordSnapshotTime(acceptedAt: number) {
-  const previous = await backupHealthTime();
-  if (
-    Number.isFinite(acceptedAt) &&
-    acceptedAt > 0 &&
-    acceptedAt > (previous ?? 0)
-  )
-    await runtime().FILES.put(
-      'vps-backup-health/latest.json',
-      JSON.stringify({ acceptedAt, version: 1 }),
-      { httpMetadata: { contentType: 'application/json' } },
-    );
+  if (validBackupHealthTime(acceptedAt) === null) return;
+  await runtime()
+    .DB.prepare(RECORD_VPS_BACKUP_HEALTH_SQL)
+    .bind(VPS_BACKUP_HEALTH_MARKER, acceptedAt)
+    .run();
 }
 
 function authenticate(request: Request) {

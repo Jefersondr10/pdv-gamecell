@@ -504,7 +504,14 @@ export function SalesProductionView({
   }, [grouping, loadAnalytics, loadSales]);
 
   useEffect(() => {
-    if (!openSaleId || openedTargetRef.current === openSaleId) return;
+    if (!openSaleId) {
+      // The same inventory unit can legitimately open the same sale again
+      // after its dialog was closed. Only suppress a duplicate while the
+      // current navigation request is still active.
+      openedTargetRef.current = '';
+      return;
+    }
+    if (openedTargetRef.current === openSaleId) return;
     if (listLoading || listError || listDataKeyRef.current !== filterKey) {
       return;
     }
@@ -1179,6 +1186,7 @@ export function SalesProductionView({
         sale={editSale}
       />
       <CancelDialog
+        key={cancelSale?.id ?? 'closed-sale-cancel'}
         data={data}
         onChanged={async () => {
           await onChanged();
@@ -1511,6 +1519,7 @@ function EditSaleDialog({
   const [itemFiles, setItemFiles] = useState<Record<string, File[]>>({});
   const [preparing, setPreparing] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const uploadInFlightRef = useRef(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const paymentMethod = paymentAmount.trim() ? 'cash' : '';
   const paymentOperationIdRef = useRef(createOperationId());
@@ -1765,7 +1774,8 @@ function EditSaleDialog({
   return (
     <Dialog
       onOpenChange={(open) => {
-        if (!open && (preparing || uploadBusy)) return;
+        if (!open && (preparing || uploadBusy || uploadInFlightRef.current))
+          return;
         onOpenChange(open);
       }}
       open={Boolean(sale)}
@@ -2304,7 +2314,7 @@ function EditSaleDialog({
                   />
                 )}
                 <ReceiptPaymentSync
-                  saleId={sale.id}
+                  state={serverReceipts.payment}
                   productsTotalCents={sale.productsTotalCents}
                   disabled={
                     preparing ||
@@ -2477,6 +2487,8 @@ function EditSaleDialog({
                       paymentMethod === '')
                   }
                   onClick={async () => {
+                    if (uploadInFlightRef.current) return;
+                    uploadInFlightRef.current = true;
                     setUploadBusy(true);
                     setError('');
                     setNotice('');
@@ -2525,7 +2537,6 @@ function EditSaleDialog({
                         ...queuedPayments,
                         ...(inlinePayment ? [inlinePayment] : []),
                       ];
-                      let latestPending = pendingPaymentCents;
                       for (const paymentDraft of paymentsToSave) {
                         const result = await requestJson<{
                           payment: SalePaymentRecord;
@@ -2549,10 +2560,6 @@ function EditSaleDialog({
                         );
                         preserveReceiptPaymentRef.current.add(
                           attachmentOperationIdRef.current,
-                        );
-                        latestPending = Math.max(
-                          0,
-                          -result.sale.receivedDifferenceCents,
                         );
                         setVisiblePayments((current) =>
                           current.some(
@@ -2697,6 +2704,7 @@ function EditSaleDialog({
                           : messageOf(caught),
                       );
                     } finally {
+                      uploadInFlightRef.current = false;
                       setUploadBusy(false);
                     }
                   }}
@@ -2843,8 +2851,16 @@ function SaleReport({
     [sale],
   );
   return (
-    <Dialog onOpenChange={onOpenChange} open={Boolean(sale)}>
-      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[92dvh] sm:max-w-4xl sm:rounded-2xl">
+    <Dialog
+      onOpenChange={(next) => {
+        if (!pdfBusy) onOpenChange(next);
+      }}
+      open={Boolean(sale)}
+    >
+      <DialogContent
+        className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[92dvh] sm:max-w-4xl sm:rounded-2xl"
+        showCloseButton={!pdfBusy}
+      >
         {sale && (
           <>
             <DialogHeader
@@ -3173,7 +3189,11 @@ function SaleReport({
                   {pdfError}
                 </p>
               )}
-              <Button onClick={() => onOpenChange(false)} variant="outline">
+              <Button
+                disabled={pdfBusy}
+                onClick={() => onOpenChange(false)}
+                variant="outline"
+              >
                 Fechar
               </Button>
               <Button
@@ -3336,7 +3356,10 @@ function SalesPeriodReport({
       }}
       open={open}
     >
-      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[92dvh] sm:max-w-5xl sm:rounded-2xl">
+      <DialogContent
+        className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 sm:h-[92dvh] sm:max-w-5xl sm:rounded-2xl"
+        showCloseButton={!pdfBusy}
+      >
         <DialogHeader
           className="shrink-0 border-b px-4 py-3 pr-12"
           data-report-controls
@@ -4006,18 +4029,28 @@ function CancelDialog({
   useEffect(() => {
     operationIdRef.current = createOperationId();
   }, [sale?.id]);
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const close = () => {
+    if (savingRef.current) return;
+    setReason('');
+    setError('');
+    onOpenChange(false);
+  };
   return (
     <Dialog
       onOpenChange={(open) => {
-        if (!open) {
-          setReason('');
-          setError('');
-        }
-        onOpenChange(open);
+        if (!open) close();
       }}
       open={Boolean(sale)}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" showCloseButton={!busy}>
         {sale && (
           <>
             <DialogHeader>
@@ -4033,6 +4066,7 @@ function CancelDialog({
               Motivo
               <Textarea
                 className="mt-1"
+                disabled={busy}
                 maxLength={500}
                 onChange={(event) => setReason(event.target.value)}
                 placeholder="Explique o cancelamento"
@@ -4045,12 +4079,14 @@ function CancelDialog({
               </p>
             )}
             <DialogFooter>
-              <Button onClick={() => onOpenChange(false)} variant="outline">
+              <Button disabled={busy} onClick={close} variant="outline">
                 Voltar
               </Button>
               <Button
                 disabled={busy || reason.trim().length < 5}
                 onClick={async () => {
+                  if (savingRef.current) return;
+                  savingRef.current = true;
                   setBusy(true);
                   setError('');
                   try {
@@ -4066,17 +4102,20 @@ function CancelDialog({
                       }),
                     });
                     await onChanged();
-                    onOpenChange(false);
-                    setReason('');
+                    if (mountedRef.current) {
+                      onOpenChange(false);
+                      setReason('');
+                    }
                   } catch (caught) {
-                    setError(messageOf(caught));
+                    if (mountedRef.current) setError(messageOf(caught));
                   } finally {
-                    setBusy(false);
+                    savingRef.current = false;
+                    if (mountedRef.current) setBusy(false);
                   }
                 }}
                 variant="destructive"
               >
-                Confirmar cancelamento
+                {busy ? 'Cancelando…' : 'Confirmar cancelamento'}
               </Button>
             </DialogFooter>
           </>

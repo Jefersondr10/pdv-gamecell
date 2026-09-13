@@ -19,6 +19,7 @@ import {
 } from '@/lib/server/rate-limit';
 import { requiredSecret, runtime } from '@/lib/server/runtime';
 import {
+  credentialLoginAttemptKey,
   hmac,
   normalizeEmail,
   normalizeStoreCode,
@@ -101,7 +102,7 @@ export async function POST(request: Request) {
     );
     const rateLimitSecret = requiredSecret('RATE_LIMIT_SECRET_V1');
     const [credentialAttemptKey, originAttemptKey] = await Promise.all([
-      hmac(`credential\u0000${storeCode}\u0000${login}`, rateLimitSecret),
+      credentialLoginAttemptKey(storeCode, login),
       hmac(`origin\u0000${forwarded}`, rateLimitSecret),
     ]);
     const attempt = await db

@@ -5,7 +5,14 @@ import { chunkReportItems } from '@/lib/report-pagination';
 import { summarizeStockByMemory } from '@/lib/stock-report-summary';
 /* oxlint-disable next/no-img-element -- authenticated attachment URLs must load directly with the session cookie */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -63,6 +70,34 @@ type StockRow = ProductRecord & {
   serials: string[];
   photos: AttachmentRecord[];
 };
+
+function StockPriceInput(props: ComponentProps<typeof Input>) {
+  const selectingOnPointerFocus = useRef(false);
+  return (
+    <Input
+      {...props}
+      type="text"
+      onPointerDown={(event) => {
+        selectingOnPointerFocus.current =
+          event.currentTarget.ownerDocument.activeElement !==
+          event.currentTarget;
+      }}
+      onFocus={(event) => event.currentTarget.select()}
+      onPointerUp={(event) => {
+        if (selectingOnPointerFocus.current) event.currentTarget.select();
+      }}
+      onClick={(event) => {
+        // First pointer focus can place the caret after focus/select on mobile.
+        // Later clicks remain available for intentional edits within the value.
+        if (selectingOnPointerFocus.current) event.currentTarget.select();
+        selectingOnPointerFocus.current = false;
+      }}
+      onBlur={() => {
+        selectingOnPointerFocus.current = false;
+      }}
+    />
+  );
+}
 
 // Stock can change on another terminal while this screen stays open.
 function useStockRefresh(refresh: () => Promise<void>) {
@@ -573,7 +608,7 @@ export function StockProductionView({
                         className="block text-xs font-semibold text-muted-foreground"
                       >
                         Preço · R$
-                        <Input
+                        <StockPriceInput
                           id={`stock-price-${row.id}`}
                           aria-label={`Preço padrão de ${row.model}, ${row.color}, ${row.memory}`}
                           className="mt-1 h-11 bg-background text-right text-base font-bold text-foreground"
@@ -1190,8 +1225,16 @@ function StockReport({
   const available = rows.reduce((sum, row) => sum + row.available, 0);
   const summary = useMemo(() => summarizeStockByMemory(rows), [rows]);
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-4xl sm:rounded-2xl sm:pb-0 sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2">
+    <Dialog
+      onOpenChange={(next) => {
+        if (!pdfBusy) onOpenChange(next);
+      }}
+      open={open}
+    >
+      <DialogContent
+        className="flex h-dvh max-h-dvh max-w-none flex-col gap-0 rounded-none p-0 pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] [&_[data-slot=dialog-close]]:top-[calc(.5rem+env(safe-area-inset-top))] sm:h-[90dvh] sm:max-w-4xl sm:rounded-2xl sm:pb-0 sm:pt-0 sm:[&_[data-slot=dialog-close]]:top-2"
+        showCloseButton={!pdfBusy}
+      >
         <DialogHeader
           className="shrink-0 border-b px-4 py-3 pr-12"
           data-report-controls
@@ -1407,7 +1450,11 @@ function StockReport({
               {pdfError}
             </p>
           )}
-          <Button onClick={() => onOpenChange(false)} variant="outline">
+          <Button
+            disabled={pdfBusy}
+            onClick={() => onOpenChange(false)}
+            variant="outline"
+          >
             Fechar
           </Button>
           {needsDetails &&

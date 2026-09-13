@@ -55,7 +55,12 @@ assert.deepEqual(today.comparison?.bindings.slice(0, 3), [
 ]);
 assert.ok(
   today.comparison?.where.some((clause) =>
-    clause.includes('received_total_cents < s.products_total_cents'),
+    [
+      "p.method='cash'",
+      "ar.kind='receipt'",
+      'ar.receipt_amount_cents',
+      '< s.products_total_cents',
+    ].every((fragment) => clause.includes(fragment)),
   ),
 );
 

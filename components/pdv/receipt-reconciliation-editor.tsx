@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -16,9 +15,7 @@ import {
   LoaderCircle,
 } from 'lucide-react';
 
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { parseMoneyInput } from '@/lib/money';
 import {
   deriveReceiptReconciliation,
   receiptTargetLabel,
@@ -35,7 +32,7 @@ import {
 type AnalysisState = {
   message: string;
   progress: number;
-  status: 'reading' | 'found' | 'missing' | 'error' | 'manual';
+  status: 'reading' | 'found' | 'missing' | 'error';
 };
 
 export function ReceiptReconciliationEditor({
@@ -127,7 +124,8 @@ export function ReceiptReconciliationEditor({
                   status: 'found',
                 }
               : {
-                  message: 'Valor não identificado. Digite abaixo.',
+                  message:
+                    'Valor não identificado. Tente outra imagem do comprovante.',
                   progress: 1,
                   status: 'missing',
                 },
@@ -139,7 +137,8 @@ export function ReceiptReconciliationEditor({
           setAnalysis((current) => ({
             ...current,
             [key]: {
-              message: 'Não foi possível ler. Digite o valor da transação.',
+              message:
+                'Não foi possível ler. Tente outra imagem do comprovante.',
               progress: 1,
               status: 'error',
             },
@@ -157,6 +156,7 @@ export function ReceiptReconciliationEditor({
 
   return (
     <section
+      aria-busy={disabled}
       className={cn(
         'w-full rounded-2xl border bg-background/90 p-3 text-left shadow-sm',
         className,
@@ -170,8 +170,8 @@ export function ReceiptReconciliationEditor({
           <h3 className="text-sm font-extrabold">Conferir comprovantes</h3>
           <p className="text-xs text-muted-foreground">
             {serverReading
-              ? 'Salve a venda normalmente. A leitura será feita no servidor após o envio, mesmo com o aplicativo fechado. Você pode corrigir o valor depois.'
-              : 'A leitura acontece neste aparelho. O valor encontrado é salvo automaticamente e pode ser corrigido.'}
+              ? 'Salve a venda normalmente. A leitura será feita no servidor após o envio, mesmo com o aplicativo fechado. Se necessário, você poderá solicitar uma nova leitura.'
+              : 'A leitura acontece neste aparelho e o valor encontrado é salvo automaticamente.'}
           </p>
         </div>
       </div>
@@ -185,12 +185,9 @@ export function ReceiptReconciliationEditor({
                   message:
                     values[index]?.source === 'ocr'
                       ? 'Valor lido. Confira antes de continuar.'
-                      : 'Valor informado manualmente.',
+                      : 'Valor anterior registrado.',
                   progress: 1,
-                  status:
-                    values[index]?.source === 'ocr'
-                      ? ('found' as const)
-                      : ('manual' as const),
+                  status: 'found' as const,
                 }
               : undefined);
           return (
@@ -201,7 +198,7 @@ export function ReceiptReconciliationEditor({
               <div className="flex min-w-0 items-center gap-2">
                 {state?.status === 'reading' ? (
                   <LoaderCircle className="size-4 shrink-0 animate-spin text-primary" />
-                ) : state?.status === 'found' || state?.status === 'manual' ? (
+                ) : state?.status === 'found' ? (
                   <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
                 ) : (
                   <AlertTriangle className="size-4 shrink-0 text-amber-600" />
@@ -224,27 +221,11 @@ export function ReceiptReconciliationEditor({
                     ? 'Pronto para enviar. Leitura automática após salvar.'
                     : 'Aguardando leitura…')}
               </p>
-              <ReceiptMoneyInput
-                disabled={disabled}
-                onChange={(amountCents) => {
-                  onValueChange(index, {
-                    amountCents,
-                    source: amountCents === null ? null : 'manual',
-                  });
-                  setAnalysis((current) => ({
-                    ...current,
-                    [fileKey(file)]: {
-                      message:
-                        amountCents === null
-                          ? 'Digite o valor da transação.'
-                          : 'Valor informado manualmente.',
-                      progress: 1,
-                      status: amountCents === null ? 'missing' : 'manual',
-                    },
-                  }));
-                }}
-                valueCents={values[index]?.amountCents ?? null}
-              />
+              {(values[index]?.amountCents ?? null) !== null && (
+                <output className="mt-2 block text-right text-sm font-extrabold text-emerald-700 dark:text-emerald-300">
+                  Valor identificado: {formatMoney(values[index]!.amountCents!)}
+                </output>
+              )}
             </div>
           );
         })}
@@ -364,17 +345,6 @@ export function SavedReceiptValueEditor({
   const readSavedReceipt = useCallback(async () => {
     if (readingReceiptRef.current === receiptIdentity) return;
 
-    const currentValue = valueRef.current;
-    if (currentValue.amountCents !== null && currentValue.source !== 'ocr') {
-      setState({
-        message:
-          'O valor manual foi preservado. Apague-o para usar a leitura automática.',
-        progress: 1,
-        status: 'manual',
-      });
-      return;
-    }
-
     readingReceiptRef.current = receiptIdentity;
     setState({
       message: 'Baixando o comprovante neste aparelho…',
@@ -394,9 +364,7 @@ export function SavedReceiptValueEditor({
       const suggestion = await readReceiptAmount(file, (progress) => {
         if (
           !mountedRef.current ||
-          receiptIdentityRef.current !== receiptIdentity ||
-          (valueRef.current.amountCents !== null &&
-            valueRef.current.source !== 'ocr')
+          receiptIdentityRef.current !== receiptIdentity
         ) {
           return;
         }
@@ -416,14 +384,10 @@ export function SavedReceiptValueEditor({
         return;
       }
 
-      const latestValue = valueRef.current;
-      if (latestValue.amountCents !== null && latestValue.source !== 'ocr') {
-        return;
-      }
-
       if (!suggestion) {
         setState({
-          message: 'Valor não identificado. Digite abaixo ou tente novamente.',
+          message:
+            'Valor não identificado. Tente novamente ou anexe outro comprovante.',
           progress: 1,
           status: 'missing',
         });
@@ -444,8 +408,7 @@ export function SavedReceiptValueEditor({
         } catch {
           if (
             mountedRef.current &&
-            receiptIdentityRef.current === receiptIdentity &&
-            valueRef.current.source !== 'manual'
+            receiptIdentityRef.current === receiptIdentity
           ) {
             setState({
               message: 'Valor encontrado. Salve as alterações para confirmar.',
@@ -459,8 +422,7 @@ export function SavedReceiptValueEditor({
 
       if (
         !mountedRef.current ||
-        receiptIdentityRef.current !== receiptIdentity ||
-        valueRef.current.source === 'manual'
+        receiptIdentityRef.current !== receiptIdentity
       ) {
         return;
       }
@@ -474,14 +436,13 @@ export function SavedReceiptValueEditor({
     } catch {
       if (
         !mountedRef.current ||
-        receiptIdentityRef.current !== receiptIdentity ||
-        (valueRef.current.amountCents !== null &&
-          valueRef.current.source !== 'ocr')
+        receiptIdentityRef.current !== receiptIdentity
       ) {
         return;
       }
       setState({
-        message: 'Não foi possível ler. Digite o valor ou tente novamente.',
+        message:
+          'Não foi possível ler. Tente novamente ou anexe outro comprovante.',
         progress: 1,
         status: 'error',
       });
@@ -526,8 +487,7 @@ export function SavedReceiptValueEditor({
           <div className="my-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
             <p>
               A nova leitura substituirá o valor salvo deste comprovante e
-              voltará a atualizar o Pix. Dinheiro não será alterado. Uma
-              correção manual feita depois continua protegida.
+              voltará a atualizar o Pix. Dinheiro não será alterado.
             </p>
             <div className="mt-2 flex gap-2">
               <Button
@@ -563,26 +523,21 @@ export function SavedReceiptValueEditor({
         <output className="mt-1 block text-xs text-muted-foreground">
           {value.amountCents !== null
             ? value.source === 'manual'
-              ? 'Valor manual preservado.'
+              ? 'Valor anterior registrado. Solicite a releitura para aplicar a conferência automática.'
               : 'Valor lido e salvo. Confira se corresponde à transação.'
             : serverJob?.status === 'needs_review'
-              ? 'Não foi possível identificar o valor. Digite abaixo ou tente outra leitura.'
+              ? 'Não foi possível confirmar o pagamento. Tente outra leitura ou anexe outro comprovante.'
               : serverJob?.status === 'cancelled'
                 ? 'Leitura encerrada. Confira o valor da transação.'
                 : serverJob?.status === 'processing'
                   ? 'Lendo no servidor. Você pode fechar o aplicativo.'
                   : 'Aguardando leitura no servidor. Não é necessário manter esta tela aberta.'}
         </output>
-        <ReceiptMoneyInput
-          disabled={disabled}
-          valueCents={value.amountCents}
-          onChange={(amountCents) =>
-            onValueChange({
-              amountCents,
-              source: amountCents === null ? null : 'manual',
-            })
-          }
-        />
+        {value.amountCents !== null && (
+          <output className="mt-2 block text-right text-sm font-extrabold text-emerald-700 dark:text-emerald-300">
+            Valor identificado: {formatMoney(value.amountCents)}
+          </output>
+        )}
       </div>
     );
 
@@ -626,85 +581,17 @@ export function SavedReceiptValueEditor({
           {state.message}
         </p>
       )}
-      <ReceiptMoneyInput
-        disabled={disabled}
-        onChange={(amountCents) => {
-          const nextValue: ReceiptValueInput = {
-            amountCents,
-            source: amountCents === null ? null : 'manual',
-          };
-          valueRef.current = nextValue;
-          onValueChange(nextValue);
-          setState({
-            message:
-              amountCents === null
-                ? 'Digite o valor da transação.'
-                : 'Valor informado manualmente.',
-            progress: 1,
-            status: amountCents === null ? 'missing' : 'manual',
-          });
-        }}
-        valueCents={value.amountCents}
-      />
+      {value.amountCents !== null && (
+        <output className="mt-2 block text-right text-sm font-extrabold text-emerald-700 dark:text-emerald-300">
+          Valor identificado: {formatMoney(value.amountCents)}
+        </output>
+      )}
     </div>
-  );
-}
-
-function ReceiptMoneyInput({
-  disabled,
-  onChange,
-  valueCents,
-}: {
-  disabled: boolean;
-  onChange: (value: number | null) => void;
-  valueCents: number | null;
-}) {
-  const [draft, setDraft] = useState(() => moneyInputValue(valueCents));
-  const inputId = useId();
-  const lastEmittedRef = useRef<number | null | undefined>(undefined);
-  useEffect(() => {
-    if (lastEmittedRef.current === valueCents) {
-      lastEmittedRef.current = undefined;
-      return;
-    }
-    setDraft(moneyInputValue(valueCents));
-  }, [valueCents]);
-  return (
-    <label className="mt-2 block" htmlFor={inputId}>
-      <span className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
-        Valor da transação
-      </span>
-      <Input
-        className="mt-1 h-10 bg-background text-right font-extrabold"
-        disabled={disabled}
-        id={inputId}
-        inputMode="decimal"
-        onChange={(event) => {
-          const next = event.target.value;
-          setDraft(next);
-          const amount = parseMoneyInput(next);
-          const normalized = amount > 0 ? amount : null;
-          lastEmittedRef.current = normalized;
-          onChange(normalized);
-        }}
-        onBlur={() => setDraft(moneyInputValue(valueCents))}
-        placeholder="R$ 0,00"
-        value={draft}
-      />
-    </label>
   );
 }
 
 function fileKey(file: File) {
   return `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
-}
-
-function moneyInputValue(cents: number | null) {
-  if (cents === null) return '';
-  return (cents / 100).toLocaleString('pt-BR', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
 }
 
 function formatMoney(cents: number) {

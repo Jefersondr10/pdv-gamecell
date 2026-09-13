@@ -13,6 +13,9 @@ db.database.exec(`
   ALTER TABLE attachments ADD COLUMN sale_item_id TEXT;
   ALTER TABLE sales ADD COLUMN order_status_id TEXT;
   CREATE TABLE order_statuses (id TEXT, store_id TEXT, name TEXT, color TEXT);
+  ALTER TABLE attachments ADD COLUMN receipt_details_json TEXT;
+  CREATE TABLE receipt_payment_links(attachment_id TEXT,store_id TEXT,sale_id TEXT,payment_id TEXT,transaction_id TEXT);
+  CREATE TABLE audit_events(store_id TEXT,action TEXT,entity_id TEXT,details_json TEXT);
 `);
 const midnight = Date.parse('2026-09-05T00:00:00-03:00');
 const sale = (
@@ -138,7 +141,7 @@ try {
   assert.equal(page.totals.divergentCount, 0);
   assert.equal(page.totals.receiptCents, 6000);
   assert.equal(overviewComparison(page.totals), 'pending');
-  sale('missing', 0);
+  sale('missing', 1);
   payment('missing-pix', 'missing', 1);
   assert.equal((await read()).totals.missingCount, 1);
   sale('cancelled', 900000, 'a', midnight, 'cancelled');
@@ -192,6 +195,7 @@ try {
   assert.deepEqual(differences.map(overviewSaleComparison).sort(), [
     'above',
     'below',
+    'pending',
   ]);
   // Receipt synchronization must not hide the remaining gap to the sale price.
   sale('lumora', 3465000, 'lumora');
@@ -204,7 +208,7 @@ try {
   assert.equal(lumora.items.length, 1);
   assert.equal(lumora.items[0].automaticStatus, null);
   assert.ok(lumora.items[0].issueKeys.includes('pending_payment'));
-  assert.equal(overviewSaleComparison(lumora.items[0]), 'sale_difference');
+  assert.equal(overviewSaleComparison(lumora.items[0]), 'below');
   assert.equal(overviewComparison(lumora.totals), 'review');
   assert.equal(
     (await read('lumora', 'comparison=matched')).totals.saleCount,
@@ -259,13 +263,17 @@ try {
   db.database.exec(
     "UPDATE sales SET products_total_cents=100 WHERE id='paid-gap'; UPDATE sale_items SET sold_price_cents=100 WHERE sale_id='paid-gap'",
   );
-  const paidGap = await read('paid-gap', 'comparison=review');
-  assert.equal(paidGap.items[0].automaticStatus, null);
-  assert.ok(paidGap.items[0].issueKeys.includes('pending_payment'));
+  const paidGap = await read('paid-gap', 'comparison=matched');
+  assert.equal(
+    paidGap.items[0].receivedCents,
+    100,
+    'legacy Pix rows do not override receipt income',
+  );
+  assert.ok(!paidGap.items[0].issueKeys.includes('pending_payment'));
   assert.equal(paidGap.totals.saleCount, 1);
   assert.equal(
     (await read('paid-gap', 'comparison=matched')).totals.saleCount,
-    0,
+    1,
   );
   // The filter precedes pagination and totals; newer unmatched sales cannot hide matches.
   for (let i = 0; i < 45; i++) {
@@ -395,8 +403,12 @@ try {
     "UPDATE sales SET received_total_cents=9000 WHERE id='manual-warning'",
   );
   manualOverview = (await read('statuses')).items[0];
-  assert.equal(manualOverview.displayStatus.key, 'manual');
-  assert.deepEqual(manualOverview.issueKeys, ['pending_payment']);
+  assert.equal(
+    manualOverview.displayStatus.key,
+    'reconciled',
+    'stale legacy total cannot override accepted receipt income',
+  );
+  assert.deepEqual(manualOverview.issueKeys, []);
   // Real-world mix: only Pix is compared with receipts; cash stays manual.
   sale('mixed-cash', 710000, 'mixed');
   db.database.exec(
@@ -420,6 +432,9 @@ try {
   assert.equal((await read('cash-only', 'comparison=missing')).items.length, 0);
   db.database.exec(
     "UPDATE order_statuses SET store_id='foreign' WHERE id='manual'",
+  );
+  db.database.exec(
+    "UPDATE sales SET products_total_cents=11000 WHERE id='manual-warning'",
   );
   assert.equal((await read('statuses')).items[0].displayStatus.key, 'none');
   console.log(

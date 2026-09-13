@@ -1,4 +1,5 @@
 import { assertCsrf, requireSession } from '@/lib/server/auth';
+import { can } from '@/lib/permissions';
 import {
   apiError,
   assertSameOrigin,
@@ -10,9 +11,14 @@ import {
 import { runtime } from '@/lib/server/runtime';
 import { retryReceipt } from '@/lib/server/retry-receipt';
 import {
+  publicReceiptPaymentState,
+  readReceiptPaymentSync,
+} from '@/lib/server/receipt-payment-sync';
+import {
   consumeStoreReadBudget,
   consumeStoreWriteBudget,
 } from '@/lib/server/rate-limit';
+import { RECEIPT_SALE_READ_COST } from '@/lib/receipt-polling';
 
 export async function GET(
   request: Request,
@@ -22,15 +28,28 @@ export async function GET(
     const session = await requireSession(request);
     const { id } = await context.params;
     const env = runtime();
-    await consumeStoreReadBudget(env.DB, Date.now(), session.storeId!, 2);
-    const rows =
-      await env.DB.prepare(`SELECT a.id, a.receipt_amount_cents AS amountCents, a.receipt_amount_source AS source, a.receipt_amount_confirmed_at AS confirmedAt, j.generation, j.status, j.error_code AS errorCode, j.updated_at AS updatedAt
+    const includePayment = can(session, 'sales');
+    await consumeStoreReadBudget(
+      env.DB,
+      Date.now(),
+      session.storeId!,
+      RECEIPT_SALE_READ_COST,
+    );
+    const [rows, payment] = await Promise.all([
+      env.DB.prepare(`SELECT a.id, a.receipt_amount_cents AS amountCents, a.receipt_amount_source AS source, a.receipt_amount_confirmed_at AS confirmedAt, j.generation, j.status, j.error_code AS errorCode, j.updated_at AS updatedAt
       FROM attachments a LEFT JOIN receipt_ocr_jobs j ON j.attachment_id=a.id WHERE a.store_id=? AND a.sale_id=? AND a.kind='receipt' ORDER BY a.created_at, a.id`)
         .bind(session.storeId, id)
-        .all();
+        .all(),
+      includePayment
+        ? readReceiptPaymentSync(env.DB, session.storeId!, id)
+        : Promise.resolve(null),
+    ]);
+    if (includePayment && !payment)
+      throw new HttpError(404, 'Venda não encontrada.', 'SALE_NOT_FOUND');
     return json({
       enabled: Boolean(env.RECEIPT_OCR_ENGINE_URL),
       receipts: rows.results,
+      ...(payment ? { payment: publicReceiptPaymentState(payment) } : {}),
     });
   } catch (error) {
     return apiError(error);

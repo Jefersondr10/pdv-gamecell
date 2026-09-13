@@ -134,9 +134,9 @@ export function LegacyReceiptReview({
             </DialogDescription>
           </DialogHeader>
           {busy && (
-            <p role="status" className="flex items-center gap-2 text-sm">
+            <output className="flex items-center gap-2 text-sm">
               <LoaderCircle className="size-4 animate-spin" /> Processando…
-            </p>
+            </output>
           )}
           {error && (
             <p role="alert" className="text-sm text-destructive">
@@ -144,9 +144,9 @@ export function LegacyReceiptReview({
             </p>
           )}
           {notice && (
-            <p role="status" className="rounded-xl bg-secondary p-3 text-sm">
+            <output className="block rounded-xl bg-secondary p-3 text-sm">
               {notice}
-            </p>
+            </output>
           )}
           {status && (
             <div className="space-y-3 text-sm">

@@ -12,6 +12,7 @@ import {
 } from '@/lib/server/production-readiness';
 import { runtime } from '@/lib/server/runtime';
 import { timingSafeEqual } from '@/lib/server/security';
+import { PRODUCTION_RESET_DELETE_ORDER } from '@/lib/server/database-lifecycle';
 
 export async function POST(request: Request) {
   try {
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
 async function resetDatabase(db: D1Database) {
   const now = Date.now();
   await db.batch([
-    db.prepare('DELETE FROM login_attempts'),
+    db.prepare(`DELETE FROM "${PRODUCTION_RESET_DELETE_ORDER[0]}"`),
     db
       .prepare(
         `INSERT INTO login_attempts
@@ -99,22 +100,8 @@ async function resetDatabase(db: D1Database) {
          VALUES (?, 0, NULL, ?)`,
       )
       .bind(PRODUCTION_RESET_MARKER, now),
-    db.prepare('DELETE FROM attachments'),
-    db.prepare('DELETE FROM payments'),
-    db.prepare('DELETE FROM sale_items'),
-    db.prepare('DELETE FROM inventory_units'),
-    db.prepare('DELETE FROM sales'),
-    db.prepare('DELETE FROM entries'),
-    db.prepare('DELETE FROM product_codes'),
-    db.prepare('DELETE FROM products'),
-    db.prepare('DELETE FROM clients'),
-    db.prepare('DELETE FROM pix_accounts'),
-    db.prepare('DELETE FROM guide_reads'),
-    db.prepare('DELETE FROM sessions'),
-    db.prepare('DELETE FROM audit_events'),
-    db.prepare('DELETE FROM upload_reservations'),
-    db.prepare('DELETE FROM account_recovery_codes'),
-    db.prepare('DELETE FROM users'),
-    db.prepare('DELETE FROM stores'),
+    ...PRODUCTION_RESET_DELETE_ORDER.slice(1).map((table) =>
+      db.prepare(`DELETE FROM "${table}"`),
+    ),
   ]);
 }

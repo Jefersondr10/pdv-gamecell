@@ -91,7 +91,7 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
             {money(sale.receivedCents)}
           </p>
           <p className="text-xs text-muted-foreground">
-            Pix {money(sale.pixCents)} · dinheiro (manual){' '}
+            Pix recebido {money(sale.receiptCents)} · dinheiro (manual){' '}
             {money(sale.cashCents)}
           </p>
         </div>
@@ -148,8 +148,8 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
                     Comprovantes{' '}
                     <strong>
                       {money(Math.abs(paymentDifference))}{' '}
-                      {paymentDifference < 0 ? 'abaixo' : 'acima'} do Pix
-                      informado.
+                      {paymentDifference < 0 ? 'abaixo' : 'acima'} do saldo
+                      esperado da venda após dinheiro.
                     </strong>
                   </span>
                 )}
@@ -157,9 +157,9 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
             )}
           </>
         ) : state === 'matched' ? (
-          'Comprovantes conferem com o Pix; Pix + dinheiro conferem com a venda'
+          'Comprovantes + dinheiro conferem com a venda'
         ) : state === 'not_required' ? (
-          'Sem Pix — comprovante não exigido. Dinheiro informado manualmente.'
+          'Venda coberta por dinheiro — comprovante não exigido. Dinheiro informado manualmente.'
         ) : state === 'missing' ? (
           'Sem comprovante anexado'
         ) : (

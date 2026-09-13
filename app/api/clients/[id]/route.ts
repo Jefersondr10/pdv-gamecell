@@ -12,6 +12,11 @@ import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
 import { normalizeClientName } from '@/lib/client-name';
 import {
+  catalogChanged,
+  catalogEditGuard,
+  CLIENT_EDIT_COLUMNS,
+} from '@/lib/server/catalog-concurrency';
+import {
   isClientNameConflict,
   rejectDuplicateClient,
 } from '@/lib/server/client-identity';
@@ -78,6 +83,24 @@ export async function PATCH(
         'NO_CHANGES',
       );
     }
+    // Reactivation also rechecks identity, but does not use a stale form's name.
+    const expected =
+      body.name === undefined && body.active === true
+        ? {
+            ...(body.expected &&
+            typeof body.expected === 'object' &&
+            !Array.isArray(body.expected)
+              ? body.expected
+              : {}),
+            name: exists.name,
+          }
+        : body.expected;
+    const guard = catalogEditGuard(
+      expected,
+      changed,
+      CLIENT_EDIT_COLUMNS,
+      'clients',
+    );
     updates.push('updated_at = ?');
     bindings.push(now, id, session.storeId);
     let results: D1Result<unknown>[];
@@ -86,14 +109,14 @@ export async function PATCH(
         db
           .prepare(
             `UPDATE clients SET ${updates.join(', ')}
-           WHERE id = ? AND store_id = ?`,
+           WHERE id = ? AND store_id = ?${guard.sql}`,
           )
-          .bind(...bindings),
+          .bind(...bindings, ...guard.bindings),
         db
           .prepare(
             `INSERT INTO audit_events
            (id, store_id, actor_user_id, action, entity_type, entity_id, details_json, created_at)
-           VALUES (?, ?, ?, 'client.updated', 'client', ?, ?, ?)`,
+           SELECT ?, ?, ?, 'client.updated', 'client', ?, ?, ? WHERE changes() = 1`,
           )
           .bind(
             crypto.randomUUID(),
@@ -110,7 +133,7 @@ export async function PATCH(
       throw error;
     }
     if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
-      throw new HttpError(404, 'Cliente não encontrado.', 'NOT_FOUND');
+      throw catalogChanged();
     }
     return json({ ok: true });
   } catch (error) {

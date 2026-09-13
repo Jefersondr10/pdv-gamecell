@@ -132,7 +132,40 @@ const StockProductionView = dynamic(
   { loading: ViewLoading },
 );
 
-function ViewLoading() {
+function ViewLoading({ error }: { error?: Error | null } = {}) {
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  // The dynamic loader's boundary passes rejected imports here, including old
+  // chunk URLs after a deployment. Keep recovery explicit: no reload loops and
+  // no automatic interruption of another pending operation in this session.
+  if (error) {
+    return (
+      <div className="grid h-full min-h-52 place-items-center overflow-y-auto p-6 text-center">
+        <div className="max-w-md space-y-3" role="alert">
+          <h2 className="text-lg font-bold">
+            Não foi possível abrir esta tela
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Uma atualização do sistema ou falha de conexão pode ter impedido o
+            carregamento. Aguarde os envios pendentes antes de atualizar.
+          </p>
+          <Button
+            className="h-11"
+            disabled={refreshing}
+            onClick={() => {
+              if (refreshingRef.current) return;
+              refreshingRef.current = true;
+              setRefreshing(true);
+              window.location.reload();
+            }}
+          >
+            {refreshing && <LoaderCircle className="animate-spin" />}
+            {refreshing ? 'Atualizando…' : 'Atualizar sistema'}
+          </Button>
+        </div>
+      </div>
+    );
+  }
   return (
     <output
       aria-live="polite"
@@ -226,18 +259,37 @@ function canView(user: PermissionSubject, view: View) {
 export function ProductionApp() {
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [sessionError, setSessionError] = useState('');
+  const sessionRef = useRef<SessionResponse | null>(null);
+  const sessionRequestRef = useRef(0);
 
   const loadSession = useCallback(async () => {
+    const requestId = ++sessionRequestRef.current;
     try {
       setSessionError('');
-      setSession(await requestJson<SessionResponse>('/api/auth/session'));
+      const next = await requestJson<SessionResponse>('/api/auth/session');
+      if (requestId !== sessionRequestRef.current) return;
+      sessionRef.current = next;
+      setSession(next);
     } catch (error) {
-      setSessionError(messageOf(error));
+      // A failed background check must not unmount an authenticated app.
+      if (
+        requestId === sessionRequestRef.current &&
+        !sessionRef.current?.authenticated
+      )
+        setSessionError(messageOf(error));
     }
   }, []);
 
   useEffect(() => {
     queueMicrotask(() => void loadSession());
+    const restored = (event: PageTransitionEvent) => {
+      if (event.persisted) void loadSession();
+    };
+    window.addEventListener('pageshow', restored);
+    return () => {
+      sessionRequestRef.current += 1;
+      window.removeEventListener('pageshow', restored);
+    };
   }, [loadSession]);
 
   if (sessionError) {
@@ -271,6 +323,8 @@ function RequiredPasswordChange({ csrfToken }: { csrfToken: string }) {
   const [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const logoutBusyRef = useRef(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   return (
     <main className="grid h-dvh place-items-center overflow-y-auto bg-muted/35 p-4">
       <Card className="w-full max-w-md">
@@ -286,6 +340,7 @@ function RequiredPasswordChange({ csrfToken }: { csrfToken: string }) {
             className="space-y-3"
             onSubmit={async (event) => {
               event.preventDefault();
+              if (busy || logoutBusyRef.current) return;
               if (newPassword !== confirmation) {
                 setError('A confirmação não corresponde à nova senha.');
                 return;
@@ -352,11 +407,23 @@ function RequiredPasswordChange({ csrfToken }: { csrfToken: string }) {
             <Button
               className="h-11 w-full rounded-xl"
               disabled={busy}
-              onClick={() => void logoutSession(csrfToken)}
+              onClick={() => {
+                if (busy || logoutBusyRef.current) return;
+                logoutBusyRef.current = true;
+                setLoggingOut(true);
+                setBusy(true);
+                setError('');
+                void logoutSession(csrfToken).catch((caught) => {
+                  setError(`A saída não foi confirmada. ${messageOf(caught)}`);
+                  logoutBusyRef.current = false;
+                  setLoggingOut(false);
+                  setBusy(false);
+                });
+              }}
               type="button"
               variant="ghost"
             >
-              <LogOut /> Sair e usar outra conta
+              <LogOut /> {loggingOut ? 'Saindo…' : 'Sair e usar outra conta'}
             </Button>
           </form>
         </CardContent>
@@ -386,14 +453,28 @@ function CloudPdv({
   const [loadingError, setLoadingError] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
+  const logoutBusyRef = useRef(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [exitOpen, setExitOpen] = useState(false);
-  const [exitBoundary, setExitBoundary] = useState(false);
+  const [saleToOpen, setSaleToOpen] = useState<string | null>(null);
   const previousViews = useRef<View[]>([]);
-  const backGuard = useAppBackGuard(
-    () => setExitOpen(true),
-    Boolean(data) && !loadingError,
-  );
+  // CloudPdv is authenticated even while bootstrap is loading or retrying.
+  // At the root, Back stays inside the app and leaves the session intact.
+  const backGuard = useAppBackGuard(() => {
+    if (!data) return;
+    const home = navigation.find((item) => canView(data.user, item.view))!.view;
+    previousViews.current = [];
+    setSaleToOpen(null);
+    if (linkedReport) {
+      setLinkedReport(null);
+      replaceGuardedUrl(window, window.location.pathname);
+    }
+    if (activeView !== home) {
+      setActiveView(home);
+      setRun((value) => value + 1);
+    }
+  });
   const [installPrompt, setInstallPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(
@@ -402,7 +483,6 @@ function CloudPdv({
       window.matchMedia('(display-mode: standalone)').matches,
   );
   const [online, setOnline] = useState(true);
-  const [saleToOpen, setSaleToOpen] = useState<string | null>(null);
   const reloadRequestRef = useRef(0);
   const dataRef = useRef<BootstrapData | null>(null);
   const lastReloadAtRef = useRef(0);
@@ -720,12 +800,22 @@ function CloudPdv({
   };
 
   const logout = async () => {
-    await requestJson('/api/auth/logout', {
-      method: 'POST',
-      headers: { 'x-csrf-token': data?.csrfToken ?? session.csrfToken },
-    });
-    backGuard.dispose();
-    window.location.replace('/');
+    if (logoutBusyRef.current) return;
+    logoutBusyRef.current = true;
+    setLogoutBusy(true);
+    setLogoutError('');
+    try {
+      await requestJson('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'x-csrf-token': data?.csrfToken ?? session.csrfToken },
+      });
+      backGuard.dispose();
+      window.location.replace('/');
+    } catch (caught) {
+      setLogoutError(`A saída não foi confirmada. ${messageOf(caught)}`);
+      logoutBusyRef.current = false;
+      setLogoutBusy(false);
+    }
   };
 
   if (loadingError) {
@@ -753,6 +843,7 @@ function CloudPdv({
         canAny(data.user, ['sell', 'sales', 'overview'])
       }
       csrfToken={data?.csrfToken ?? ''}
+      storeId={data.store.id}
     >
       <main className="h-dvh overflow-hidden bg-background text-foreground">
         {data &&
@@ -1025,50 +1116,10 @@ function CloudPdv({
           storeCode={data.store.code}
           storeName={data.store.name}
         />
-        <Dialog open={exitOpen} onOpenChange={setExitOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Você está no início</DialogTitle>
-              <DialogDescription>
-                Deseja continuar no Atacado ou sair desta página? Voltar não
-                encerra sua sessão.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setExitOpen(false);
-                  backGuard.leave(() => setExitBoundary(true));
-                }}
-              >
-                Sair da página
-              </Button>
-              <Button onClick={() => setExitOpen(false)}>
-                Continuar no sistema
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-        {exitBoundary && (
-          <output className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-2xl border bg-white p-4 text-sm shadow-lg">
-            <p>
-              Para sair, use Voltar novamente ou feche esta aba. Sua sessão
-              continua conectada.
-            </p>
-            <Button
-              className="mt-3 w-full"
-              onClick={() => {
-                setExitBoundary(false);
-                backGuard.resume();
-              }}
-            >
-              Continuar no sistema
-            </Button>
-          </output>
-        )}
         <ProfileDialog
           data={data}
+          logoutBusy={logoutBusy}
+          logoutError={logoutError}
           onEntries={() => {
             setProfileOpen(false);
             changeView('entries');
@@ -1078,7 +1129,9 @@ function CloudPdv({
             setGuideOpen(true);
           }}
           onLogout={() => void logout()}
-          onOpenChange={setProfileOpen}
+          onOpenChange={(open) => {
+            if (!logoutBusyRef.current) setProfileOpen(open);
+          }}
           onSettings={() => {
             setProfileOpen(false);
             changeView('settings');
@@ -1536,6 +1589,8 @@ function StoreSetup({
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const logoutBusyRef = useRef(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   return (
     <main className="grid h-dvh place-items-center overflow-y-auto bg-muted/40 p-4">
       <Card className="w-full max-w-lg">
@@ -1551,6 +1606,7 @@ function StoreSetup({
             className="space-y-3"
             onSubmit={async (event) => {
               event.preventDefault();
+              if (busy || logoutBusyRef.current) return;
               setBusy(true);
               setError('');
               try {
@@ -1605,11 +1661,23 @@ function StoreSetup({
             <Button
               className="h-11 w-full rounded-xl"
               disabled={busy}
-              onClick={() => void logoutSession(csrfToken)}
+              onClick={() => {
+                if (busy || logoutBusyRef.current) return;
+                logoutBusyRef.current = true;
+                setLoggingOut(true);
+                setBusy(true);
+                setError('');
+                void logoutSession(csrfToken).catch((caught) => {
+                  setError(`A saída não foi confirmada. ${messageOf(caught)}`);
+                  logoutBusyRef.current = false;
+                  setLoggingOut(false);
+                  setBusy(false);
+                });
+              }}
               type="button"
               variant="ghost"
             >
-              <LogOut /> Sair e usar outra conta
+              <LogOut /> {loggingOut ? 'Saindo…' : 'Sair e usar outra conta'}
             </Button>
           </form>
         </CardContent>
@@ -1620,6 +1688,8 @@ function StoreSetup({
 
 function ProfileDialog({
   data,
+  logoutBusy,
+  logoutError,
   open,
   onOpenChange,
   onEntries,
@@ -1628,6 +1698,8 @@ function ProfileDialog({
   onSettings,
 }: {
   data: BootstrapData;
+  logoutBusy: boolean;
+  logoutError: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onEntries: () => void;
@@ -1637,7 +1709,7 @@ function ProfileDialog({
 }) {
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" showCloseButton={!logoutBusy}>
         <DialogHeader>
           <DialogTitle>{data.user.displayName}</DialogTitle>
           <DialogDescription>
@@ -1648,13 +1720,14 @@ function ProfileDialog({
           <Button
             className="h-12 justify-start rounded-xl lg:hidden"
             onClick={onEntries}
-            disabled={!can(data.user, 'entries')}
+            disabled={logoutBusy || !can(data.user, 'entries')}
             variant="outline"
           >
             <History /> Histórico de entradas
           </Button>
           <Button
             className="h-12 justify-start rounded-xl lg:hidden"
+            disabled={logoutBusy}
             onClick={onSettings}
             variant="outline"
           >
@@ -1662,6 +1735,7 @@ function ProfileDialog({
           </Button>
           <Button
             className="h-12 justify-start rounded-xl"
+            disabled={logoutBusy}
             onClick={onGuide}
             variant="outline"
           >
@@ -1669,11 +1743,25 @@ function ProfileDialog({
           </Button>
           <Button
             className="h-12 justify-start rounded-xl"
+            disabled={logoutBusy}
             onClick={onLogout}
             variant="outline"
           >
-            <LogOut /> Sair do sistema
+            {logoutBusy ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <LogOut />
+            )}
+            {logoutBusy ? 'Saindo…' : 'Sair do sistema'}
           </Button>
+          {logoutError && (
+            <p
+              className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive"
+              role="alert"
+            >
+              {logoutError}
+            </p>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -1732,12 +1820,12 @@ function GuideDialog({
           <GuideStep number="Novo" title="Vendas e estoque mais diretos">
             Toque em uma venda para ver produtos, SNs, pagamentos e
             comprovantes. Use o filtro Vendedor junto do período. Conciliado
-            significa que comprovantes mais dinheiro conferem com o valor da venda; não
-            confirma crédito no banco. No estoque, pesquise modelo, cor e
-            memória em qualquer ordem, ou um SN. Com estoque, Sem estoque e
-            Todos filtram as variações. Os preços em edição ficam destacados. O
-            PDF mantém modelo e SNs juntos, repetindo a identificação nos blocos
-            de continuação.
+            significa que comprovantes mais dinheiro conferem com o valor da
+            venda; não confirma crédito no banco. No estoque, pesquise modelo,
+            cor e memória em qualquer ordem, ou um SN. Com estoque, Sem estoque
+            e Todos filtram as variações. Os preços em edição ficam destacados.
+            O PDF mantém modelo e SNs juntos, repetindo a identificação nos
+            blocos de continuação.
           </GuideStep>
           <GuideStep number="Novo" title="Clientes sem duplicação">
             O sistema impede repetir um nome já cadastrado na mesma loja, mesmo

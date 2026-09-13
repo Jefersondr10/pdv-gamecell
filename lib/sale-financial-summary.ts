@@ -23,7 +23,9 @@ export function saleFinancialSummary(sale: SummarySale) {
         (!receipt.receiptDetails ||
           (!receipt.receiptDetails.blocked &&
             !receipt.receiptDetails.ambiguous &&
-            receipt.receiptDetails.state === 'completed')),
+            receipt.receiptDetails.state === 'completed' &&
+            (receipt.receiptDetails.automaticEligible ||
+              Boolean(receipt.receiptPaymentId)))),
     );
   const receiptTotalCents = completeReceipts
     ? sale.receipts.reduce(

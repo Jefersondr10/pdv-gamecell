@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
 import { saleDisplayStatus } from '../lib/sale-display-status.ts';
+import type { ReceiptDocument } from '../lib/receipt-document.ts';
 
 const reconciledSale = {
   status: 'completed' as const,
@@ -105,3 +106,57 @@ for (const amountCents of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
   assert.equal(invalid.confirmedTotalCents, 100);
   assert.equal(invalid.pendingReceiptCount, 1);
 }
+
+const document: ReceiptDocument = {
+  version: 1,
+  state: 'completed',
+  automaticEligible: true,
+  blocked: false,
+  ambiguous: false,
+  payerName: null,
+  payerBank: null,
+  recipientName: null,
+  recipientBank: null,
+  recipientDocument: null,
+  transactionId: null,
+  paidAtText: null,
+};
+for (const receiptDetails of [
+  { ...document, blocked: true },
+  { ...document, ambiguous: true },
+  ...(['unknown', 'scheduled', 'cancelled'] as const).map((state) => ({
+    ...document,
+    state,
+  })),
+]) {
+  const result = deriveReceiptReconciliation(
+    [{ receiptAmountCents: 100 }, { receiptAmountCents: 200, receiptDetails }],
+    300,
+  );
+  assert.deepEqual(
+    result,
+    {
+      status: 'pending',
+      confirmedTotalCents: 100,
+      differenceCents: null,
+      pendingReceiptCount: 1,
+      reviewReceiptCount: 1,
+    },
+    'unconfirmed documents are neither credited nor reconciled',
+  );
+}
+assert.equal(
+  deriveReceiptReconciliation(
+    [{ receiptAmountCents: 300, receiptDetails: document }],
+    300,
+  ).status,
+  'reconciled',
+);
+assert.equal(
+  deriveReceiptReconciliation(
+    [{ receiptAmountCents: 300, receiptDetails: null }],
+    300,
+  ).status,
+  'reconciled',
+  'legacy receipts remain supported',
+);

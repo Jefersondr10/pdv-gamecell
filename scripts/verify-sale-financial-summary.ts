@@ -24,9 +24,9 @@ const actual = fixture([1500000, 1965000]);
 const original = JSON.stringify(actual);
 const below = saleFinancialSummary(actual);
 assert.equal(below.reconciled, false);
-assert.match(below.paymentLabel, /Pago informado.*34\.730,00/);
+assert.match(below.paymentLabel, /Recebido.*34\.650,00/);
 assert.equal(below.receiptDifferenceCents, -8000);
-assert.match(below.receiptText!, /34\.650,00.*80,00 abaixo do Pix informado/);
+assert.match(below.receiptText!, /34\.650,00.*80,00 abaixo do valor da venda/);
 assert.equal(below.receiptWarning, true);
 assert.equal(
   JSON.stringify(actual),
@@ -39,7 +39,7 @@ assert.equal(equal.paymentLabel, 'Venda / pago');
 assert.equal(equal.receiptWarning, false);
 const above = saleFinancialSummary(fixture([3481000]));
 assert.equal(above.reconciled, false);
-assert.match(above.receiptText!, /80,00 acima do Pix informado/);
+assert.match(above.receiptText!, /80,00 acima do valor da venda/);
 for (const receipts of [[], [null], [1500000, null], [0], [-1]]) {
   const pending = saleFinancialSummary(fixture(receipts));
   assert.equal(pending.reconciled, false);
@@ -50,9 +50,10 @@ for (const receipts of [[], [null], [1500000, null], [0], [-1]]) {
   );
   assert.equal(pending.receiptTotalCents, null);
 }
-const manualDiff = saleFinancialSummary(fixture([3473000], 3472000));
-assert.equal(manualDiff.reconciled, false);
-assert.match(manualDiff.paymentLabel, /34\.720,00/);
+const staleTypedPix = saleFinancialSummary(fixture([3473000], 3472000));
+assert.equal(staleTypedPix.reconciled, true);
+assert.equal(staleTypedPix.paymentLabel, 'Venda / pago');
+assert.equal(staleTypedPix.pixCents, 3473000);
 const missingPhoto = fixture([3473000]);
 missingPhoto.items[0].photos = [];
 assert.equal(saleFinancialSummary(missingPhoto).reconciled, false);

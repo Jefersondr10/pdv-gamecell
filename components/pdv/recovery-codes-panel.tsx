@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Check, Copy, Download, ShieldCheck } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,9 @@ export function RecoveryCodesPanel({
   compact?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copyError, setCopyError] = useState('');
+  const copyingRef = useRef(false);
   const [confirmed, setConfirmed] = useState(false);
   const text = recoveryText(codes);
   const content = (
@@ -31,6 +34,7 @@ export function RecoveryCodesPanel({
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {codes.map((code) => (
           <code
+            data-copyable
             className="rounded-xl border bg-muted/40 px-2 py-2 text-center text-xs font-bold tracking-wide"
             key={code}
           >
@@ -40,14 +44,30 @@ export function RecoveryCodesPanel({
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <Button
+          disabled={copying}
           onClick={async () => {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
+            if (copyingRef.current) return;
+            copyingRef.current = true;
+            setCopying(true);
+            setCopyError('');
+            setCopied(false);
+            try {
+              await navigator.clipboard.writeText(text);
+              setCopied(true);
+            } catch {
+              setCopyError(
+                'Não foi possível copiar. Use Baixar ou selecione os códigos para guardá-los.',
+              );
+            } finally {
+              copyingRef.current = false;
+              setCopying(false);
+            }
           }}
           type="button"
           variant="outline"
         >
-          {copied ? <Check /> : <Copy />} {copied ? 'Copiados' : 'Copiar'}
+          {copied ? <Check /> : <Copy />}{' '}
+          {copying ? 'Copiando…' : copied ? 'Copiados' : 'Copiar'}
         </Button>
         <Button
           onClick={() => downloadCodes(text)}
@@ -57,6 +77,11 @@ export function RecoveryCodesPanel({
           <Download /> Baixar
         </Button>
       </div>
+      {copyError && (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {copyError}
+        </p>
+      )}
       <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-sm">
         <input
           checked={confirmed}

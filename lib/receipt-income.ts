@@ -4,6 +4,7 @@ type Receipt = {
   receiptAmountCents: number | null;
   receiptDetails?: ReceiptDocument | null;
   receiptReviewReason?: string | null;
+  receiptPaymentId?: string | null;
 };
 type Sale = {
   productsTotalCents: number;
@@ -19,6 +20,7 @@ export function receiptIncomeCents(receipt: Receipt) {
   if (receipt.receiptReviewReason?.startsWith('Transação repetida')) return 0;
   if (doc && (doc.blocked || doc.ambiguous || doc.state !== 'completed'))
     return 0;
+  if (doc && !doc.automaticEligible && !receipt.receiptPaymentId) return 0;
   return Number.isSafeInteger(amount) && amount! > 0 ? amount! : 0;
 }
 

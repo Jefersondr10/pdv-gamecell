@@ -1,5 +1,7 @@
 export function parseMoneyInput(value: string) {
-  const compact = value.trim().replace(/[^\d.,]/g, '');
+  const input = value.trim().replace(/^R(?:\$|S)\s*/i, '');
+  if (!/^[\d.,\s]*$/.test(input)) return 0;
+  const compact = input.replace(/\s/g, '');
   if (!compact || !/\d/.test(compact)) return 0;
   const lastComma = compact.lastIndexOf(',');
   const lastDot = compact.lastIndexOf('.');

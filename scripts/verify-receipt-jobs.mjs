@@ -43,7 +43,9 @@ globalThis.fetch = async () => {
     details: extractReceiptDocument(
       mode === 'unknown'
         ? 'Valor R$ 2.840,00'
-        : 'Comprovante de transferência\nPix\nValor R$ 2.840,00',
+        : mode === 'ineligible'
+          ? 'Comprovante de transferência\nPix\nValor R$ 2.840,00'
+          : 'Comprovante de transferência\nPix\nValor R$ 2.840,00\nIdentificador da transação\nE0000000000000000000000000000001',
     ).details,
   });
 };
@@ -73,7 +75,7 @@ const job = () => db.database.prepare('SELECT * FROM receipt_ocr_jobs').get();
 const amount = () =>
   db.database
     .prepare(
-      'SELECT receipt_amount_cents AS amount, receipt_amount_source AS source FROM attachments',
+      'SELECT receipt_amount_cents AS amount,receipt_amount_source AS source,receipt_amount_confirmed_by AS confirmedBy,receipt_amount_confirmed_at AS confirmedAt,receipt_details_json AS details,receipt_review_reason AS review FROM attachments',
     )
     .get();
 
@@ -142,6 +144,16 @@ await processReceiptJob(db, files, 'http://isolated.test', clock);
 assert.equal(job().status, 'needs_review');
 assert.equal(amount().amount, null);
 seed();
+mode = 'ineligible';
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(job().status, 'needs_review');
+assert.equal(amount().amount, 284000);
+assert.match(
+  db.database.prepare('SELECT receipt_review_reason AS reason FROM attachments').get()
+    .reason,
+  /identificação suficiente/,
+);
+seed();
 mode = 'ok';
 await processReceiptJob(
   db,
@@ -205,11 +217,124 @@ mode = 'ok';
 db.database.exec(
   "UPDATE attachments SET receipt_amount_cents=12345,receipt_amount_source='manual'",
 );
+db.database.exec(
+  "INSERT INTO sale_receipt_payment_sync VALUES('sale','store','manual:legacy','actor',NULL,'manual',1)",
+);
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(amount().amount, 284000);
+assert.equal(amount().source, 'ocr');
+assert.equal(job().status, 'done');
+assert.equal(job().reader_revision, RECEIPT_READER_REVISION);
+assert.equal(
+  db.database.prepare('SELECT status FROM sale_receipt_payment_sync').get()
+    .status,
+  'pending',
+);
+assert.equal(
+  await processReceiptJob(db, files, 'http://isolated.test', clock),
+  false,
+  'a legacy manual receipt is read only once at the current revision',
+);
+
+// An unsafe reread retains the manually entered value as history, but the
+// current document metadata makes all financial consumers fail closed.
+seed();
+mode = 'ineligible';
+db.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=12345,receipt_amount_source='manual',receipt_amount_confirmed_by='legacy-user',receipt_amount_confirmed_at=77; INSERT INTO sale_receipt_payment_sync VALUES('sale','store','manual:legacy','actor',NULL,'manual',1)",
+);
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(amount().amount, 12345);
+assert.equal(amount().source, 'manual');
+assert.equal(amount().confirmedBy, 'legacy-user');
+assert.equal(amount().confirmedAt, 77);
+assert.ok(amount().details);
+assert.match(amount().review, /identificação suficiente/);
+assert.equal(job().status, 'needs_review');
+assert.equal(job().reader_revision, RECEIPT_READER_REVISION);
+assert.equal(
+  db.database.prepare('SELECT status FROM sale_receipt_payment_sync').get()
+    .status,
+  'pending',
+);
+assert.equal(
+  await processReceiptJob(db, files, 'http://isolated.test', clock),
+  false,
+  'an unsafe current-revision reread must not loop',
+);
+
+// Even strong identity metadata cannot make an old manual value count when the
+// reader failed to identify the amount itself.
+seed();
+mode = 'missing';
+db.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=12345,receipt_amount_source='manual'",
+);
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(amount().amount, 12345);
+assert.equal(amount().source, 'manual');
+assert.equal(JSON.parse(amount().details).automaticEligible, false);
+assert.match(amount().review, /identificar o valor/);
+assert.equal(job().status, 'needs_review');
+assert.equal(job().error_code, 'VALUE_NOT_FOUND');
+
+// A terminal job from an older reader revision reopens a manual receipt once.
+seed();
+mode = 'ok';
+db.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=12345,receipt_amount_source='manual'; INSERT INTO receipt_ocr_jobs(attachment_id,status,attempts,generation,next_attempt_at,created_at,updated_at,reader_revision) VALUES('receipt','cancelled',1,1,1,1,1,0)",
+);
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(amount().source, 'ocr');
+assert.equal(job().generation, 2);
+assert.equal(job().status, 'done');
+
+// Compare-and-swap protects a correction made while the OCR service reads.
+seed();
+mode = 'hold';
+release = null;
+db.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=12345,receipt_amount_source='manual',receipt_amount_confirmed_by='legacy-user',receipt_amount_confirmed_at=77",
+);
+const legacyRunning = processReceiptJob(
+  db,
+  files,
+  'http://isolated.test',
+  clock,
+);
+while (!release) await new Promise((resolve) => setTimeout(resolve, 1));
+db.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=67890,receipt_amount_confirmed_by='corrector',receipt_amount_confirmed_at=88,receipt_review_reason='correção concorrente'",
+);
+release();
+await legacyRunning;
+assert.equal(amount().amount, 67890);
+assert.equal(amount().source, 'manual');
+assert.equal(amount().confirmedBy, 'corrector');
+assert.equal(amount().confirmedAt, 88);
+assert.equal(amount().details, null);
+assert.equal(amount().review, 'correção concorrente');
+assert.equal(job().status, 'cancelled');
+assert.equal(job().error_code, 'SUPERSEDED');
+assert.equal(
+  db.database.prepare('SELECT status FROM sale_receipt_payment_sync').get(),
+  undefined,
+);
+
+// Cancelled sales are not enqueued and their historical values stay untouched.
+seed();
+mode = 'ok';
+db.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=12345,receipt_amount_source='manual'; UPDATE sales SET status='cancelled'",
+);
 assert.equal(
   await processReceiptJob(db, files, 'http://isolated.test', clock),
   false,
 );
 assert.equal(amount().amount, 12345);
+assert.equal(amount().source, 'manual');
+assert.equal(job(), undefined);
+
 seed();
 db.database
   .prepare('UPDATE attachments SET receipt_details_json=?')
@@ -227,7 +352,7 @@ await processReceiptJob(db, files, 'http://isolated.test', clock);
 assert.equal(
   db.database.prepare('SELECT status FROM sale_receipt_payment_sync').get()
     .status,
-  'manual',
+  'pending',
 );
 db.close();
 console.log(

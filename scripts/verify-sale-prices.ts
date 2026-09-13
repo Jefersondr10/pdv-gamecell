@@ -30,23 +30,20 @@ const saleFixture = {
     3473000,
   ),
 } as SaleRecord;
-const applyFixture = (total: number, paid = 3473000) =>
+const applyFixture = (total: number) =>
   applySalePrices(saleFixture, {
     revision: 1,
     status: 'completed',
     productsTotalCents: total,
-    receivedTotalCents: paid,
-    receivedDifferenceCents: paid - total,
+    receivedTotalCents: 3473000,
+    receivedDifferenceCents: 3473000 - total,
     priceDifferenceCents: 0,
     items: [{ id: 'item', soldPriceCents: total }],
   });
-assert.equal(saleDisplayStatus(applyFixture(3465000)).key, 'none');
-assert.ok(
-  saleIssues(applyFixture(3465000)).some((issue) => issue.key === 'overpaid'),
-);
+assert.equal(saleDisplayStatus(applyFixture(3465000)).key, 'reconciled');
+assert.deepEqual(saleIssues(applyFixture(3465000)), []);
 assert.equal(saleIssues(applyFixture(3500000))[0].key, 'review');
-assert.equal(saleDisplayStatus(applyFixture(3465000, 3465000)).key, 'none');
-assert.equal(applyFixture(3500000).reconciliation.differenceCents, -8000);
+assert.equal(applyFixture(3500000).reconciliation.differenceCents, -35000);
 assert.equal(applyFixture(3500000).payments, saleFixture.payments);
 assert.equal(applyFixture(3500000).receipts, saleFixture.receipts);
 assert.equal(saleFixture.items[0].soldPriceCents, 3473000);

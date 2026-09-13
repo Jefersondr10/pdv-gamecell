@@ -7,6 +7,7 @@ import {
   resolvePermissions,
 } from '../lib/permissions.ts';
 import { matchesProductSearch } from '../lib/product-search.ts';
+import { attachmentReadPermissions } from '../lib/server/attachment-permissions.ts';
 
 assert.equal(new Set(ALL_PERMISSIONS).size, ALL_PERMISSIONS.length);
 for (const role of ['owner', 'admin', 'operator'] as const) {
@@ -78,6 +79,18 @@ assert.deepEqual(
 );
 assert.deepEqual(resolvePermissions('operator', '[]'), []);
 assert.deepEqual(resolvePermissions('admin', '[]'), []);
+const overviewOnly = {
+  role: 'operator' as const,
+  permissions: ['overview'] as const,
+};
+const mayReadAttachment = (kind: string) =>
+  (attachmentReadPermissions(kind) ?? []).some((permission) =>
+    can(overviewOnly, permission),
+  );
+assert.equal(mayReadAttachment('receipt'), true);
+assert.equal(mayReadAttachment('item_photo'), false);
+assert.equal(mayReadAttachment('entry_photo'), false);
+assert.equal(attachmentReadPermissions('unknown'), null);
 const product = {
   model: 'iPhone 17 Pro Max',
   color: 'Azul',

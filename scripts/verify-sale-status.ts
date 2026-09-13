@@ -20,8 +20,10 @@ const db = new SqliteDatabase(':memory:');
 db.database
   .exec(`CREATE TABLE sales (id TEXT, store_id TEXT, status TEXT, products_total_cents INTEGER, received_total_cents INTEGER, order_status_id TEXT, created_at INTEGER);
 CREATE TABLE sale_items (id TEXT, sale_id TEXT, store_id TEXT, sold_price_cents INTEGER);
-CREATE TABLE attachments (id TEXT, sale_id TEXT, store_id TEXT, sale_item_id TEXT, kind TEXT, receipt_amount_cents INTEGER,receipt_review_reason TEXT);
-CREATE TABLE receipt_ocr_jobs (attachment_id TEXT, status TEXT);`);
+CREATE TABLE attachments (id TEXT, sale_id TEXT, store_id TEXT, sale_item_id TEXT, kind TEXT, receipt_amount_cents INTEGER,receipt_review_reason TEXT,receipt_details_json TEXT);
+CREATE TABLE receipt_ocr_jobs (attachment_id TEXT, status TEXT);
+CREATE TABLE receipt_payment_links (attachment_id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT, payment_id TEXT, transaction_id TEXT, created_at INTEGER);
+CREATE TABLE audit_events (store_id TEXT, action TEXT, entity_id TEXT, details_json TEXT);`);
 db.database.exec(
   'CREATE TABLE payments (id TEXT, sale_id TEXT, store_id TEXT, method TEXT, amount_cents INTEGER)',
 );
@@ -157,10 +159,17 @@ for (const status of ['needs_review', 'done', 'cancelled', undefined])
 add('reconciled', (v) => {
   v.receipts[1].receiptOcrStatus = 'cancelled';
 });
-add('pending_payment', (v) => {
+const underpaid = add('review', (v) => {
+  v.receipts[1].receiptAmountCents = 3999;
   v.receivedTotalCents = 9999;
 });
+assert.deepEqual(
+  saleIssues(underpaid).map((issue) => issue.key),
+  ['review', 'pending_payment'],
+);
 add('overpaid', (v) => {
+  v.payments = [{ method: 'cash', amountCents: 10001 }];
+  v.receipts = [];
   v.receivedTotalCents = 10001;
 });
 add('missing_photo', (v) => {
@@ -187,7 +196,7 @@ const multiple = add('missing_price', (v) => {
 });
 assert.deepEqual(
   saleIssues(multiple).map((s) => s.key),
-  ['missing_price', 'pending_payment', 'missing_photo'],
+  ['missing_price', 'missing_receipt', 'pending_payment', 'missing_photo'],
 );
 const mixed = (v: Fixture) => {
   v.productsTotalCents = v.receivedTotalCents = 710000;
@@ -212,17 +221,25 @@ add('review', (v) => {
   mixed(v);
   v.receipts[0].receiptAmountCents = 409999;
 });
-add('pending_payment', (v) => {
+const mixedUnderpaid = add('review', (v) => {
   mixed(v);
   v.payments[1].amountCents = 200000;
   v.receivedTotalCents = 610000;
 });
-add('pending_payment', (v) => {
+assert.deepEqual(
+  saleIssues(mixedUnderpaid).map((issue) => issue.key),
+  ['review', 'pending_payment'],
+);
+const cashUnderpaid = add('missing_receipt', (v) => {
   mixed(v);
   v.payments = [{ method: 'cash', amountCents: 300000 }];
   v.receivedTotalCents = 300000;
   v.receipts = [];
 });
+assert.deepEqual(
+  saleIssues(cashUnderpaid).map((issue) => issue.key),
+  ['missing_receipt', 'pending_payment'],
+);
 for (const key of [
   ...SALE_CHECK_STATUSES.map((s) => s.key),
   'pending',
@@ -262,7 +279,7 @@ assert.deepEqual(
     ...repriced,
     reconciliation: deriveReceiptReconciliation(repriced.receipts, 11000),
   }).map((s) => s.key),
-  ['pending_payment'],
+  ['review', 'pending_payment'],
 );
 repriced.productsTotalCents = 10000;
 repriced.items[1].soldPriceCents = 4000;
@@ -290,7 +307,7 @@ const selected = {
 const withManual = { ...multiple, orderStatus: selected };
 assert.equal(saleDisplayStatus(withManual).label, selected.name);
 assert.equal(saleDisplayStatus(withManual).key, 'manual');
-assert.equal(saleIssues(withManual).length, 3);
+assert.equal(saleIssues(withManual).length, 4);
 const complete = {
   ...base(),
   orderStatus: selected,

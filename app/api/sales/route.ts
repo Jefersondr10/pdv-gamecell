@@ -34,7 +34,11 @@ import {
 } from '@/lib/server/receipt-values';
 import { queueSaleReceipts } from '@/lib/server/receipt-ocr-jobs';
 import { requestReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
-import { duplicateReceiptSql } from '@/lib/server/sale-status-sql';
+import {
+  duplicateReceiptSql,
+  effectiveReceiptReviewReasonSql,
+  linkedReceiptPaymentSql,
+} from '@/lib/server/sale-status-sql';
 import { saleReceiptIncome } from '@/lib/receipt-income';
 import { parseReceiptDocument } from '@/lib/receipt-document';
 import { parseSalesFilters, SALE_ALERT_SQL } from '@/lib/server/sales-filters';
@@ -1443,10 +1447,10 @@ async function hydrateSales(
                  receipt_amount_cents AS receiptAmountCents,
                  receipt_amount_source AS receiptAmountSource,
                  receipt_amount_confirmed_at AS receiptAmountConfirmedAt,
-                 receipt_details_json AS receiptDetailsJson, CASE WHEN kind='receipt' AND ${duplicateReceiptSql('attachments')} THEN 'Transação repetida em outro comprovante. Confira os anexos.' ELSE receipt_review_reason END AS receiptReviewReason,
-                 (SELECT rp.payment_id FROM receipt_payment_links rp WHERE rp.attachment_id=attachments.id AND rp.sale_id=attachments.sale_id AND rp.store_id=attachments.store_id) AS receiptPaymentId,
-                 (SELECT j.status FROM receipt_ocr_jobs j WHERE j.attachment_id = attachments.id) AS receiptOcrStatus
-         FROM attachments
+                 receipt_details_json AS receiptDetailsJson, CASE WHEN kind='receipt' AND ${duplicateReceiptSql('a')} THEN 'Transação repetida em outro comprovante. Confira os anexos.' ELSE ${effectiveReceiptReviewReasonSql('a')} END AS receiptReviewReason,
+                 ${linkedReceiptPaymentSql('a')} AS receiptPaymentId,
+                 (SELECT j.status FROM receipt_ocr_jobs j WHERE j.attachment_id = a.id) AS receiptOcrStatus
+         FROM attachments a
          WHERE store_id = ? AND sale_id IN (${placeholders})
          ORDER BY created_at, id`,
       )
@@ -1562,7 +1566,22 @@ function attachmentRecord(
               ? `***${doc.recipientDocument.slice(-4)}`
               : null,
           }
-        : null;
+        : file.receiptDetailsJson == null
+          ? null
+          : {
+              version: 1,
+              state: 'unknown',
+              blocked: true,
+              ambiguous: false,
+              automaticEligible: false,
+              payerName: null,
+              payerBank: null,
+              recipientName: null,
+              recipientBank: null,
+              recipientDocument: null,
+              transactionId: null,
+              paidAtText: null,
+            };
     })(),
     receiptReviewReason: file.receiptReviewReason ?? null,
     receiptPaymentId: file.receiptPaymentId ?? null,

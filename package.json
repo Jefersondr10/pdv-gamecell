@@ -42,7 +42,10 @@
     "test:sale-financial-summary": "node --experimental-transform-types scripts/verify-sale-financial-summary.ts",
     "test:stock-whatsapp": "node --experimental-strip-types scripts/verify-stock-whatsapp.ts",
     "test:receipt-amount": "node --experimental-strip-types scripts/verify-receipt-amount.ts",
-    "test:receipt-reconciliation": "node --experimental-strip-types scripts/verify-receipt-reconciliation.ts"
+    "test:receipt-reconciliation": "node --experimental-strip-types scripts/verify-receipt-reconciliation.ts",
+    "test:database-lifecycle": "node --experimental-strip-types scripts/verify-database-lifecycle.ts",
+    "test:receipt-polling": "node --experimental-strip-types scripts/verify-receipt-polling.ts",
+    "test:backup-health-race": "node --experimental-strip-types scripts/verify-backup-health-race.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",

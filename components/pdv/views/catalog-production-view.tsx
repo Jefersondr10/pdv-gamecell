@@ -2,7 +2,7 @@
 
 import { createOperationId } from '@/lib/client-operation-id';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { can } from '@/lib/permissions';
 import {
   Barcode,
@@ -45,6 +45,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { messageOf, requestJson } from '@/lib/client-api';
 import { displayCommercialCode } from '@/lib/commercial-code';
 import { productEditorPayload } from '@/lib/product-editor';
+import { clientEditorPayload } from '@/lib/client-editor';
 import type {
   BootstrapData,
   ClientRecord,
@@ -581,6 +582,7 @@ function ClientEditor({
   onClose: () => void;
 }) {
   const [operationId, setOperationId] = useState(createOperationId);
+  const baseline = useRef(client);
   const [values, setValues] = useState({
     name: client?.name ?? '',
     phone: client?.phone ?? '',
@@ -589,26 +591,52 @@ function ClientEditor({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const runClientAction = async (action: () => Promise<unknown>) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      await action();
+      await onChanged();
+      if (mountedRef.current) onClose();
+    } catch (caught) {
+      if (mountedRef.current) setError(messageOf(caught));
+    } finally {
+      savingRef.current = false;
+      if (mountedRef.current) setBusy(false);
+    }
+  };
   const set = (key: keyof typeof values, value: string) => {
+    if (savingRef.current) return;
     setOperationId(createOperationId());
     setValues((current) => ({ ...current, [key]: value }));
   };
   const toggleActive = async (active: boolean) => {
     if (!client) return;
-    await runAction(setBusy, setError, async () => {
-      await patchJson(`/api/clients/${client.id}`, csrfToken, { active });
-      await onChanged();
-      onClose();
-    });
+    await runClientAction(() =>
+      patchJson(`/api/clients/${client.id}`, csrfToken, { active }),
+    );
   };
   return (
     <EditorDialog
+      busy={busy}
       description={
         client
           ? 'Altere os dados usados nas próximas vendas.'
           : 'Cadastre os dados básicos do cliente.'
       }
-      onClose={onClose}
+      onClose={() => {
+        if (!savingRef.current) onClose();
+      }}
       title={client ? 'Editar cliente' : 'Novo cliente'}
     >
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -616,23 +644,28 @@ function ClientEditor({
         className="grid gap-3 sm:grid-cols-2"
         onSubmit={(event) => {
           event.preventDefault();
-          void runAction(setBusy, setError, async () => {
+          void runClientAction(async () => {
             if (client) {
-              await patchJson(`/api/clients/${client.id}`, csrfToken, values);
+              const payload = clientEditorPayload(values, baseline.current!);
+              if (Object.keys(payload).length)
+                await patchJson(
+                  `/api/clients/${client.id}`,
+                  csrfToken,
+                  payload,
+                );
             } else {
               await postJson('/api/clients', csrfToken, {
                 ...values,
                 operationId,
               });
             }
-            await onChanged();
-            onClose();
           });
         }}
       >
         <Field label="Nome">
           <Input
             className="h-11"
+            disabled={busy}
             onChange={(event) => set('name', event.target.value)}
             required
             value={values.name}
@@ -641,6 +674,7 @@ function ClientEditor({
         <Field label="Telefone (opcional)">
           <Input
             className="h-11"
+            disabled={busy}
             inputMode="tel"
             onChange={(event) => set('phone', event.target.value)}
             value={values.phone}
@@ -649,6 +683,7 @@ function ClientEditor({
         <Field label="E-mail (opcional)">
           <Input
             className="h-11"
+            disabled={busy}
             onChange={(event) => set('email', event.target.value)}
             type="email"
             value={values.email}
@@ -657,6 +692,7 @@ function ClientEditor({
         <div className="sm:col-span-2">
           <Field label="Observação (opcional)">
             <Textarea
+              disabled={busy}
               onChange={(event) => set('notes', event.target.value)}
               value={values.notes}
             />
@@ -667,7 +703,7 @@ function ClientEditor({
           disabled={busy}
           type="submit"
         >
-          Salvar cliente
+          {busy ? 'Salvando…' : 'Salvar cliente'}
         </Button>
       </form>
       {client && (
@@ -695,6 +731,7 @@ export function ProductEditor({
   onStatusChanged: () => Promise<void>;
   onClose: () => void;
 }) {
+  const baseline = useRef(product);
   const [values, setValues] = useState({
     model: product?.model ?? '',
     color: product?.color ?? '',
@@ -715,8 +752,32 @@ export function ProductEditor({
   const [removeCodeId, setRemoveCodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const set = (key: keyof typeof values, value: string) =>
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const runProductAction = async (action: () => Promise<void>) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      await action();
+    } catch (caught) {
+      if (mountedRef.current) setError(messageOf(caught));
+    } finally {
+      savingRef.current = false;
+      if (mountedRef.current) setBusy(false);
+    }
+  };
+  const set = (key: keyof typeof values, value: string) => {
+    if (savingRef.current) return;
     setValues((current) => ({ ...current, [key]: value }));
+  };
   return (
     <EditorDialog
       busy={busy}
@@ -725,7 +786,9 @@ export function ProductEditor({
           ? 'Edite a variação, o preço e os códigos reconhecidos pelo leitor.'
           : 'Cadastre uma variação com pelo menos um UPC ou EAN.'
       }
-      onClose={onClose}
+      onClose={() => {
+        if (!savingRef.current) onClose();
+      }}
       title={product ? 'Editar produto' : 'Novo produto'}
       wide
     >
@@ -747,7 +810,10 @@ export function ProductEditor({
             csrfToken={csrfToken}
             onChanged={onStatusChanged}
             disabled={busy}
-            onBusyChange={setBusy}
+            onBusyChange={(nextBusy) => {
+              savingRef.current = nextBusy;
+              setBusy(nextBusy);
+            }}
           />
         </div>
       )}
@@ -755,22 +821,30 @@ export function ProductEditor({
         className="grid gap-3 sm:grid-cols-2"
         onSubmit={(event) => {
           event.preventDefault();
-          void runAction(setBusy, setError, async () => {
+          void runProductAction(async () => {
             const payload = productEditorPayload(
               values,
               newCode,
               newCodeMarket,
+              baseline.current,
             );
             if (product) {
+              if (!Object.keys(payload).length) {
+                await onChanged();
+                if (mountedRef.current) onClose();
+                return;
+              }
               const result = (await patchJson(
                 `/api/products/${product.id}`,
                 csrfToken,
                 payload,
               )) as { code?: ProductRecord['codes'][number] };
-              if (result.code)
+              if (result.code && mountedRef.current)
                 setSavedCodes((current) => [...current, result.code!]);
-              setNewCode('');
-              setNewCodeMarket('');
+              if (mountedRef.current) {
+                setNewCode('');
+                setNewCodeMarket('');
+              }
             } else {
               await postJson('/api/products', csrfToken, {
                 ...payload,
@@ -779,11 +853,12 @@ export function ProductEditor({
             }
             try {
               await onChanged();
-              onClose();
+              if (mountedRef.current) onClose();
             } catch {
-              setError(
-                'O produto foi salvo, mas a lista não atualizou. Reabra Cadastros para ver os dados atuais.',
-              );
+              if (mountedRef.current)
+                setError(
+                  'O produto foi salvo, mas a lista não atualizou. Reabra Cadastros para ver os dados atuais.',
+                );
             }
           });
         }}
@@ -791,6 +866,7 @@ export function ProductEditor({
         <Field label="Modelo">
           <Input
             className="h-11"
+            disabled={busy}
             onChange={(event) => set('model', event.target.value)}
             required
             value={values.model}
@@ -805,6 +881,7 @@ export function ProductEditor({
             />
             <Input
               className="h-11 pl-11"
+              disabled={busy}
               list="apple-product-colors"
               onChange={(event) => set('color', event.target.value)}
               required
@@ -822,6 +899,7 @@ export function ProductEditor({
         <Field label="Memória">
           <NativeSelect
             className="h-11 w-full [&_select]:h-11"
+            disabled={busy}
             onChange={(event) => set('memory', event.target.value)}
             value={values.memory}
           >
@@ -834,6 +912,7 @@ export function ProductEditor({
         </Field>
         <Field label="Preço padrão">
           <MoneyInput
+            disabled={busy}
             onChange={(value) => set('price', value)}
             value={values.price}
           />
@@ -842,6 +921,7 @@ export function ProductEditor({
           <div className="sm:col-span-2">
             <Field label="UPC / EAN (um por linha ou separado por vírgula)">
               <Textarea
+                disabled={busy}
                 inputMode="numeric"
                 onChange={(event) => set('codes', event.target.value)}
                 placeholder="Digite os 12 números impressos na caixa"
@@ -904,6 +984,7 @@ export function ProductEditor({
                 </p>
                 <div className="mt-2 flex justify-end gap-2">
                   <Button
+                    disabled={busy}
                     onClick={() => setRemoveCodeId(null)}
                     size="sm"
                     type="button"
@@ -914,22 +995,25 @@ export function ProductEditor({
                   <Button
                     disabled={busy}
                     onClick={() =>
-                      void runAction(setBusy, setError, async () => {
+                      void runProductAction(async () => {
                         await deleteJson(
                           `/api/products/${product.id}/codes/${removeCodeId}`,
                           csrfToken,
                         );
-                        setRemovedCodes((current) => [
-                          ...current,
-                          removeCodeId,
-                        ]);
-                        setRemoveCodeId(null);
+                        if (mountedRef.current) {
+                          setRemovedCodes((current) => [
+                            ...current,
+                            removeCodeId,
+                          ]);
+                          setRemoveCodeId(null);
+                        }
                         try {
                           await onChanged();
                         } catch {
-                          setError(
-                            'Código excluído. A lista não atualizou; reabra Cadastros para conferir.',
-                          );
+                          if (mountedRef.current)
+                            setError(
+                              'Código excluído. A lista não atualizou; reabra Cadastros para conferir.',
+                            );
                         }
                       })
                     }
@@ -958,6 +1042,7 @@ export function ProductEditor({
               <NativeSelect
                 aria-label="Mercado do código"
                 className="h-11 w-full [&_select]:h-11"
+                disabled={busy}
                 onChange={(event) => setNewCodeMarket(event.target.value)}
                 value={newCodeMarket}
               >
@@ -977,7 +1062,7 @@ export function ProductEditor({
                 }
                 type="button"
                 onClick={() => {
-                  void runAction(setBusy, setError, async () => {
+                  void runProductAction(async () => {
                     const result = (await patchJson(
                       `/api/products/${product.id}`,
                       csrfToken,
@@ -988,18 +1073,21 @@ export function ProductEditor({
                         },
                       },
                     )) as { code: ProductRecord['codes'][number] };
-                    setSavedCodes((current) => [...current, result.code]);
-                    setNewCode('');
-                    setNewCodeMarket('');
-                    setCodeSaved(
-                      'Código salvo. Já está disponível para leitura.',
-                    );
+                    if (mountedRef.current) {
+                      setSavedCodes((current) => [...current, result.code]);
+                      setNewCode('');
+                      setNewCodeMarket('');
+                      setCodeSaved(
+                        'Código salvo. Já está disponível para leitura.',
+                      );
+                    }
                     try {
                       await onChanged();
                     } catch {
-                      setError(
-                        'Código salvo. A lista não atualizou; reabra Cadastros para conferir.',
-                      );
+                      if (mountedRef.current)
+                        setError(
+                          'Código salvo. A lista não atualizou; reabra Cadastros para conferir.',
+                        );
                     }
                   });
                 }}
@@ -1400,9 +1488,11 @@ function Field({
 function MoneyInput({
   value,
   onChange,
+  disabled = false,
 }: {
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="relative">
@@ -1411,6 +1501,7 @@ function MoneyInput({
       </span>
       <Input
         className="h-11 pl-10 text-right font-bold"
+        disabled={disabled}
         inputMode="decimal"
         onChange={(event) => onChange(event.target.value)}
         placeholder="0,00"

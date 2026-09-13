@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { messageOf, requestJson } from '@/lib/client-api';
+import { loadEntryHistoryPages } from '@/lib/entry-history-refresh';
 import type { EntriesPage, EntryRecord } from '@/lib/pdv-types';
 
 export function EntryHistoryView() {
@@ -41,10 +42,14 @@ export function EntryHistoryView() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const requestIdRef = useRef(0);
+  const loadedCountRef = useRef(0);
+  const inFlightRef = useRef(false);
   const loadEntries = useCallback(
-    async (cursor: string | null = null, append = false) => {
+    async (cursor: string | null = null, append = false, preserve = false) => {
+      if (preserve && inFlightRef.current) return;
       const requestId = ++requestIdRef.current;
-      setLoading(true);
+      inFlightRef.current = true;
+      if (!preserve) setLoading(true);
       setLoadError('');
       try {
         const params = new URLSearchParams({ limit: '50' });
@@ -54,37 +59,61 @@ export function EntryHistoryView() {
           params.set('from', String(from));
           params.set('to', String(to));
         }
-        if (cursor) params.set('cursor', cursor);
-        const next = await requestJson<EntriesPage>(
-          `/api/entries?${params.toString()}`,
+        const next = await loadEntryHistoryPages(
+          (nextCursor) => {
+            if (nextCursor) params.set('cursor', nextCursor);
+            else params.delete('cursor');
+            return requestJson<EntriesPage>(
+              `/api/entries?${params.toString()}`,
+            );
+          },
+          preserve ? Math.max(50, loadedCountRef.current) : 50,
+          cursor,
+          () => requestId === requestIdRef.current,
         );
-        if (requestId !== requestIdRef.current) return;
+        if (!next || requestId !== requestIdRef.current) return;
+        loadedCountRef.current = append
+          ? loadedCountRef.current + next.items.length
+          : next.items.length;
         setPage((current) =>
           append ? { ...next, items: [...current.items, ...next.items] } : next,
         );
       } catch (error) {
         if (requestId === requestIdRef.current) setLoadError(messageOf(error));
       } finally {
-        if (requestId === requestIdRef.current) setLoading(false);
+        if (requestId === requestIdRef.current) {
+          inFlightRef.current = false;
+          setLoading(false);
+        }
       }
     },
     [day, query],
   );
 
   useEffect(() => {
+    loadedCountRef.current = 0;
+    const cancelPending = () => {
+      ++requestIdRef.current;
+      inFlightRef.current = false;
+    };
     const timer = window.setTimeout(() => void loadEntries(), 250);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelPending();
+      window.clearTimeout(timer);
+    };
   }, [loadEntries]);
 
   useEffect(() => {
     const refreshIfVisible = () => {
-      if (!document.hidden) void loadEntries();
+      if (!document.hidden) void loadEntries(null, false, true);
     };
     const interval = window.setInterval(refreshIfVisible, 60_000);
     document.addEventListener('visibilitychange', refreshIfVisible);
+    window.addEventListener('online', refreshIfVisible);
     return () => {
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', refreshIfVisible);
+      window.removeEventListener('online', refreshIfVisible);
     };
   }, [loadEntries]);
 
@@ -131,7 +160,19 @@ export function EntryHistoryView() {
           </div>
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 overscroll-contain">
-          {loadError ? (
+          {loadError && page.items.length > 0 && (
+            <div className="border-b bg-destructive/5 p-3 text-sm" role="alert">
+              <p>{loadError} As entradas já carregadas foram mantidas.</p>
+              <Button
+                className="mt-2"
+                variant="outline"
+                onClick={() => void loadEntries(null, false, true)}
+              >
+                Atualizar novamente
+              </Button>
+            </div>
+          )}
+          {loadError && page.items.length === 0 ? (
             <div
               className="grid h-full min-h-52 place-items-center p-6 text-center"
               role="alert"

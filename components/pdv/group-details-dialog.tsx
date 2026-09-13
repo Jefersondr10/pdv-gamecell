@@ -91,7 +91,15 @@ export function GroupDetailsDialog({
       setPage({ items: [], nextCursor: null });
       void load();
     }, 0);
-    return () => window.clearTimeout(timer);
+    const refresh = () => {
+      if (selection) void load();
+    };
+    window.addEventListener('pdv:sales-changed', refresh);
+    return () => {
+      window.clearTimeout(timer);
+      requestIdRef.current += 1;
+      window.removeEventListener('pdv:sales-changed', refresh);
+    };
   }, [load, selection]);
 
   return (
