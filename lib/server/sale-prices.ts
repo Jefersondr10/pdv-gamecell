@@ -6,6 +6,7 @@ import {
   stringField,
 } from './http.ts';
 import type { SalePrices } from '../sale-prices.ts';
+import { SALE_RECEIVED_TOTAL_SQL } from './sale-status-sql.ts';
 
 const ACTION = 'sale.prices_changed';
 type Scope = {
@@ -29,7 +30,8 @@ export async function readSalePrices(
   authorize(scope);
   const sale = await db
     .prepare(`SELECT status, products_total_cents AS productsTotalCents,
-    received_total_cents AS receivedTotalCents, received_difference_cents AS receivedDifferenceCents,
+    ${SALE_RECEIVED_TOTAL_SQL} AS receivedTotalCents,
+    (${SALE_RECEIVED_TOTAL_SQL} - s.products_total_cents) AS receivedDifferenceCents,
     price_difference_cents AS priceDifferenceCents,
     (SELECT COUNT(*) FROM audit_events e WHERE e.store_id=s.store_id AND e.entity_id=s.id AND e.action=?) AS revision
     FROM sales s WHERE s.id=? AND s.store_id=?`)
@@ -190,12 +192,12 @@ export async function changeSalePrices(
         .prepare(`INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
         SELECT ?,s.store_id,?,?,'sale',s.id,
           json_object('fingerprint',?,'before',json_object('revision',?,
-            'totalCents',s.products_total_cents,'receivedTotalCents',s.received_total_cents,
-            'receivedDifferenceCents',s.received_difference_cents,'referenceTotalCents',s.reference_total_cents,
+            'totalCents',s.products_total_cents,'receivedTotalCents',${SALE_RECEIVED_TOTAL_SQL},
+            'receivedDifferenceCents',${SALE_RECEIVED_TOTAL_SQL}-s.products_total_cents,'referenceTotalCents',s.reference_total_cents,
             'priceDifferenceCents',s.price_difference_cents,
             'items',json((SELECT json_group_array(json_object('id',si.id,'serial',si.serial,'soldPriceCents',si.sold_price_cents,'referencePriceCents',si.reference_price_cents)) FROM sale_items si WHERE si.sale_id=s.id AND si.store_id=s.store_id))),
-            'after',json_object('totalCents',?,'receivedTotalCents',s.received_total_cents,
-            'receivedDifferenceCents',s.received_total_cents-?,'referenceTotalCents',s.reference_total_cents,
+            'after',json_object('totalCents',?,'receivedTotalCents',${SALE_RECEIVED_TOTAL_SQL},
+            'receivedDifferenceCents',${SALE_RECEIVED_TOTAL_SQL}-?,'referenceTotalCents',s.reference_total_cents,
             'priceDifferenceCents',(SELECT SUM(CASE WHEN si.reference_price_cents>0 THEN json_extract(j.value,'$.priceCents')-si.reference_price_cents ELSE 0 END) FROM sale_items si JOIN json_each(?) j ON json_extract(j.value,'$.id')=si.id WHERE si.sale_id=s.id AND si.store_id=s.store_id),
             'items',json((SELECT json_group_array(json_object('id',si.id,'serial',si.serial,'soldPriceCents',json_extract(j.value,'$.priceCents'),'referencePriceCents',si.reference_price_cents)) FROM sale_items si JOIN json_each(?) j ON json_extract(j.value,'$.id')=si.id WHERE si.sale_id=s.id AND si.store_id=s.store_id)))),?
         FROM sales s WHERE s.id=? AND s.store_id=? AND s.status='completed'
@@ -233,11 +235,12 @@ export async function changeSalePrices(
           scope.storeId,
         ),
       db
-        .prepare(`UPDATE sales SET
-        products_total_cents=(SELECT SUM(sold_price_cents) FROM sale_items WHERE sale_id=sales.id AND store_id=sales.store_id),
-        received_difference_cents=received_total_cents-(SELECT SUM(sold_price_cents) FROM sale_items WHERE sale_id=sales.id AND store_id=sales.store_id),
-        price_difference_cents=(SELECT COALESCE(SUM(CASE WHEN reference_price_cents>0 THEN sold_price_cents-reference_price_cents ELSE 0 END),0) FROM sale_items WHERE sale_id=sales.id AND store_id=sales.store_id)
-        WHERE id=? AND store_id=? AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND store_id=?)`)
+        .prepare(`UPDATE sales AS s SET
+        products_total_cents=(SELECT SUM(sold_price_cents) FROM sale_items WHERE sale_id=s.id AND store_id=s.store_id),
+        received_total_cents=${SALE_RECEIVED_TOTAL_SQL},
+        received_difference_cents=${SALE_RECEIVED_TOTAL_SQL}-(SELECT SUM(sold_price_cents) FROM sale_items WHERE sale_id=s.id AND store_id=s.store_id),
+        price_difference_cents=(SELECT COALESCE(SUM(CASE WHEN reference_price_cents>0 THEN sold_price_cents-reference_price_cents ELSE 0 END),0) FROM sale_items WHERE sale_id=s.id AND store_id=s.store_id)
+        WHERE s.id=? AND s.store_id=? AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND store_id=?)`)
         .bind(scope.saleId, scope.storeId, operationId, scope.storeId),
     ]);
   } catch (error) {

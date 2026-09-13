@@ -46,6 +46,7 @@ for (const heading of [
   const text = receipt(heading);
   const result = extractReceiptDocument(text);
   assert.equal(income(text), 1394000, heading);
+  assert.equal(result.details.automaticEligible, true, heading);
   assert.equal(result.details.recipientName, 'Loja fictícia');
   assert.equal(result.details.recipientBank, '999 - Banco recebedor de teste');
   assert.equal(result.details.recipientDocument, '12345678000199');

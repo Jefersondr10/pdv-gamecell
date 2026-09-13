@@ -125,7 +125,8 @@ export async function POST(
       );
     }
     const productsTotalCents = Number(sale.productsTotalCents);
-    const previousReceivedCents = Number(sale.receivedTotalCents);
+    const previousStoredReceivedCents = Number(sale.receivedTotalCents);
+    const previousReceivedCents = Number(sale.effectiveReceivedCents);
     const pendingCents =
       productsTotalCents - Number(sale.effectiveReceivedCents);
     if (pendingCents <= 0) {
@@ -199,29 +200,27 @@ export async function POST(
             pixAccountId,
             saleId,
             storeId,
-            previousReceivedCents,
+            previousStoredReceivedCents,
             amountCents,
             method,
           ),
         db
           .prepare(
-            `UPDATE sales
-             SET received_total_cents = received_total_cents + ?,
+            `UPDATE sales AS s
+             SET received_total_cents = ${SALE_RECEIVED_TOTAL_SQL},
                  received_difference_cents =
-                   (received_total_cents + ?) - products_total_cents
-             WHERE id = ? AND store_id = ? AND status = 'completed'
-               AND received_total_cents = ?
+                   ${SALE_RECEIVED_TOTAL_SQL} - s.products_total_cents
+             WHERE s.id = ? AND s.store_id = ? AND s.status = 'completed'
+               AND s.received_total_cents = ?
                AND EXISTS (
                  SELECT 1 FROM payments
-                 WHERE id = ? AND sale_id = sales.id AND store_id = sales.store_id
+                 WHERE id = ? AND sale_id = s.id AND store_id = s.store_id
                )`,
           )
           .bind(
-            amountCents,
-            amountCents,
             saleId,
             storeId,
-            previousReceivedCents,
+            previousStoredReceivedCents,
             paymentId,
           ),
         db

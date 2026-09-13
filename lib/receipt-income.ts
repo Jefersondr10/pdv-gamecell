@@ -1,4 +1,5 @@
 import type { ReceiptDocument } from './receipt-document.ts';
+import { hasEffectiveReceiptReviewReason } from './receipt-review-reasons.ts';
 
 type Receipt = {
   receiptAmountCents: number | null;
@@ -17,11 +18,24 @@ type Sale = {
 export function receiptIncomeCents(receipt: Receipt) {
   const amount = receipt.receiptAmountCents;
   const doc = receipt.receiptDetails;
-  if (receipt.receiptReviewReason?.startsWith('Transação repetida')) return 0;
-  if (doc && (doc.blocked || doc.ambiguous || doc.state !== 'completed'))
+  const acceptedEvidence = Boolean(
+    Number.isSafeInteger(amount) &&
+      amount! > 0 &&
+      (!doc ||
+        (!doc.blocked &&
+          !doc.ambiguous &&
+          doc.state === 'completed' &&
+          (doc.automaticEligible || Boolean(receipt.receiptPaymentId)))),
+  );
+  if (
+    !acceptedEvidence ||
+    hasEffectiveReceiptReviewReason(
+      receipt.receiptReviewReason,
+      acceptedEvidence,
+    )
+  )
     return 0;
-  if (doc && !doc.automaticEligible && !receipt.receiptPaymentId) return 0;
-  return Number.isSafeInteger(amount) && amount! > 0 ? amount! : 0;
+  return amount!;
 }
 
 export function saleReceiptIncome(sale: Sale) {

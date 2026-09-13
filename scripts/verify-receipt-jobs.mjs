@@ -9,7 +9,9 @@ import {
 
 const db = new SqliteDatabase(':memory:');
 db.database.exec(
-  `CREATE TABLE sales(id TEXT PRIMARY KEY, store_id TEXT, status TEXT); CREATE TABLE attachments(id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT REFERENCES sales(id), kind TEXT, r2_key TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_by TEXT, receipt_amount_confirmed_at INTEGER,receipt_details_json TEXT,receipt_review_reason TEXT,created_by TEXT DEFAULT 'actor');
+  `CREATE TABLE sales(id TEXT PRIMARY KEY, store_id TEXT, status TEXT, products_total_cents INTEGER NOT NULL DEFAULT 284000, received_total_cents INTEGER NOT NULL DEFAULT 0, received_difference_cents INTEGER NOT NULL DEFAULT -284000); CREATE TABLE attachments(id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT REFERENCES sales(id), kind TEXT, r2_key TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_by TEXT, receipt_amount_confirmed_at INTEGER,receipt_details_json TEXT,receipt_review_reason TEXT,created_by TEXT DEFAULT 'actor');
+  CREATE TABLE payments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,method TEXT,amount_cents INTEGER);
+  CREATE TABLE receipt_payment_links(attachment_id TEXT,store_id TEXT,sale_id TEXT,payment_id TEXT,transaction_id TEXT);
   CREATE TABLE sale_receipt_payment_sync(sale_id TEXT PRIMARY KEY,store_id TEXT,request_id TEXT,requested_by TEXT,target_payment_id TEXT,status TEXT,updated_at INTEGER);
   CREATE TABLE audit_events(id TEXT PRIMARY KEY,store_id TEXT,actor_user_id TEXT,action TEXT,entity_type TEXT,entity_id TEXT,details_json TEXT,created_at INTEGER);`,
 );
@@ -55,7 +57,7 @@ const seed = () => {
     'DELETE FROM attachments; DELETE FROM sales; DELETE FROM sale_receipt_payment_sync; DELETE FROM audit_events;',
   );
   db.database
-    .prepare('INSERT INTO sales VALUES (?, ?, ?)')
+    .prepare('INSERT INTO sales(id,store_id,status) VALUES (?, ?, ?)')
     .run('sale', 'store', 'completed');
   db.database
     .prepare(

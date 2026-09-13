@@ -20,7 +20,10 @@ COPY --from=builder --chown=node:node /app/lib/server/file-deletion.ts ./lib/ser
 COPY --from=builder --chown=node:node /app/lib/server/receipt-payment-sync.ts ./lib/server/receipt-payment-sync.ts
 COPY --from=builder --chown=node:node /app/lib/server/receipt-auto-payment.ts ./lib/server/receipt-auto-payment.ts
 COPY --from=builder --chown=node:node /app/lib/server/receipt-evidence-safety.ts ./lib/server/receipt-evidence-safety.ts
+COPY --from=builder --chown=node:node /app/lib/server/sale-received-totals.ts ./lib/server/sale-received-totals.ts
+COPY --from=builder --chown=node:node /app/lib/server/sale-status-sql.ts ./lib/server/sale-status-sql.ts
 COPY --from=builder --chown=node:node /app/lib/receipt-document.ts /app/lib/receipt-amount.ts /app/lib/money.ts /app/lib/receipt-reconciliation.ts ./lib/
+COPY --from=builder --chown=node:node /app/lib/receipt-review-reasons.ts /app/lib/receipt-income.ts /app/lib/sale-display-status.ts /app/lib/order-status-names.ts ./lib/
 COPY --from=builder --chown=node:node /app/lib/permissions.ts ./lib/permissions.ts
 COPY --from=builder --chown=node:node /app/drizzle/0014_receipt_payment_sync.sql ./drizzle/0014_receipt_payment_sync.sql
 COPY --from=builder --chown=node:node /app/drizzle/0015_receipt_identified_payments.sql ./drizzle/0015_receipt_identified_payments.sql

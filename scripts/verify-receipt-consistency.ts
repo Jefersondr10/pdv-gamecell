@@ -6,6 +6,7 @@ import {
   type ReceiptDocument,
 } from '../lib/receipt-document.ts';
 import { saleReceiptIncome } from '../lib/receipt-income.ts';
+import { DERIVED_RECEIPT_REVIEW_REASONS } from '../lib/receipt-review-reasons.ts';
 import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
 import { saleIssues } from '../lib/sale-display-status.ts';
 import { cleanupResolvedReceiptReviews } from '../lib/server/receipt-auto-payment.ts';
@@ -314,6 +315,31 @@ adapter.database.exec(
   "DELETE FROM attachments WHERE id='duplicate'; UPDATE sale_receipt_payment_sync SET status='manual'",
 );
 assert.deepEqual({ ...flags() }, { received: 710000, review: 0, reading: 0 });
+const obsoleteReason = adapter.database
+  .prepare(
+    "SELECT receipt_review_reason AS reason FROM attachments WHERE id='receipt'",
+  )
+  .get()!.reason as string;
+assert.ok(
+  DERIVED_RECEIPT_REVIEW_REASONS.some(
+    (candidate) => candidate === obsoleteReason,
+  ),
+);
+assert.equal(
+  saleReceiptIncome({
+    productsTotalCents: 710000,
+    payments: [{ method: 'cash', amountCents: 300000 }],
+    receipts: [
+      {
+        receiptAmountCents: 410000,
+        receiptDetails: validDocument,
+        receiptReviewReason: obsoleteReason,
+      },
+    ],
+  }).receivedTotalCents,
+  710000,
+  'TS also ignores an obsolete derived warning once evidence is valid',
+);
 assert.equal(
   adapter.database
     .prepare(
@@ -366,6 +392,22 @@ assert.equal(
   manual,
 );
 assert.equal(flags().review, 1);
+assert.equal(flags().received, 300000);
+assert.equal(
+  saleReceiptIncome({
+    productsTotalCents: 710000,
+    payments: [{ method: 'cash', amountCents: 300000 }],
+    receipts: [
+      {
+        receiptAmountCents: 410000,
+        receiptDetails: validDocument,
+        receiptReviewReason: manual,
+      },
+    ],
+  }).receivedTotalCents,
+  300000,
+  'TS and SQL both exclude a genuine manual financial hold',
+);
 adapter.database
   .prepare(
     'UPDATE attachments SET receipt_details_json=?,receipt_review_reason=?',

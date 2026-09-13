@@ -2,7 +2,7 @@ import { can, type PermissionSubject } from '../permissions.ts';
 import { HttpError } from './http.ts';
 import { cleanDeletedFile } from './file-deletion.ts';
 import { cleanupResolvedReceiptReviews } from './receipt-auto-payment.ts';
-import { SALE_RECEIVED_TOTAL_SQL } from './sale-status-sql.ts';
+import { refreshStoreReceivedTotals } from './sale-received-totals.ts';
 
 type DeleteInput = {
   operationId: string;
@@ -116,20 +116,11 @@ export async function deleteSaleReceipt(
       ),
   ];
   const committedTotalRepairStatement = () =>
-    db
-      .prepare(`UPDATE sales AS s SET
-        received_total_cents = ${SALE_RECEIVED_TOTAL_SQL},
-        received_difference_cents = ${SALE_RECEIVED_TOTAL_SQL} - s.products_total_cents
-      WHERE s.id = ? AND s.store_id = ?
-      AND EXISTS (SELECT 1 FROM audit_events WHERE id = ? AND store_id = ?
-        AND action = 'sale.receipt_deleted' AND entity_id = ?)`)
-      .bind(
-        saleId,
-        storeId,
-        operationId,
-        storeId,
-        saleId,
-      );
+    refreshStoreReceivedTotals(db, storeId, {
+      auditId: operationId,
+      auditAction: 'sale.receipt_deleted',
+      auditEntityId: saleId,
+    });
   const repairCommittedDeletion = async () => {
     await db.batch([
       ...committedPaymentRepairStatements(),

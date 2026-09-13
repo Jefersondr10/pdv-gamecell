@@ -238,10 +238,10 @@ export async function editSalePayments(
             ),
         ),
         db
-          .prepare(`UPDATE sales SET received_total_cents = (SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE sale_id = ? AND store_id = ?),
-          received_difference_cents = (SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE sale_id = ? AND store_id = ?) - products_total_cents
-          WHERE id = ? AND store_id = ?`)
-          .bind(saleId, storeId, saleId, storeId, saleId, storeId),
+          .prepare(`UPDATE sales AS s SET received_total_cents = ${SALE_RECEIVED_TOTAL_SQL},
+          received_difference_cents = ${SALE_RECEIVED_TOTAL_SQL} - s.products_total_cents
+          WHERE s.id = ? AND s.store_id = ?`)
+          .bind(saleId, storeId),
       ]);
     } catch (error) {
       if (await readReplay()) return response(true);

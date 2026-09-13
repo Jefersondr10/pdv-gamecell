@@ -1,6 +1,7 @@
 import { can, type PermissionSubject } from '../permissions.ts';
 import { HttpError } from './http.ts';
 import { requestReceiptPaymentSync } from './receipt-payment-sync.ts';
+import { refreshStoreReceivedTotals } from './sale-received-totals.ts';
 
 const ACTION = 'sale.legacy_receipts_reread';
 // Original, manually entered Pix rows are deliberately retained in history.
@@ -126,6 +127,11 @@ export async function queueLegacyReceiptReviews(
             attempts=0,next_attempt_at=excluded.next_attempt_at,lease_token=NULL,lease_until=NULL,error_code=NULL,confidence=NULL,updated_at=excluded.updated_at`)
             .bind(receipt.id, now, now, now),
         ]),
+        refreshStoreReceivedTotals(db, scope.storeId, {
+          auditId: operationId,
+          auditAction: ACTION,
+          auditEntityId: sale.id,
+        }),
         ...requestReceiptPaymentSync(
           db,
           { ...scope, saleId: sale.id },

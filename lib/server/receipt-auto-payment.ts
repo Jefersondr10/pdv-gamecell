@@ -15,6 +15,7 @@ import {
   invalidReceiptDocumentSql,
   linkedReceiptPaymentSql,
 } from './sale-status-sql.ts';
+import { refreshStoreReceivedTotals } from './sale-received-totals.ts';
 
 type State = NonNullable<Awaited<ReturnType<typeof readReceiptPaymentSync>>>;
 type Actor = { role: string; permissionsJson: string | null };
@@ -118,6 +119,11 @@ export async function settleAutomaticReceiptPayments(
             `UPDATE sale_receipt_payment_sync SET status='review',updated_at=? WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending'`,
           )
           .bind(Date.now(), saleId, storeId, request.requestId),
+        refreshStoreReceivedTotals(db, storeId, {
+          auditId: `receipt-review:${request.requestId}`,
+          auditAction: 'sale.receipt_review',
+          auditEntityId: saleId,
+        }),
       ]);
     } catch (error) {
       if (
@@ -288,6 +294,12 @@ export async function settleAutomaticReceiptPayments(
             "UPDATE attachments SET receipt_review_reason=NULL WHERE sale_id=? AND store_id=? AND kind='receipt'",
           )
           .bind(saleId, storeId),
+        refreshStoreReceivedTotals(db, storeId, {
+          auditId,
+          auditAction: 'sale.receipts_verified',
+          auditEntityId: saleId,
+          auditDetails: details,
+        }),
         db
           .prepare(
             "UPDATE sale_receipt_payment_sync SET status='applied',updated_at=? WHERE sale_id=? AND store_id=? AND request_id=?",
@@ -507,23 +519,16 @@ export async function settleAutomaticReceiptPayments(
   statements.push(
     db
       .prepare(
-        'UPDATE sales SET received_total_cents=?,received_difference_cents=?-products_total_cents WHERE id=? AND store_id=?',
-      )
-      .bind(received, received, saleId, storeId),
-  );
-  statements.push(
-    db
-      .prepare(
-        `UPDATE sales SET received_total_cents=CASE WHEN (SELECT SUM(amount_cents) FROM payments WHERE sale_id=? AND store_id=?)=? THEN received_total_cents ELSE NULL END WHERE id=? AND store_id=?`,
-      )
-      .bind(saleId, storeId, received, saleId, storeId),
-  );
-  statements.push(
-    db
-      .prepare(
         "UPDATE attachments SET receipt_review_reason=NULL WHERE sale_id=? AND store_id=? AND kind='receipt'",
       )
       .bind(saleId, storeId),
+  );
+  statements.push(
+    refreshStoreReceivedTotals(db, storeId, {
+      auditId,
+      auditAction: 'sale.payment_from_receipts',
+      auditEntityId: saleId,
+    }),
   );
   statements.push(
     db

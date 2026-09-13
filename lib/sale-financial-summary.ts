@@ -1,5 +1,5 @@
 import { saleDisplayStatus } from './sale-display-status.ts';
-import { saleReceiptIncome } from './receipt-income.ts';
+import { receiptIncomeCents, saleReceiptIncome } from './receipt-income.ts';
 import { receiptTargetLabel } from './receipt-reconciliation.ts';
 
 type SummarySale = Parameters<typeof saleDisplayStatus>[0];
@@ -13,25 +13,11 @@ export function saleFinancialSummary(sale: SummarySale) {
     saleReceiptIncome(sale);
   const reconciled = saleDisplayStatus(sale).key === 'reconciled';
   const cancelled = sale.status === 'cancelled';
+  const receiptAmounts = sale.receipts.map(receiptIncomeCents);
   const completeReceipts =
-    sale.receipts.length > 0 &&
-    sale.receipts.every(
-      (receipt) =>
-        Number.isSafeInteger(receipt.receiptAmountCents) &&
-        receipt.receiptAmountCents! > 0 &&
-        !receipt.receiptReviewReason &&
-        (!receipt.receiptDetails ||
-          (!receipt.receiptDetails.blocked &&
-            !receipt.receiptDetails.ambiguous &&
-            receipt.receiptDetails.state === 'completed' &&
-            (receipt.receiptDetails.automaticEligible ||
-              Boolean(receipt.receiptPaymentId)))),
-    );
+    receiptAmounts.length > 0 && receiptAmounts.every((amount) => amount > 0);
   const receiptTotalCents = completeReceipts
-    ? sale.receipts.reduce(
-        (total, receipt) => total + receipt.receiptAmountCents!,
-        0,
-      )
+    ? receiptAmounts.reduce((total, amount) => total + amount, 0)
     : null;
   const receiptDifferenceCents =
     receiptTotalCents !== null ? receiptTotalCents - receiptTargetCents : null;

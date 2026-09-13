@@ -52,7 +52,35 @@ const sale = (
     },
   ],
   payments,
-  receipts: [],
+  receipts: payments
+    .filter((payment) => payment.method === 'pix')
+    .map((payment) => ({
+      id: `receipt-${payment.id}`,
+      name: `comprovante-${payment.id}.png`,
+      mimeType: 'image/png',
+      sizeBytes: 100,
+      url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      receiptAmountCents: payment.amountCents,
+      receiptAmountSource: 'ocr' as const,
+      receiptAmountConfirmedAt: Date.parse('2026-09-09T12:00:00-03:00'),
+      receiptPaymentId: payment.id,
+      receiptReviewReason: null,
+      receiptOcrStatus: 'done',
+      receiptDetails: {
+        version: 1 as const,
+        payerName: 'Pagador de teste',
+        payerBank: 'Banco pagador',
+        recipientName: payment.accountName,
+        recipientBank: payment.accountName,
+        recipientDocument: null,
+        transactionId: `E${payment.id.padEnd(31, '0').slice(0, 31)}`,
+        paidAtText: '09/09/2026 12:00',
+        state: 'completed' as const,
+        automaticEligible: true,
+        ambiguous: false,
+        blocked: false,
+      },
+    })),
   reconciliation: {
     status: 'pending',
     confirmedTotalCents: 0,
@@ -94,7 +122,7 @@ const legacy = sale(4, 3000, [
 assert.equal(summarizeSalesPayments([legacy]).groups.length, 2);
 assert.equal(
   summarizeSalesPayments([legacy]).groups.find((g) =>
-    g.label.includes('Conta não informada'),
+    g.label.includes('Banco não identificado'),
   )?.amountCents,
   1000,
 );
@@ -115,7 +143,7 @@ assert.equal(
 const inconsistent = { ...mixed, receivedTotalCents: 720000 };
 assert.equal(summarizeSalesPayments([inconsistent]).inconsistentSaleCount, 1);
 assert.equal(summarizeSalesPayments([inconsistent]).detailedCents, 710000);
-assert.equal(summarizeSalesPayments([inconsistent]).receivedCents, 720000);
+assert.equal(summarizeSalesPayments([inconsistent]).receivedCents, 710000);
 assert.equal(
   summarizeSalesPayments([sale(8, 0, [payment('no-price', 'cash', 100)])])
     .excessCents,

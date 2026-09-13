@@ -702,6 +702,8 @@ const sale = await call('/api/sales', {
 });
 assert.equal(sale.body.number, 1);
 assert.equal((sale.body.receipts as unknown[]).length, 1);
+assert.equal(sale.body.receivedTotalCents, 850_000);
+assert.equal(sale.body.receivedDifferenceCents, -50_000);
 const saleId = String(sale.body.id);
 const saleReceipt = (
   sale.body.receipts as Array<{
@@ -712,6 +714,54 @@ const saleReceipt = (
     url: string;
   }>
 )[0];
+if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const fixturePath = await import('node:path');
+  const fixtureDb = new DatabaseSync(
+    fixturePath.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
+  );
+  const details = JSON.parse(
+    fixtureDb
+      .prepare(
+        "SELECT details_json AS details FROM audit_events WHERE entity_id=? AND action='sale.created'",
+      )
+      .get(saleId)!.details as string,
+  ) as Record<string, unknown>;
+  fixtureDb.close();
+  assert.equal(details.receivedTotalCents, 850_000);
+  assert.equal(details.receivedDifferenceCents, -50_000);
+  assert.equal(details.operationFingerprintVersion, 2);
+  assert.equal(typeof details.operationFingerprint, 'string');
+  assert.equal(typeof details.operationPayloadFingerprint, 'string');
+  assert.equal((details.attachmentIds as unknown[]).length, 3);
+  assert.deepEqual(details.receipts, sale.body.receipts);
+}
+const changedReceiptFileReplay = new FormData();
+changedReceiptFileReplay.set('payload', JSON.stringify(salePayload));
+changedReceiptFileReplay.append('itemPhotos:0', tinyPhoto(), 'aparelho-1.png');
+changedReceiptFileReplay.append('itemPhotos:1', tinyPhoto(), 'aparelho-2.png');
+changedReceiptFileReplay.append(
+  'receipts',
+  new Blob(
+    [
+      '%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n% conteúdo diferente\ntrailer<</Root 1 0 R>>\n%%EOF',
+    ],
+    { type: 'application/pdf' },
+  ),
+  'comprovante-inicial.pdf',
+);
+assert.equal(
+  (
+    await call('/api/sales', {
+      method: 'POST',
+      cookie: ownerCookie,
+      expected: 409,
+      headers: { 'x-csrf-token': ownerCsrf },
+      body: changedReceiptFileReplay,
+    })
+  ).body.code,
+  'OPERATION_ALREADY_USED',
+);
 const initialReceiptState = (
   await call(`/api/sales/${saleId}/receipt-payment`, { cookie: ownerCookie })
 ).body;
@@ -779,10 +829,7 @@ conflictingSaleForm.set(
   'payload',
   JSON.stringify({
     ...salePayload,
-    items: [
-      { serial: 'HC9P06R095', priceCents: 449_999 },
-      { serial: 'HC9P06R096', priceCents: 450_001 },
-    ],
+    receiptValues: [{ amountCents: 849_999, source: 'manual' }],
   }),
 );
 const conflictingSale = await call('/api/sales', {
@@ -1139,8 +1186,8 @@ const replayAfterPayment = await call('/api/sales', {
 });
 assert.equal(replayAfterPayment.body.id, saleId);
 assert.equal(replayAfterPayment.body.replayed, true);
-assert.equal(replayAfterPayment.body.receivedTotalCents, 0);
-assert.equal(replayAfterPayment.body.receivedDifferenceCents, -900_000);
+assert.equal(replayAfterPayment.body.receivedTotalCents, 850_000);
+assert.equal(replayAfterPayment.body.receivedDifferenceCents, -50_000);
 
 await call(`/api/sales/${saleId}/receipt-values`, {
   method: 'PATCH',
@@ -3710,9 +3757,14 @@ if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
   const fixtureDb = new DatabaseSync(
     fixturePath.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
   );
+  const modernOperationDetails = fixtureDb
+    .prepare(
+      "SELECT details_json AS details FROM audit_events WHERE entity_id=? AND action='sale.created'",
+    )
+    .get(attributionId)!.details as string;
   fixtureDb
     .prepare(
-      "UPDATE audit_events SET details_json=json_remove(details_json,'$.operationFingerprint','$.productsTotalCents','$.receivedTotalCents') WHERE entity_id=? AND action='sale.created'",
+      "UPDATE audit_events SET details_json=json_remove(details_json,'$.operationFingerprint','$.operationPayloadFingerprint','$.operationFingerprintVersion','$.attachmentIds','$.receipts','$.productsTotalCents','$.receivedTotalCents') WHERE entity_id=? AND action='sale.created'",
     )
     .run(attributionId);
   fixtureDb.close();
@@ -3720,6 +3772,15 @@ if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
   assert.equal(legacyReplay.body.replayed, true);
   assert.equal(legacyReplay.body.productsTotalCents, 123400);
   assert.equal(legacyReplay.body.receivedTotalCents, 0);
+  const restoreDb = new DatabaseSync(
+    fixturePath.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
+  );
+  restoreDb
+    .prepare(
+      "UPDATE audit_events SET details_json=? WHERE entity_id=? AND action='sale.created'",
+    )
+    .run(modernOperationDetails, attributionId);
+  restoreDb.close();
 }
 const receiptsForm = new FormData();
 receiptsForm.set('operationId', crypto.randomUUID());
@@ -4081,6 +4142,11 @@ const replayAfterFirstPix = await call('/api/sales', {
   body: sellerForm(attributionPayload, false),
 });
 assert.equal(replayAfterFirstPix.body.replayed, true);
+assert.deepEqual(
+  replayAfterFirstPix.body.receipts,
+  [],
+  'Create replay must return the original attachment response, not receipts added later',
+);
 assert.equal(
   (await call(firstPixPath, { cookie: ownerCookie })).body.receivedTotalCents,
   128400,
@@ -4124,13 +4190,79 @@ if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
   );
   fixtureDb
     .prepare(
-      "UPDATE audit_events SET details_json=json_remove(details_json,'$.operationFingerprint','$.receivedTotalCents','$.receivedDifferenceCents') WHERE entity_id=? AND action='sale.created'",
+      'UPDATE sales SET received_total_cents=999999,received_difference_cents=871599 WHERE id=?',
+    )
+    .run(attributionId);
+  fixtureDb.close();
+
+  const cashAfterStaleCache = await call(
+    `/api/sales/${attributionId}/payments`,
+    {
+      ...editingHeaders,
+      method: 'POST',
+      expected: 201,
+      body: JSON.stringify({
+        operationId: crypto.randomUUID(),
+        method: 'cash',
+        pixAccountId: null,
+        amountCents: 400,
+      }),
+    },
+  );
+  assert.equal(
+    (cashAfterStaleCache.body.sale as { receivedTotalCents: number })
+      .receivedTotalCents,
+    128400,
+  );
+  const stateAfterCash = (await call(firstPixPath, { cookie: ownerCookie }))
+    .body;
+  const paymentsAfterCash = stateAfterCash.payments as EditablePayment[];
+  const newCashPayment = paymentsAfterCash.find(
+    (payment) => payment.method === 'cash',
+  )!;
+  const editablePaymentsAfterCash = paidFields(stateAfterCash);
+  const editedCash = await call(`/api/sales/${attributionId}/payments`, {
+    ...editingHeaders,
+    method: 'PATCH',
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      expectedPayments: editablePaymentsAfterCash,
+      payments: editablePaymentsAfterCash.map((payment) =>
+        payment.id === newCashPayment.id
+          ? { ...payment, amountCents: 300 }
+          : payment,
+      ),
+    }),
+  });
+  assert.equal(
+    (editedCash.body.sale as { receivedTotalCents: number })
+      .receivedTotalCents,
+    128300,
+  );
+  const normalizedDb = new DatabaseSync(
+    fixturePaths.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
+  );
+  const normalizedTotals = normalizedDb
+    .prepare(
+      'SELECT received_total_cents AS total,received_difference_cents AS difference FROM sales WHERE id=?',
+    )
+    .get(attributionId)!;
+  assert.equal(normalizedTotals.total, 128300);
+  assert.equal(normalizedTotals.difference, -100);
+  normalizedDb.close();
+
+  const replayDb = new DatabaseSync(
+    fixturePaths.join(process.env.PDV_TEST_ISOLATED_DATA_DIR, 'pdv.sqlite'),
+  );
+  replayDb
+    .prepare(
+      "UPDATE audit_events SET details_json=json_remove(details_json,'$.operationFingerprint','$.operationPayloadFingerprint','$.operationFingerprintVersion','$.attachmentIds','$.receipts','$.receivedTotalCents','$.receivedDifferenceCents') WHERE entity_id=? AND action='sale.created'",
     )
     .run(saleId);
-  const currentTotal = fixtureDb
+  const currentTotal = replayDb
     .prepare('SELECT received_total_cents AS total FROM sales WHERE id=?')
     .get(saleId)!.total;
-  fixtureDb.close();
+  replayDb.close();
   const legacyForm = new FormData();
   legacyForm.set('payload', JSON.stringify(salePayload));
   const replay = await call('/api/sales', {

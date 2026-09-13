@@ -17,6 +17,7 @@ import {
 } from '@/lib/server/http';
 import { consumeStoreWriteBudget } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
+import { refreshStoreReceivedTotals } from '@/lib/server/sale-received-totals';
 
 import type {
   ReceiptAmountSource,
@@ -281,8 +282,13 @@ export async function PATCH(
             }),
             now,
           ),
+        refreshStoreReceivedTotals(db, storeId, {
+          auditId: operationId,
+          auditAction: 'sale.receipt_values_updated',
+          auditEntityId: saleId,
+        }),
       ]);
-      const auditResult = results.at(-1);
+      const auditResult = results.at(-2);
       if (Number(auditResult?.meta?.changes ?? 0) !== 1) {
         throw saleChangedError();
       }

@@ -101,8 +101,7 @@ export function saleIssues(sale: StatusSale) {
     review:
       failed ||
       reconciliation.status === 'divergent' ||
-      Boolean(reconciliation.reviewReceiptCount) ||
-      sale.receipts.some((receipt) => Boolean(receipt.receiptReviewReason)),
+      Boolean(reconciliation.reviewReceiptCount),
     reading:
       !failed &&
       sale.receipts.some((receipt) => receipt.receiptAmountCents === null),

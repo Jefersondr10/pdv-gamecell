@@ -11,6 +11,7 @@ import {
 } from '../receipt-document.ts';
 import { HttpError } from './http.ts';
 import { settleAutomaticReceiptPayments } from './receipt-auto-payment.ts';
+import { refreshStoreReceivedTotals } from './sale-received-totals.ts';
 import {
   receiptEvidenceProblem,
   receiptConflictSql,
@@ -363,11 +364,6 @@ export async function registerFirstReceiptPix(
           now,
         ),
       db
-        .prepare(
-          `UPDATE sales SET received_total_cents=?,received_difference_cents=?-products_total_cents WHERE id=? AND store_id=?`,
-        )
-        .bind(receivedAfter, receivedAfter, saleId, storeId),
-      db
         .prepare(`INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
         VALUES(?,?,?,'sale.payment_added','sale',?,?,?)`)
         .bind(paymentId, storeId, actorId, saleId, additionDetails, now),
@@ -381,6 +377,11 @@ export async function registerFirstReceiptPix(
           "UPDATE attachments SET receipt_review_reason=NULL WHERE sale_id=? AND store_id=? AND kind='receipt'",
         )
         .bind(saleId, storeId),
+      refreshStoreReceivedTotals(db, storeId, {
+        auditId: input.operationId,
+        auditAction: 'sale.receipt_payment_requested',
+        auditEntityId: saleId,
+      }),
     ]);
   } catch (error) {
     if (error instanceof Error && /constraint failed/i.test(error.message))
@@ -472,12 +473,18 @@ export async function settleReceiptPaymentSync(
     !Number.isSafeInteger(receivedAfter) ||
     receivedAfter > 100_000_000_000
   ) {
-    await db
-      .prepare(
-        `UPDATE sale_receipt_payment_sync SET status='review', updated_at=? WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending'`,
-      )
-      .bind(Date.now(), saleId, storeId, request.requestId)
-      .run();
+    await db.batch([
+      db
+        .prepare(
+          `UPDATE sale_receipt_payment_sync SET status='review', updated_at=? WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending'`,
+        )
+        .bind(Date.now(), saleId, storeId, request.requestId),
+      refreshStoreReceivedTotals(db, storeId, {
+        receiptSyncSaleId: saleId,
+        receiptSyncRequestId: request.requestId,
+        receiptSyncStatus: 'review',
+      }),
+    ]);
     return;
   }
   const after = payments.map((p) =>
@@ -560,24 +567,16 @@ export async function settleReceiptPaymentSync(
         details,
       ),
     db
-      .prepare(`UPDATE sales SET received_total_cents=?, received_difference_cents=?-products_total_cents WHERE id=? AND store_id=?
-      AND EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND request_id=? AND status='pending')
-      AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND details_json=?)`)
-      .bind(
-        receivedAfter,
-        receivedAfter,
-        saleId,
-        storeId,
-        saleId,
-        request.requestId,
-        auditId,
-        details,
-      ),
-    db
       .prepare(`UPDATE attachments SET receipt_review_reason=NULL WHERE sale_id=? AND store_id=? AND kind='receipt'
       AND EXISTS(SELECT 1 FROM sale_receipt_payment_sync WHERE sale_id=? AND request_id=? AND status='pending')
       AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND details_json=?)`)
       .bind(saleId, storeId, saleId, request.requestId, auditId, details),
+    refreshStoreReceivedTotals(db, storeId, {
+      auditId,
+      auditAction: 'sale.payment_from_receipts',
+      auditEntityId: saleId,
+      auditDetails: details,
+    }),
     db
       .prepare(`UPDATE sale_receipt_payment_sync SET status='applied', updated_at=? WHERE sale_id=? AND store_id=? AND request_id=? AND status='pending'
       AND EXISTS(SELECT 1 FROM audit_events WHERE id=? AND details_json=?)`)
@@ -587,15 +586,30 @@ export async function settleReceiptPaymentSync(
 
 export async function processReceiptPaymentSync(db: D1Database) {
   // A terminal OCR failure is review, not an endlessly pending settlement.
-  await db
-    .prepare(`UPDATE sale_receipt_payment_sync SET status='review',updated_at=?
-    WHERE status='pending' AND EXISTS(SELECT 1 FROM sales s WHERE s.id=sale_id AND s.status='completed')
-    AND EXISTS(SELECT 1 FROM attachments a WHERE a.sale_id=sale_receipt_payment_sync.sale_id AND a.store_id=sale_receipt_payment_sync.store_id AND a.kind='receipt' AND a.receipt_amount_cents IS NULL)
+  const terminalCondition = `EXISTS(SELECT 1 FROM sales s WHERE s.id=q.sale_id AND s.store_id=q.store_id AND s.status='completed')
+    AND EXISTS(SELECT 1 FROM attachments a WHERE a.sale_id=q.sale_id AND a.store_id=q.store_id AND a.kind='receipt' AND a.receipt_amount_cents IS NULL)
     AND NOT EXISTS(SELECT 1 FROM attachments a LEFT JOIN receipt_ocr_jobs j ON j.attachment_id=a.id
-      WHERE a.sale_id=sale_receipt_payment_sync.sale_id AND a.store_id=sale_receipt_payment_sync.store_id AND a.kind='receipt'
-      AND (j.status IN ('pending','processing','retry') OR (j.attachment_id IS NULL AND a.receipt_amount_cents IS NULL)))`)
-    .bind(Date.now())
-    .run();
+      WHERE a.sale_id=q.sale_id AND a.store_id=q.store_id AND a.kind='receipt'
+      AND (j.status IN ('pending','processing','retry') OR (j.attachment_id IS NULL AND a.receipt_amount_cents IS NULL)))`;
+  const terminal = await db
+    .prepare(`SELECT q.sale_id AS saleId,q.store_id AS storeId,q.request_id AS requestId
+      FROM sale_receipt_payment_sync q WHERE q.status='pending' AND ${terminalCondition}`)
+    .all<{ saleId: string; storeId: string; requestId: string }>();
+  for (const row of terminal.results) {
+    const updatedAt = Date.now();
+    await db.batch([
+      db
+        .prepare(`UPDATE sale_receipt_payment_sync AS q SET status='review',updated_at=?
+          WHERE q.sale_id=? AND q.store_id=? AND q.request_id=? AND q.status='pending'
+          AND ${terminalCondition}`)
+        .bind(updatedAt, row.saleId, row.storeId, row.requestId),
+      refreshStoreReceivedTotals(db, row.storeId, {
+        receiptSyncSaleId: row.saleId,
+        receiptSyncRequestId: row.requestId,
+        receiptSyncStatus: 'review',
+      }),
+    ]);
+  }
   const rows = await db
     .prepare(`SELECT q.sale_id AS saleId, q.store_id AS storeId FROM sale_receipt_payment_sync q
     JOIN sales s ON s.id=q.sale_id AND s.store_id=q.store_id WHERE q.status='pending' AND s.status='completed'

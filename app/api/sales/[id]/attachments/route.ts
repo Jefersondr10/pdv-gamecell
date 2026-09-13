@@ -32,6 +32,7 @@ import {
 } from '@/lib/server/receipt-values';
 import { runtime } from '@/lib/server/runtime';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
+import { refreshStoreReceivedTotals } from '@/lib/server/sale-received-totals';
 
 import type { ReceiptValueInput } from '@/lib/receipt-reconciliation';
 
@@ -455,6 +456,11 @@ export async function POST(
           }),
           now,
         ),
+      refreshStoreReceivedTotals(db, session.storeId!, {
+        auditId: operationId,
+        auditAction: 'sale.attachments_added',
+        auditEntityId: saleId,
+      }),
       db
         .prepare(
           'DELETE FROM upload_reservations WHERE id = ? AND store_id = ?',

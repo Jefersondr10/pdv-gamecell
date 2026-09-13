@@ -33,15 +33,16 @@ export function summarizeSalesPayments(sales: readonly SummarySale[]) {
     inconsistentSaleCount = 0;
   for (const sale of sales) {
     if (sale.status !== 'completed') continue;
+    const income = saleReceiptIncome(sale);
     soldCents += sale.productsTotalCents;
-    receivedCents += saleReceiptIncome(sale).receivedTotalCents;
+    receivedCents += income.receivedTotalCents;
     outstandingCents += Math.max(
       0,
-      sale.productsTotalCents - saleReceiptIncome(sale).receivedTotalCents,
+      sale.productsTotalCents - income.receivedTotalCents,
     );
     excessCents += Math.max(
       0,
-      saleReceiptIncome(sale).receivedTotalCents - sale.productsTotalCents,
+      income.receivedTotalCents - sale.productsTotalCents,
     );
     let saleDetailedCents = 0;
     for (const payment of receiptDrivenPayments(sale)) {
@@ -74,7 +75,10 @@ export function summarizeSalesPayments(sales: readonly SummarySale[]) {
     }
     detailedCents += saleDetailedCents;
     // Compare each sale: differences from separate sales must not cancel each other out.
-    if (saleDetailedCents !== saleReceiptIncome(sale).receivedTotalCents)
+    if (
+      saleDetailedCents !== income.receivedTotalCents ||
+      sale.receivedTotalCents !== income.receivedTotalCents
+    )
       inconsistentSaleCount++;
   }
   const compare = new Intl.Collator('pt-BR', {

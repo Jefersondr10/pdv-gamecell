@@ -7,6 +7,8 @@ import {
 } from '../lib/receipt-document.ts';
 import { processReceiptJob } from '../lib/server/node/receipt-jobs.mjs';
 import { retryReceipt } from '../lib/server/retry-receipt.ts';
+import { deleteSaleReceipt } from '../lib/server/delete-receipt.ts';
+import { refreshSaleReceivedTotals } from '../lib/server/sale-received-totals.ts';
 import {
   readReceiptPaymentSync,
   registerFirstReceiptPix,
@@ -141,16 +143,42 @@ const sync = async () => {
   );
   await settleReceiptPaymentSync(db, 'shop', 'sale');
 };
-const check = async (received: number, count: number) => {
+const check = async (
+  received: number,
+  count: number,
+  historicalPaymentTotal = received,
+) => {
   const s = (await state())!;
   assert.equal(s.sale.receivedTotalCents, received);
   assert.equal(s.payments.length, count);
   assert.equal(
     s.payments.reduce((sum, p) => sum + p.amountCents, 0),
-    received,
+    historicalPaymentTotal,
   );
   return s;
 };
+
+// A create request with a browser-confirmed receipt starts from cash-only input,
+// then refreshes to the canonical cash + accepted-receipt total. The operation
+// guard must match the expected audit action as well as its id and sale.
+seed(0);
+addReceipt();
+adapter.database.exec(
+  `INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+   VALUES('create-audit','shop','owner','sale.created','sale','sale','{}',1)`,
+);
+await refreshSaleReceivedTotals(db, 'shop', 'sale', {
+  auditId: 'create-audit',
+  auditAction: 'sale.receipt_reread',
+  auditEntityId: 'sale',
+}).run();
+await check(0, 0);
+await refreshSaleReceivedTotals(db, 'shop', 'sale', {
+  auditId: 'create-audit',
+  auditAction: 'sale.created',
+  auditEntityId: 'sale',
+}).run();
+await check(410000, 0, 0);
 
 seed(0);
 await check(0, 0);
@@ -195,6 +223,9 @@ await processReceiptJob(
 await settleReceiptPaymentSync(db, 'shop', 'sale');
 s = await check(700000, 2);
 assert.equal(s.cashCents, 300000);
+adapter.database.exec(
+  "UPDATE sales SET received_total_cents=999,received_difference_cents=999 WHERE id='sale'",
+);
 await retryReceipt(db, scope, retry, 30);
 assert.equal((await state())!.complete, true);
 await check(700000, 2);
@@ -212,6 +243,16 @@ adapter.database.exec(
 await sync();
 s = await check(720000, 2);
 assert.equal(s.request?.status, 'review');
+assert.equal(
+  s.sale.effectiveReceiptTotalCents,
+  0,
+  'a receipt under a genuine allocation review is not counted on top of cash',
+);
+assert.match(
+  s.receipts[0].review ?? '',
+  /alterado|alocação|pagamento/i,
+  'the financial hold remains explicit for review',
+);
 seed(300000, 960000);
 addReceipt();
 await sync();
@@ -225,7 +266,7 @@ assert.equal(
 // Duplicates (even on another sale) never create a second automatic Pix.
 addReceipt('duplicate', 1);
 await sync();
-s = await check(960000, 3);
+s = await check(550000, 3, 960000);
 assert.equal(s.request?.status, 'review');
 seed();
 addReceipt();
@@ -233,7 +274,7 @@ await sync();
 adapter.database.exec("DELETE FROM attachments WHERE id='r1'");
 addReceipt('replacement', 1);
 await sync();
-s = await check(710000, 2);
+s = await check(300000, 2, 710000);
 assert.equal(s.request?.status, 'review');
 assert.match(
   (await receiptEvidenceProblem(
@@ -271,17 +312,68 @@ assert.equal(
   (await readReceiptPaymentSync(db, 'shop', 'second'))!.request?.status,
   'review',
 );
+// Transaction identity is store-wide: a reading on another sale invalidates
+// both caches, and deleting that duplicate restores the original sale.
+seed();
+addReceipt();
+await sync();
+await check(710000, 2);
+adapter.database.exec(`
+  INSERT INTO sales(id,store_id,number,customer_name,seller_user_id,seller_name,products_total_cents,received_total_cents,received_difference_cents,reference_total_cents,price_difference_cents,created_at)
+  VALUES('cross-sale','shop',2,'Outra venda','owner','Teste',410000,0,-410000,410000,0,1);
+  INSERT INTO attachments(id,store_id,kind,sale_id,r2_key,file_name,mime_type,size_bytes,created_by,created_at)
+  VALUES('cross-receipt','shop','receipt','cross-sale','cross-receipt','cross.png','image/png',4,'owner',1);
+  INSERT INTO receipt_ocr_jobs(attachment_id,status,attempts,generation,next_attempt_at,created_at,updated_at)
+  VALUES('cross-receipt','pending',0,1,1,1,1);
+`);
+const beforeCrossSaleFetch = globalThis.fetch;
+globalThis.fetch = async () => Response.json(extractReceiptDocument(text()));
+await processReceiptJob(
+  adapter,
+  { get: async () => ({ body: new Blob(['test']).stream() }) },
+  'http://fixture.test',
+  () => 200,
+);
+assert.equal(
+  (await state())!.sale.receivedTotalCents,
+  300000,
+  'the original cache drops its now-duplicated receipt immediately',
+);
+assert.equal(
+  (await readReceiptPaymentSync(db, 'shop', 'cross-sale'))!.sale
+    .receivedTotalCents,
+  0,
+);
+await deleteSaleReceipt(
+  db,
+  { delete: async () => {} },
+  {
+    operationId: 'delete-cross-receipt',
+    saleId: 'cross-sale',
+    receiptId: 'cross-receipt',
+    storeId: 'shop',
+    actorId: 'owner',
+    subject: { role: 'owner' },
+  },
+);
+assert.equal(
+  (await state())!.sale.receivedTotalCents,
+  710000,
+  'removing the other-sale duplicate restores the original cache',
+);
+globalThis.fetch = beforeCrossSaleFetch;
 // A terminal unreadable receipt leaves review, not an endless pending sync.
 seed();
 addReceipt();
 adapter.database.exec(
-  "UPDATE attachments SET receipt_amount_cents=NULL; INSERT INTO receipt_ocr_jobs(attachment_id,status,next_attempt_at,created_at,updated_at) VALUES('r1','needs_review',1,1,1)",
+  "UPDATE attachments SET receipt_amount_cents=NULL; UPDATE sales SET received_total_cents=710000,received_difference_cents=0; INSERT INTO receipt_ocr_jobs(attachment_id,status,next_attempt_at,created_at,updated_at) VALUES('r1','needs_review',1,1,1)",
 );
 await adapter.batch(
   requestReceiptPaymentSync(db, scope, 'terminal-read', Date.now()),
 );
 await processReceiptPaymentSync(db);
 assert.equal((await state())!.request?.status, 'review');
+await check(300000, 1);
 adapter.database.exec(
   "UPDATE sale_receipt_payment_sync SET status='pending'; UPDATE receipt_ocr_jobs SET status='processing'",
 );
@@ -324,7 +416,6 @@ assert.equal(
 for (const mutation of [
   "UPDATE attachments SET receipt_details_json=json_set(receipt_details_json,'$.state','scheduled')",
   "UPDATE attachments SET receipt_details_json=json_set(receipt_details_json,'$.ambiguous',json('true'))",
-  'UPDATE users SET active=0',
 ]) {
   seed();
   addReceipt();
@@ -332,6 +423,12 @@ for (const mutation of [
   await sync();
   await check(300000, 1);
 }
+seed();
+addReceipt();
+adapter.database.exec('UPDATE users SET active=0');
+await sync();
+await check(710000, 1, 300000);
+assert.equal((await state())!.request?.status, 'review');
 seed();
 addReceipt();
 adapter.database.exec(
@@ -427,7 +524,7 @@ adapter.database.exec(
   "INSERT INTO payments(id,store_id,sale_id,method,pix_account_id,account_name,amount_cents,created_at) VALUES('extra','shop','sale','pix','bank','Conta teste',10000,1); UPDATE sales SET received_total_cents=720000,received_difference_cents=10000",
 );
 await sync();
-await check(720000, 3);
+await check(710000, 3, 720000);
 assert.equal((await state())!.request?.status, 'review');
 // A new manual Pix must not bypass a previously linked Pix changed into cash.
 seed();
@@ -437,7 +534,7 @@ adapter.database.exec(
   "UPDATE payments SET method='cash',pix_account_id=NULL,account_name=NULL WHERE method='pix'; INSERT INTO payments(id,store_id,sale_id,method,pix_account_id,account_name,amount_cents,created_at) VALUES('manual','shop','sale','pix','bank','Conta teste',10000,1); UPDATE sales SET received_total_cents=720000,received_difference_cents=10000",
 );
 await sync();
-await check(720000, 3);
+await check(710000, 3, 720000);
 assert.equal((await state())!.request?.status, 'review');
 // Matching numbers cannot hide documentary review in Overview.
 seed();

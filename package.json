@@ -45,7 +45,8 @@
     "test:receipt-reconciliation": "node --experimental-strip-types scripts/verify-receipt-reconciliation.ts",
     "test:database-lifecycle": "node --experimental-strip-types scripts/verify-database-lifecycle.ts",
     "test:receipt-polling": "node --experimental-strip-types scripts/verify-receipt-polling.ts",
-    "test:backup-health-race": "node --experimental-strip-types scripts/verify-backup-health-race.ts"
+    "test:backup-health-race": "node --experimental-strip-types scripts/verify-backup-health-race.ts",
+    "test:received-totals-backfill": "node scripts/verify-received-totals-backfill.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",

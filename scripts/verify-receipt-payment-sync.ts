@@ -75,8 +75,8 @@ await settle();
 assert.equal(received(), 3465000);
 assert.equal(
   get("SELECT received_difference_cents AS n FROM sales WHERE id='sale'").n,
-  0,
-  'Legacy persisted totals remain historical; readers derive receipt income',
+  -8000,
+  'Legacy cache is normalized to cash plus accepted receipt income',
 );
 assert.equal(
   get("SELECT amount_cents AS n FROM payments WHERE id='p1'").n,
@@ -352,8 +352,8 @@ await settle();
 assert.equal(received(), 3500000);
 assert.equal(
   get("SELECT received_difference_cents AS n FROM sales WHERE id='sale'").n,
-  0,
-  'Legacy persisted difference remains historical after receipt verification',
+  27000,
+  'Receipt verification normalizes the cache to the accepted receipt total',
 );
 // Receipt-only uploads may verify evidence because no historical Pix is mutated.
 seed();

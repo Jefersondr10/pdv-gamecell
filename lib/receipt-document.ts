@@ -284,13 +284,22 @@ export function extractReceiptDocument(text: string) {
     .filter(Boolean);
   const suggestion =
     extractReceiptAmount(heading) ?? extractReceiptAmount(text);
+  const c6ValueIndexes = lines
+    .map((line, index) => (/^valor\s*:?$/i.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+  const c6LabelledAmount =
+    c6ValueIndexes.length === 1
+      ? extractReceiptAmount(lines[c6ValueIndexes[0] + 1] ?? '')
+      : null;
   const ambiguous = ids.length > 1 || headingAmounts.length > 1;
   const uniqueAmount =
     !ambiguous &&
     suggestion !== null &&
     (suggestion.confidence === 'high' ||
       (headingAmounts.length === 1 &&
-        headingAmounts[0]!.amountCents === suggestion.amountCents));
+        headingAmounts[0]!.amountCents === suggestion.amountCents) ||
+      (c6Completed &&
+        c6LabelledAmount?.amountCents === suggestion.amountCents));
   const details: ReceiptDocument = {
     version: 1,
     payerName: payer.name,

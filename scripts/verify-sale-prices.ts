@@ -53,10 +53,12 @@ adapter.database
   .exec(`CREATE TABLE sales(id TEXT PRIMARY KEY,store_id TEXT,status TEXT,products_total_cents INTEGER,received_total_cents INTEGER,received_difference_cents INTEGER,reference_total_cents INTEGER,price_difference_cents INTEGER);
 CREATE TABLE sale_items(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,sold_price_cents INTEGER,reference_price_cents INTEGER,serial TEXT);
 CREATE TABLE audit_events(id TEXT PRIMARY KEY,store_id TEXT,actor_user_id TEXT,action TEXT,entity_type TEXT,entity_id TEXT NOT NULL,details_json TEXT,created_at INTEGER);
-CREATE TABLE payments(id TEXT PRIMARY KEY,sale_id TEXT,amount_cents INTEGER);
+CREATE TABLE payments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,method TEXT,amount_cents INTEGER);
+CREATE TABLE attachments(id TEXT PRIMARY KEY,store_id TEXT,sale_id TEXT,kind TEXT,receipt_amount_cents INTEGER,receipt_details_json TEXT,receipt_review_reason TEXT);
+CREATE TABLE receipt_payment_links(attachment_id TEXT,store_id TEXT,sale_id TEXT,payment_id TEXT,transaction_id TEXT);
 CREATE TABLE products(id TEXT,default_price_cents INTEGER);
 CREATE TABLE inventory_units(id TEXT,status TEXT,sale_id TEXT);
-INSERT INTO payments VALUES('p','s',10000);
+INSERT INTO payments VALUES('p','store','s','cash',10000);
 INSERT INTO products VALUES('prod',6000);
 INSERT INTO inventory_units VALUES('u','sold','s');`);
 const scope = {
@@ -69,7 +71,7 @@ const sql = adapter.database;
 const row = (query: string) => sql.prepare(query).get();
 function seed() {
   sql.exec(`DELETE FROM sales; DELETE FROM sale_items; DELETE FROM audit_events;
-    INSERT INTO sales VALUES('s','store','completed',10000,10000,0,6000,-1000),('f','other','completed',10,0,-10,0,0);
+    INSERT INTO sales VALUES('s','store','completed',10000,77777,67777,6000,-1000),('f','other','completed',10,0,-10,0,0);
     INSERT INTO sale_items VALUES('i1','store','s',5000,6000,'SN1'),('i2','store','s',5000,0,'SN2'),('fi','other','f',10,0,'OTHER');`);
 }
 const payload = (
@@ -104,6 +106,11 @@ assert.equal(updated.receivedTotalCents, 10000);
 assert.equal(updated.receivedDifferenceCents, -1000);
 assert.equal(updated.priceDifferenceCents, 0);
 assert.equal(updated.revision, 1);
+const normalizedCache = row(
+  "SELECT received_total_cents AS total,received_difference_cents AS difference FROM sales WHERE id='s'",
+)!;
+assert.equal(normalizedCache.total, 10000);
+assert.equal(normalizedCache.difference, -1000);
 assert.equal(
   row("SELECT reference_total_cents FROM sales WHERE id='s'")!
     .reference_total_cents,
@@ -214,7 +221,7 @@ const batch = adapter.batch.bind(adapter);
 // Payment committed after our initial read must be retained in the new balance.
 adapter.batch = async (statements) => {
   sql.exec(
-    "UPDATE sales SET received_total_cents=15000,received_difference_cents=5000 WHERE id='s'",
+    "UPDATE payments SET amount_cents=15000 WHERE id='p' AND sale_id='s' AND store_id='store'",
   );
   return batch(statements);
 };

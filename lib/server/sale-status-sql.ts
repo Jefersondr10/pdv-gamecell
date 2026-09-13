@@ -3,6 +3,7 @@ import {
   type SaleCheckKey,
   type SaleIssueKey,
 } from '../sale-display-status.ts';
+import { DERIVED_RECEIPT_REVIEW_REASONS } from '../receipt-review-reasons.ts';
 
 const receipts = `SELECT 1 FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'`;
 export function validReceiptAmountSql(alias: 'a' | 'ar') {
@@ -67,30 +68,19 @@ export function untrustedReceiptDocumentSql(alias: string) {
   return `(${alias}.receipt_details_json IS NOT NULL AND json_type(${doc},'$.automaticEligible') IS NOT 'true' AND ${linkedReceiptPaymentSql(alias)} IS NULL)`;
 }
 
-// These explanations describe current evidence, not a manual financial hold.
-// Older sync versions copied them onto every receipt, including healthy ones.
-const derivedEvidenceReviewReasons = [
-  'Documento sem confirmação de pagamento realizado: confira agendamento, processamento, cancelamento ou estorno.',
-  'A leitura do comprovante ficou ambígua. Reenvie uma imagem legível de uma única transação para conferência.',
-  'Há comprovantes da mesma transação. Não registre o Pix duas vezes.',
-  'Esta transação aparece em outro comprovante. Ela não será somada novamente; confira os anexos.',
-  'Há comprovantes da mesma transação nesta venda. Confira os anexos duplicados.',
-  'O documento indica agendamento, cancelamento ou estorno. Confira o pagamento.',
-  'Confira o documento: pagamento não confirmado ou leitura ambígua.',
-  'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
-  'Esta transação já foi registrada por outro comprovante. Ela não será somada novamente.',
-  'A leitura não contém identificação suficiente para conciliação automática. Releia o comprovante.',
-];
+function receiptEvidenceAcceptedSql(alias: 'a' | 'ar') {
+  return `(${validReceiptAmountSql(alias)} AND NOT ${duplicateReceiptSql(alias)} AND NOT ${invalidReceiptDocumentSql(alias)} AND NOT ${untrustedReceiptDocumentSql(alias)})`;
+}
 
 export function effectiveReceiptReviewReasonSql(alias: 'a' | 'ar') {
-  const reasons = derivedEvidenceReviewReasons
+  const reasons = DERIVED_RECEIPT_REVIEW_REASONS
     .map((reason) => `'${reason.replaceAll("'", "''")}'`)
     .join(',');
-  return `(CASE WHEN ${alias}.receipt_review_reason IN (${reasons}) AND ${acceptedReceiptSql(alias)} THEN NULL ELSE NULLIF(${alias}.receipt_review_reason,'') END)`;
+  return `(CASE WHEN ${alias}.receipt_review_reason IN (${reasons}) AND ${receiptEvidenceAcceptedSql(alias)} THEN NULL ELSE NULLIF(${alias}.receipt_review_reason,'') END)`;
 }
 
 export function acceptedReceiptSql(alias: 'a' | 'ar') {
-  return `(${validReceiptAmountSql(alias)} AND NOT ${duplicateReceiptSql(alias)} AND NOT ${invalidReceiptDocumentSql(alias)} AND NOT ${untrustedReceiptDocumentSql(alias)})`;
+  return `(${receiptEvidenceAcceptedSql(alias)} AND ${effectiveReceiptReviewReasonSql(alias)} IS NULL)`;
 }
 export const SALE_RECEIPT_TOTAL_SQL = `COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id=s.store_id AND ar.sale_id=s.id AND ar.kind='receipt' AND ${acceptedReceiptSql('ar')}),0)`;
 export const SALE_RECEIVED_TOTAL_SQL = `(${SALE_CASH_TOTAL_SQL} + ${SALE_RECEIPT_TOTAL_SQL})`;

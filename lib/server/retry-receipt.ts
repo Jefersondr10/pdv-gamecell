@@ -1,6 +1,7 @@
 import { HttpError } from './http.ts';
 import { requestReceiptPaymentSync } from './receipt-payment-sync.ts';
 import { can, type PermissionSubject } from '../permissions.ts';
+import { refreshStoreReceivedTotals } from './sale-received-totals.ts';
 
 export async function retryReceipt(
   db: D1Database,
@@ -51,6 +52,12 @@ export async function retryReceipt(
         'Esta operação já foi utilizada.',
         'OPERATION_ALREADY_USED',
       );
+    await refreshStoreReceivedTotals(db, scope.storeId, {
+      auditId: input.operationId,
+      auditAction: 'sale.receipt_reread',
+      auditEntityId: scope.saleId,
+      auditDetails: details,
+    }).run();
     return;
   }
   try {
@@ -83,6 +90,12 @@ export async function retryReceipt(
           `UPDATE attachments SET receipt_amount_cents=NULL,receipt_amount_source=NULL,receipt_amount_confirmed_by=NULL,receipt_amount_confirmed_at=NULL,receipt_details_json=NULL,receipt_review_reason=NULL WHERE id=? AND store_id=? AND sale_id=? AND kind='receipt'`,
         )
         .bind(input.attachmentId, scope.storeId, scope.saleId),
+      refreshStoreReceivedTotals(db, scope.storeId, {
+        auditId: input.operationId,
+        auditAction: 'sale.receipt_reread',
+        auditEntityId: scope.saleId,
+        auditDetails: details,
+      }),
       db
         .prepare(`INSERT INTO receipt_ocr_jobs(attachment_id,status,attempts,generation,next_attempt_at,created_at,updated_at) VALUES(?,'pending',0,1,?,?,?)
         ON CONFLICT(attachment_id) DO UPDATE SET status='pending',generation=generation+1,attempts=0,next_attempt_at=excluded.next_attempt_at,lease_token=NULL,lease_until=NULL,error_code=NULL,confidence=NULL,updated_at=excluded.updated_at`)
