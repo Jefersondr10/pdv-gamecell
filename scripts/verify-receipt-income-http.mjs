@@ -2,7 +2,7 @@
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -33,15 +33,23 @@ const readingGate = new Promise((resolve) => {
   releaseReading = resolve;
 });
 const ocr = createServer(async (request, response) => {
-  for await (const _chunk of request) {
-    /* consume the uploaded test file */
-  }
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const uploaded = Buffer.concat(chunks);
+  const mixedReceipt = uploaded.toString('utf8').includes('mixed-receipt');
+  const transactionId =
+    'E' +
+    createHash('sha256')
+      .update(uploaded)
+      .digest('hex')
+      .slice(0, 31)
+      .toUpperCase();
   await readingGate;
   const reading = extractReceiptDocument(`Comprovante de
 transferência
 Pix
 12/09/2026 14:30:00
-Valor: R$ 7.100,00
+Valor: R$ ${mixedReceipt ? '4.100,00' : '7.100,00'}
 Pagador
 Nome: Cliente fictício
 Banco: Banco de teste
@@ -50,7 +58,7 @@ Nome: Loja fictícia
 Banco: Banco recebedor
 CPF/CNPJ: ***.123.***-**
 ID de transação Pix
-E0000000000000000000000000000099`);
+${transactionId}`);
   response
     .writeHead(200, { 'content-type': 'application/json' })
     .end(JSON.stringify(reading));
@@ -160,13 +168,14 @@ try {
     method: 'POST',
     json: { name: 'Banco Teste' },
   });
-  const photo = () =>
+  const photo = (marker = '') =>
     new Blob(
       [
         Buffer.from(
           'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
           'base64',
         ),
+        marker,
       ],
       { type: 'image/png' },
     );
@@ -217,7 +226,7 @@ try {
     'receiptValues',
     JSON.stringify([{ amountCents: 12300, source: 'ocr' }]),
   );
-  late.append('receipts', photo(), 'late-receipt.png');
+  late.append('receipts', photo('late-receipt'), 'late-receipt.png');
   await call('/api/sales/' + zero.id + '/attachments', {
     method: 'POST',
     form: late,
@@ -253,7 +262,7 @@ try {
     'receiptValues',
     JSON.stringify([{ amountCents: 410000, source: 'manual' }]),
   );
-  form.append('receipts', photo(), 'receipt-test.png');
+  form.append('receipts', photo('mixed-receipt'), 'receipt-test.png');
   await call('/api/sales/' + mixed.id + '/attachments', {
     method: 'POST',
     form,
