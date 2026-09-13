@@ -87,7 +87,6 @@ chave 11111111-1111-1111-1111-111111111111
 ID da transação
 E60701190202609081507DY5H11W7NYC
 controle 123456789
-autenticação do comprovante
 `;
 const itauSisPag = extractReceiptDocument(itauSisPagText);
 assert.equal(itauSisPag.amountCents, 425000);
@@ -100,6 +99,16 @@ assert.equal(
 );
 assert.equal(
   extractReceiptDocument(`${itauSisPagText}\nAgendado`).details
+    .automaticEligible,
+  false,
+);
+assert.equal(
+  extractReceiptDocument(`${itauSisPagText}\nEm processamento`).details
+    .automaticEligible,
+  false,
+);
+assert.equal(
+  extractReceiptDocument(`${itauSisPagText}\nCancelado`).details
     .automaticEligible,
   false,
 );

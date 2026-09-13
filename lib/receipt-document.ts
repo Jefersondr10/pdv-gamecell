@@ -1,7 +1,7 @@
 import { extractReceiptAmount } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 4;
+export const RECEIPT_READER_REVISION = 5;
 
 export type ReceiptDocument = {
   version: 1;
@@ -249,14 +249,15 @@ export function extractReceiptDocument(text: string) {
       normalized,
     );
   // Itaú's corporate SISPag receipt describes a completed Pix by its
-  // transfer type and authentication footer, without the generic phrases used
-  // by consumer apps. Require the complete labelled layout plus a unique E2E.
+  // timestamp and transfer type, without the generic phrases used by consumer
+  // apps. Photos commonly crop the authentication footer, so use the stable
+  // labelled header plus a unique E2E; global pending/cancelled checks below
+  // still take precedence.
   const itauSisPagCompleted =
     uniqueIds.length === 1 &&
     /\bvia\s+sispag\s+no\s+app\s+itau\b/.test(normalized) &&
     /\btipo\s+de\s+transferencia\b/.test(normalized) &&
-    /\bpix\s+transferencia\b/.test(normalized) &&
-    /\bautenticacao\s+do\s+comprovante\b/.test(normalized);
+    /\bpix\s+transferencia\b/.test(normalized);
   const providerDispatchCompleted =
     uniqueIds.length === 1 &&
     ((/\bcomprovante\s+de\s+envio(?:\s+de)?\s+pix\b/.test(receiptHeading) &&
