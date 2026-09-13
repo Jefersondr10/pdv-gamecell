@@ -40,7 +40,10 @@ export function salesFilterValues(data,today) {
   if(!filters.from||!filters.to)throw Error('Informe a data inicial e a data final.');
   for(const key of ['from','to'])if(!/^\d{4}-\d{2}-\d{2}$/.test(filters[key])||isoDate(brazilianDate(filters[key]))!==filters[key])throw Error('Informe uma data válida.');
   if(filters.from>filters.to)throw Error('A data inicial não pode ser posterior à data final.');
+ }else if(date_preset==='all'){
+  delete filters.from;delete filters.to;filters.date_preset='all';
  }else Object.assign(filters,dateRange(date_preset,today));
+ if(filters.q!==undefined)filters.q=String(filters.q).trim();
  return Object.fromEntries(Object.entries(filters).filter(([,value])=>value));
 }
 export function initDateControls(root=document) {

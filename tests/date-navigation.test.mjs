@@ -50,7 +50,7 @@ test('navegação Cadastro: cinco submenus, máquina fora de configurações e s
 });
 test('identificação na interface: painel opcional escapado sem criar campos obrigatórios',()=>{
  const helper=source.slice(source.indexOf('function itemDetailsFields('),source.indexOf('function renderEditor()'));
- const context={esc:v=>String(v).replaceAll('<','&lt;').replaceAll('>','&gt;'),icon:()=>'',field:(l,c)=>l+c};
+ const context={trackedItem:()=>false,esc:v=>String(v).replaceAll('<','&lt;').replaceAll('>','&gt;'),icon:()=>'',field:(l,c)=>l+c};
  const closed=runInNewContext(helper+'\nitemDetailsFields({},0)',context);assert.match(closed,/aria-expanded="false"/);assert.match(closed,/item-details-0"[^>]+hidden/);assert.doesNotMatch(closed,/ required| checked/);
  const open=runInNewContext(helper+'\nitemDetailsFields({serial_number:"<SN>",details:"Azul",share_details:true},1)',context);
  assert.match(open,/aria-expanded="true"/);assert.match(open,/&lt;SN&gt;/);assert.match(open,/data-key="share_details" checked/);

@@ -17,7 +17,7 @@ test('cancelar: botão no cabeçalho da edição, só para registros salvos e au
 function context({dirty=true,postError,loadError,unsavedAck=true}={}){
  const draft={id:'test-sale',is_wholesale:true,public_notes:'Edição ainda não salva'};
  const calls=[],checks=new Set(['acknowledge_stock_return','acknowledge_refund_pending']);if(unsavedAck)checks.add('acknowledge_unsaved_changes');
- const ctx={working:draft,workingDirty:dirty,view:'editor',detailSale:{id:'antigo'},detailId:null,state:{},calls,
+ const ctx={pendingWorks:new Map([['sale:test-sale',draft]]),working:draft,workingDirty:dirty,view:'editor',detailSale:{id:'antigo'},detailId:null,state:{},calls,
   FormData:class{has(key){return checks.has(key);}},
   api:async(path,data)=>{calls.push(['post',path,data]);if(postError)throw Error(postError);},
   modal:{close(){calls.push(['close']);}},
@@ -46,13 +46,14 @@ test('cancelar: alterações não salvas exigem ciência sem gravar a edição',
 test('cancelar: sucesso sai do editor e busca o detalhe cancelado sem salvar alterações',async()=>{
  const {ctx,calls,run}=context();await run();
  assert.equal(ctx.working,null);assert.equal(ctx.workingDirty,false);assert.equal(ctx.view,'detail');assert.equal(ctx.detailId,'test-sale');assert.equal(ctx.detailSale,null);
+ assert.equal(ctx.pendingWorks.size,0);
  assert.deepEqual(calls.map(c=>c[0]),['post','close','page','load','render','toast']);
  assert.equal(calls.filter(c=>c[0]==='post').length,1);assert.equal(calls[0][1],'/sales/test-sale/cancel');
 });
 test('cancelar: falha de atualização após sucesso não reapresenta editor cancelado',async()=>{
  const {ctx,calls,run}=context({loadError:'Falha de conexão'});await assert.rejects(run(),/conexão/);
  assert.equal(ctx.working,null);assert.equal(ctx.workingDirty,false);assert.equal(calls.some(c=>c[0]==='render'),false);
- assert.match(app,/function renderAuth\(\) \{\n cancellationRefreshPending=false;/);
+ assert.match(app,/function renderAuth\(\) \{\n clearPrivateWorkspace\(\);/);
  assert.equal(ctx.cancellationRefreshPending,true);assert.match(calls.at(-1)[1],/cancelamento foi registrado.*Atualize/);
  assert.match(app,/if\(cancellationRefreshPending\)\{showCancellationRefresh\(\);return;\}/);
  assert.match(app,/if\(cancellationRefreshPending&&button.dataset.action!=='refresh-after-cancellation'\)/);

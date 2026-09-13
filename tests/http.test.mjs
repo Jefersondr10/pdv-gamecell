@@ -30,7 +30,7 @@ test('HTTP: pagamento exige UUID e replay idêntico não duplica lançamento', a
  assert.equal(r.status,201);const cookie=r.headers.get('set-cookie').split(';')[0];
  const headers={Cookie:cookie,'Content-Type':'application/json',Origin:origin};
  r=await fetch(base+'/api/sales',{method:'POST',headers,body:JSON.stringify({items:[]})});
- assert.equal(r.status,201);const saleId=(await r.json()).id;
+ assert.equal(r.status,201);const createdSale=await r.json(),saleId=createdSale.id;
  r=await fetch(base+'/api/pix-accounts',{method:'POST',headers,body:JSON.stringify({name:'Pix HTTP'})});
  assert.equal(r.status,201);const pixAccountId=(await r.json()).id;
 
@@ -61,7 +61,7 @@ test('HTTP: cadastra, edita, atribui e filtra status operacional', async t => {
  r=await fetch(base+'/api/sale-statuses',{method:'POST',headers,body:JSON.stringify({name:'Em separação',color:'amber'})});
  assert.equal(r.status,201);const status=await r.json();assert.equal(status.color,'amber');
  r=await fetch(base+'/api/sales',{method:'POST',headers,body:JSON.stringify({items:[]})});
- assert.equal(r.status,201);const saleId=(await r.json()).id;
+ assert.equal(r.status,201);const createdSale=await r.json(),saleId=createdSale.id;
  r=await fetch(base+`/api/sales/${saleId}/status`,{method:'PUT',headers,body:JSON.stringify({operational_status_id:status.id})});
  assert.equal(r.status,200);let sale=await r.json();
  assert.equal(sale.status,'draft');assert.equal(sale.operational_status_id,status.id);assert.equal(sale.operational_status.name,'Em separação');
@@ -98,10 +98,10 @@ test('HTTP: catálogos Pix e fornecedor alimentam pagamento, entrada e históric
  r=await fetch(base+'/api/entries',{method:'POST',headers,body:JSON.stringify({product_id:product.id,supplier_id:supplier.id,quantity:2,unit_cost_cents:4000})});
  assert.equal(r.status,201);assert.equal((await r.json()).supplier_name,'Fornecedor HTTP');
  r=await fetch(base+'/api/sales',{method:'POST',headers,body:JSON.stringify({customer_id:customer.id,seller_id:registered.user.id,items:[{product_id:product.id,quantity:1,unit_price_cents:10000}]})});
- assert.equal(r.status,201);const saleId=(await r.json()).id;
+ assert.equal(r.status,201);const createdSale=await r.json(),saleId=createdSale.id;
  r=await fetch(base+`/api/sales/${saleId}/payments`,{method:'POST',headers,body:JSON.stringify({request_id:randomUUID(),method:'pix',amount_cents:10000,pix_account_id:pix.id})});
  assert.equal(r.status,201);
- r=await fetch(base+`/api/sales/${saleId}/confirm`,{method:'POST',headers,body:'{}'});assert.equal(r.status,200);
+ r=await fetch(base+`/api/sales/${saleId}/confirm`,{method:'POST',headers,body:JSON.stringify({draft_token:createdSale.draft_token})});assert.equal(r.status,200);
 
  r=await fetch(base+`/api/pix-accounts/${pix.id}`,{method:'PUT',headers,body:JSON.stringify({name:'Pix novo nome',active:false})});
  assert.equal(r.status,200);assert.equal((await r.json()).active,false);

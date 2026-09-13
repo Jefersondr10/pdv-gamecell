@@ -283,7 +283,7 @@ test('editar rascunho sem visualizar custos não apaga valores internos', t => {
   const saleId = draft(x, {seller_id:u.id,freight_cents:1234,expenses:[{description:'Interno',amount_cents:321}],
     items:[{description:'Avulso',quantity:1,unit_price_cents:10000,manual_cost_cents:5000}]});
   const v = x.db.actor(x.db.login({email:'v@example.test',password:'senha-de-teste-456'}).token), visible=x.db.sale(v,saleId);
-  x.db.saveDraft(v,{customer_id:x.customer.id,seller_id:u.id,items:visible.items.map(i=>({id:i.id,description:i.description,quantity:2,unit_price_cents:i.unit_price_cents}))},saleId);
+  x.db.saveDraft(v, {draft_token:x.db.operations.draftToken(v,saleId),...({customer_id:x.customer.id,seller_id:u.id,items:visible.items.map(i=>({id:i.id,description:i.description,quantity:2,unit_price_cents:i.unit_price_cents}))})}, saleId);
   const updated=x.db.sale(x.actor,saleId);
   assert.equal(updated.items[0].manual_cost_cents,5000);assert.equal(updated.freight_cents,1234);assert.equal(updated.expenses[0].amount_cents,321);
 });
@@ -347,8 +347,8 @@ test('permissão somente de edição não permite apagar custo com null nem muda
   const saleId=draft(x,{seller_id:seller.id,items:[{description:'Avulso',quantity:1,unit_price_cents:10000,manual_cost_cents:5000}]});
   const v=x.db.actor(x.db.login({email:'v@example.test',password:'senha-de-teste-456'}).token), original=x.db.sale(x.actor,saleId).items[0];
   const base={customer_id:x.customer.id,seller_id:seller.id,items:[{id:original.id,description:'Avulso',quantity:1,unit_price_cents:10000}]};
-  assert.throws(()=>x.db.saveDraft(v,{...base,items:[{...base.items[0],manual_cost_cents:null}]},saleId),/permitido/);
-  assert.throws(()=>x.db.saveDraft(v,{...base,freight_cents:100},saleId),/permitido/);
+  assert.throws(()=>x.db.saveDraft(v, {draft_token:x.db.operations.draftToken(v,saleId),...({...base,items:[{...base.items[0],manual_cost_cents:null}]})}, saleId),/permitido/);
+  assert.throws(()=>x.db.saveDraft(v, {draft_token:x.db.operations.draftToken(v,saleId),...({...base,freight_cents:100})}, saleId),/permitido/);
   assert.equal(x.db.sale(x.actor,saleId).items[0].manual_cost_cents,5000);
 });
 

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { Store } from '../src/store.mjs';
 import { application } from '../src/server.mjs';
@@ -23,12 +25,62 @@ const snapshot=x=>JSON.stringify(['sales','sale_items','payments','allocations',
 test('data da venda: hoje por padrão, edição omitida preserva dia e rascunho legado confirma hoje',t=>{
  const x=setup(t),id=x.db.saveDraft(x.actor,x.data).id;
  assert.equal(x.db.sale(x.actor,id).business_date,today);
- x.db.saveDraft(x.actor,{...x.data,business_date:previous},id);
- x.db.saveDraft(x.actor,x.data,id);assert.equal(x.db.sale(x.actor,id).business_date,previous);
+ x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...({...x.data,business_date:previous})}, id);
+ x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...(x.data)}, id);assert.equal(x.db.sale(x.actor,id).business_date,previous);
  const legacy=x.db.saveDraft(x.actor,x.data).id;
  x.db.run('UPDATE sales SET business_date=NULL WHERE id=?',legacy);
- x.db.saveDraft(x.actor,x.data,legacy);assert.equal(x.db.sale(x.actor,legacy).business_date,null);
+ x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,legacy),...(x.data)}, legacy);assert.equal(x.db.sale(x.actor,legacy).business_date,null);
  x.db.confirm(x.actor,legacy,true);assert.equal(x.db.sale(x.actor,legacy).business_date,today);
+});
+
+test('migração de data da venda: horário de verão de São Paulo é aplicado e o índice continua utilizável',t=>{
+ const directory=mkdtempSync(join(tmpdir(),'pdv-business-date-')),path=join(directory,'pdv.sqlite');
+ t.after(()=>rmSync(directory,{recursive:true,force:true}));
+ let db=new Store(path);
+ const actor=db.actor(db.register({name:'Migração',store_name:'Loja histórica',email:'historico@example.test',password:'senha-ficticia-de-teste'}).token);
+ const migrated=db.saveDraft(actor,{items:[]}).id,preserved=db.saveDraft(actor,{items:[],business_date:'2018-01-14'}).id;
+ db.run('UPDATE sales SET created_at=?,business_date=NULL WHERE id=?','2018-01-15T02:30:00.000Z',migrated);
+ db.run('UPDATE sales SET created_at=? WHERE id=?','2018-01-15T02:30:00.000Z',preserved);
+ db.close();
+
+ db=new Store(path);
+ assert.equal(db.get('SELECT business_date FROM sales WHERE id=?',migrated).business_date,'2018-01-15');
+ assert.equal(db.get('SELECT business_date FROM sales WHERE id=?',preserved).business_date,'2018-01-14');
+ assert.deepEqual(db.listSales(actor,{from:'2018-01-15',to:'2018-01-15'}).map(s=>s.id),[migrated]);
+ const plan=db.all('EXPLAIN QUERY PLAN SELECT id FROM sales INDEXED BY idx_sales_date WHERE tenant_id=? AND business_date>=? AND business_date<=?',actor.tenant_id,'2018-01-15','2018-01-15');
+ assert.ok(plan.some(row=>/idx_sales_date/.test(row.detail)),JSON.stringify(plan));
+ db.close();
+
+ db=new Store(path);
+ assert.equal(db.get('SELECT business_date FROM sales WHERE id=?',migrated).business_date,'2018-01-15');
+ db.close();
+});
+
+test('migração de data da venda: banco antigo sem a coluna recebe coluna, backfill e índice',t=>{
+ const directory=mkdtempSync(join(tmpdir(),'pdv-business-column-')),path=join(directory,'pdv.sqlite');
+ t.after(()=>rmSync(directory,{recursive:true,force:true}));
+ let db=new Store(path);
+ const actor=db.actor(db.register({name:'Legado',store_name:'Loja antiga',email:'legado@example.test',password:'senha-ficticia-de-teste'}).token);
+ const sale=db.saveDraft(actor,{items:[]}).id;
+ db.run('UPDATE sales SET created_at=? WHERE id=?','2018-01-15T02:30:00.000Z',sale);
+ db.db.exec('DROP INDEX idx_sales_date; ALTER TABLE sales DROP COLUMN business_date');
+ db.close();
+
+ db=new Store(path);
+ assert.ok(db.all('PRAGMA table_info(sales)').some(column=>column.name==='business_date'));
+ assert.equal(db.get('SELECT business_date FROM sales WHERE id=?',sale).business_date,'2018-01-15');
+ assert.ok(db.get("SELECT 1 AS found FROM sqlite_schema WHERE type='index' AND name='idx_sales_date'").found);
+ db.close();
+});
+
+test('migração de data da venda: criação inválida impede qualquer backfill parcial',t=>{
+ const db=new Store(':memory:');t.after(()=>db.close());
+ const actor=db.actor(db.register({name:'Atomicidade',store_name:'Loja antiga',email:'atomico@example.test',password:'senha-ficticia-de-teste'}).token);
+ const valid=db.saveDraft(actor,{items:[]}).id,invalid=db.saveDraft(actor,{items:[]}).id;
+ db.run('UPDATE sales SET created_at=?,business_date=NULL WHERE id=?','2018-01-15T02:30:00.000Z',valid);
+ db.run('UPDATE sales SET created_at=?,business_date=NULL WHERE id=?','data-inválida',invalid);
+ assert.throws(()=>db.migrateLegacyBusinessDates(),/data de criação inválida/);
+ assert.deepEqual(db.all('SELECT id,business_date FROM sales ORDER BY id').map(row=>row.business_date),[null,null]);
 });
 
 test('data da venda: confirmação mantém dia escolhido, filtros, fechamento e pedido usam esse dia',t=>{
@@ -51,7 +103,7 @@ test('data da venda: inválida, vazia ou futura não grava nem altera o rascunho
  const x=setup(t),id=x.db.saveDraft(x.actor,x.data).id,before=snapshot(x);
  for(const business_date of [null,'','15/08/2026','2026-02-30','2199-01-01',123,{}]){
   assert.throws(()=>x.db.saveDraft(x.actor,{...x.data,business_date}));
-  assert.throws(()=>x.db.saveDraft(x.actor,{...x.data,business_date},id));
+  assert.throws(()=>x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...({...x.data,business_date})}, id));
   assert.equal(snapshot(x),before);
  }
 });
@@ -63,7 +115,7 @@ test('data da venda: mês fechado bloqueia cadastro e confirmação tardia sem b
  assert.throws(()=>x.db.saveDraft(x.actor,{...x.data,business_date:previous}),/mês desta data já foi fechado/);
  assert.throws(()=>x.db.confirm(x.actor,id,true),/mês desta data já foi fechado/);
  assert.equal(snapshot(x),before);assert.equal(x.db.products(x.actor)[0].stock,2);
- x.db.saveDraft(x.actor,{...x.data,business_date:today},id);x.db.confirm(x.actor,id,true);
+ x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...({...x.data,business_date:today})}, id);x.db.confirm(x.actor,id,true);
  assert.equal(x.db.products(x.actor)[0].stock,1);
 });
 
@@ -85,8 +137,8 @@ test('HTTP data da venda: criar, editar rascunho e confirmar preservam data come
  const login=await fetch(base+'/api/login',{method:'POST',headers,body:JSON.stringify({email:'datas@example.test',password:'senha-ficticia-de-teste'})});headers.Cookie=login.headers.get('set-cookie').split(';')[0];
  async function call(path,data,method='POST',expected=200){const res=await fetch(base+'/api'+path,{method,headers,body:JSON.stringify(data)}),body=await res.json();assert.equal(res.status,expected,JSON.stringify(body));return body;}
  const {id}=await call('/sales',x.data,'POST',201);
- await call('/sales/'+id,{...x.data,business_date:previous},'PUT');
- await call('/sales/'+id+'/confirm',{acknowledge_difference:true});
+ const updated=await call('/sales/'+id,{...x.data,business_date:previous,draft_token:x.db.operations.draftToken(x.actor,id)},'PUT');
+ await call('/sales/'+id+'/confirm',{acknowledge_difference:true,draft_token:updated.draft_token});
  const response=await fetch(base+'/api/sales/'+id,{headers});assert.equal((await response.json()).business_date,previous);
  await call('/sales',{...x.data,business_date:'2026-02-30'},'POST',400);
 });
@@ -109,9 +161,9 @@ test('interface da venda: envia data em novos/rascunhos/confirmados e valida ant
  const source=app.slice(app.indexOf('async function saveWorking('),app.indexOf('async function shareSale('));
  for(const status of ['new','draft','confirmed']){
   const calls=[],working={id:status==='new'?null:'sale',status:status==='confirmed'?status:'draft',business_date:'15/08/2026',reason:'Data correta',items:[],payments:[],entry_costs:{}};
-  const ctx={working,isoDate,salePaymentPayload:p=>p,saoPauloToday:()=> '2026-09-09',can:()=>false,editorNumbers:()=>({diff:0}),load:async()=>{},render:()=>{},toast:()=>{},api:async(path,data,method)=>{calls.push({path,data,method});return {id:'sale'};}};
+  const ctx={finishMutation:async()=>{},forgetWorking:()=>{},working,isoDate,salePaymentPayload:p=>p,saoPauloToday:()=> '2026-09-09',can:()=>false,editorNumbers:()=>({diff:0}),load:async()=>{},render:()=>{},toast:()=>{},api:async(path,data,method)=>{calls.push({path,data,method});return {id:'sale'};}};
   runInNewContext(source,ctx);await ctx.saveWorking(false);assert.equal(calls[0].data.business_date,'2026-08-15');
   const length=calls.length;
-  for(const date of ['', '31/02/2026','10/09/2026']){working.business_date=date;await assert.rejects(ctx.saveWorking(false));assert.equal(calls.length,length);}
+  for(const date of ['', '31/02/2026','10/09/2026']){ctx.working=working;working.business_date=date;await assert.rejects(ctx.saveWorking(false));assert.equal(calls.length,length);}
  }
 });

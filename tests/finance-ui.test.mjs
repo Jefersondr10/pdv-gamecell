@@ -31,13 +31,13 @@ test('lote na interface: datas brasileiras e subcategorias são enviadas em ISO 
  assert.equal(x.calls.at(-1).data.expenses[0].due_date,'2026-09-07');assert.equal(x.calls.at(-1).data.expenses[0].reference_month,'2026-09');assert.equal(x.calls.at(-1).data.expenses[0].subcategory_id,'sub');
 });
 
-function harness({permissions=['expenses.view','expenses.manage','finance.view','finance.manage'],closed=false,sourceChanged=false,rows=[],categories=[],subcategories=[],reminders={count:0,overdue_count:0,items:[]},modal={querySelector:()=>({textContent:''})}}={}) {
-  let html='',dialog='',calls=[];const session={user:{id:'test'}};
+function harness({apiOverride,permissions=['expenses.view','expenses.manage','finance.view','finance.manage'],closed=false,sourceChanged=false,rows=[],categories=[],subcategories=[],reminders={count:0,overdue_count:0,items:[]},modal={querySelector:()=>({textContent:''})}}={}) {
+  let html='',dialog='',calls=[];const session={store:{id:'store-test'},user:{id:'test',permissions:[...permissions]}};
   rows=rows.map(e=>({reference_month:'2026-09',...e}));
   const today=()=> '2026-09-06',money=n=>`R$ ${n/100}`,value=n=>(n/100).toFixed(2),esc=v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
     expense={month:'2026-09',rows,closed:false,summary:{total_cents:1000,fixed_cents:1000,variable_cents:0,paid_cents:0,open_cents:1000,overdue_cents:0},reminders,categories,subcategories},
     report={closed,source_changed:sourceChanged,closure_id:'closure',result:{partners:[{id:'partner-a',name:'<Sócio>',basis_points:10000,amount_cents:800}],reserve_basis_points:2000,reserve_cents:200,distribution_cents:800,settings_version:0,source_hash:'source',result_cents:1000,sales_profit_cents:2000,expenses_cents:1000,fixed_cents:1000,variable_cents:0,incomplete_sales:[],sales_count:1,cash_available_cents:null},withdrawals:[],withdrawn_cents:0,remaining_withdrawals_cents:800,cash_after_planned_cents:null,settings:{version:0,partners:[],reserve_basis_points:10000},history:[]};
-  const ui=createFinanceUI({api:async(path,data)=>{calls.push({path,data});if(data&&path.startsWith('/expenses'))return {expenses:[{id:'e',...data}]};if(path.startsWith('/expenses')){const month=path.split('month=')[1];return {...expense,month,rows:month==='all'?rows:rows.filter(e=>e.reference_month===month)};}return report;},getState:()=>session,can:p=>permissions.includes(p),page:s=>html=s,
+  const ui=createFinanceUI({api:async(path,data)=>{calls.push({path,data});if(apiOverride)return apiOverride(path,data,{expense,report});if(data&&path.startsWith('/expenses'))return {expenses:[{id:'e',...data}]};if(path.startsWith('/expenses')){const month=path.split('month=')[1];return {...expense,month,rows:month==='all'?rows:rows.filter(e=>e.reference_month===month)};}return report;},getState:()=>session,can:p=>permissions.includes(p),page:s=>html=s,
     heading:(a,b,c='')=>`<h1>${a}</h1><p>${b}</p>${c}`,metric:(a,b)=>`<section>${a}: ${b}</section>`,empty:(a,b)=>`<h3>${a}</h3><p>${b}</p>`,field:(l,c)=>`<label>${l}${c}</label>`,input:(name,v,extra)=>`<input name="${name}" value="${esc(v)}" ${extra}>`,option:(v,l,s)=>`<option value="${v}" ${v===s?'selected':''}>${l}</option>`,esc,money,value,cents:v=>Math.round(Number(v)*100),dateLabel:esc,today,showModal:(title,content)=>dialog=`${title}${content}`,modal,icon:()=>''});
   return {ui,get html(){return html;},get dialog(){return dialog;},calls,report,session};
 }
@@ -217,4 +217,34 @@ test('dashboard agrupa uma categoria renomeada pelo ID sem dividir valores hist�
  const x=harness({categories:[{id:'cat',name:'Atual',active:true}],rows:[{category_id:'cat',category:'Anterior',kind:'fixed',amount_cents:1000,state:'open'},{category_id:'cat',category:'Atual',kind:'fixed',amount_cents:2000,state:'open'}]});await x.ui.load();x.ui.expensesPage('');
  assert.match(x.html,/Atual<\/td><td class="num">2<\/td><td class="num strong">R\$ 30/);
  assert.doesNotMatch(x.html,/>Anterior<\/td>/);
+});
+
+test('revisão financeira: respostas atrasadas não trocam dados de usuário ou período',async()=>{
+ const pending=[],x=harness({apiOverride:(path,data,defaults)=>new Promise(resolve=>pending.push({path,defaults,resolve}))});
+ const first=x.ui.load();x.session.store.id='store-b';const second=x.ui.load();
+ for(const p of pending.slice(3))p.resolve(p.path.startsWith('/finance')?p.defaults.report:{...p.defaults.expense,categories:[{id:'B',name:'Categoria B',active:true,applicability:'both'}]});
+ await second;
+ for(const p of pending.slice(0,3))p.resolve(p.path.startsWith('/finance')?p.defaults.report:{...p.defaults.expense,categories:[{id:'A',name:'Categoria A',active:true,applicability:'both'}]});
+ await first;x.ui.expensesPage('catalogs');
+ assert.match(x.html,/Categoria B/);assert.doesNotMatch(x.html,/Categoria A/);
+ const third=x.ui.load();x.ui.reset();
+ for(const p of pending.slice(6))p.resolve(p.path.startsWith('/finance')?p.defaults.report:p.defaults.expense);
+ await third;x.ui.expensesPage('catalogs');assert.doesNotMatch(x.html,/Categoria B/);
+});
+test('revisão financeira: falha no histórico mantém mês e valores anteriores juntos',async()=>{
+ let fail=false;
+ const x=harness({apiOverride:async(path,data,defaults)=>{if(fail)throw Error('Offline');return path.startsWith('/finance')?defaults.report:defaults.expense;}});
+ await x.ui.load();x.ui.closingPage();const before=x.html;fail=true;
+ await assert.rejects(x.ui.action('fin-history','2026-07'),/Offline/);x.ui.closingPage();
+ assert.equal(x.html,before);assert.match(x.html,/name="month" value="2026-09"/);assert.doesNotMatch(x.html,/value="2026-07"/);
+});
+test('revisão financeira: caixa insuficiente fica em alerta e impede envio',async()=>{
+ const classes=new Set(['good']),targetAttributes=new Map(),target={textContent:'',classList:{toggle(c,yes){yes?classes.add(c):classes.delete(c);},add:c=>classes.add(c),remove:c=>classes.delete(c)},setAttribute:(name,value)=>targetAttributes.set(name,value)};
+ const inputAttributes=new Map();let validity='';const element={form:{id:'fin-close-form'},name:'cash',value:'1',setCustomValidity:v=>validity=v,setAttribute:(name,value)=>inputAttributes.set(name,value),removeAttribute:name=>inputAttributes.delete(name)};
+ const x=harness({modal:{contains:()=>true,querySelector:()=>target}});await x.ui.load();x.ui.input(element);
+ assert.match(target.textContent,/insuficiente/);assert.ok(classes.has('bad'));assert.ok(!classes.has('good'));assert.notEqual(validity,'');assert.equal(inputAttributes.get('aria-invalid'),'true');assert.equal(targetAttributes.get('role'),'alert');assert.equal(targetAttributes.get('aria-live'),'assertive');
+ element.value='10';x.ui.input(element);assert.equal(validity,'');assert.ok(classes.has('good'));assert.ok(!classes.has('bad'));assert.equal(inputAttributes.has('aria-invalid'),false);assert.equal(targetAttributes.get('role'),'status');
+ element.value='';x.ui.input(element);assert.match(target.textContent,/A conferir/);assert.equal(validity,'');
+ await assert.rejects(x.ui.submit({id:'fin-close-form'},{cash:'1'}),/não cobre/);assert.equal(x.calls.length,3);
+ await x.ui.action('fin-close');assert.match(x.dialog,/aria-describedby="finance-cash-preview"/);assert.match(x.dialog,/id="finance-cash-preview"[^>]+role="status"[^>]+aria-live="polite"/);
 });

@@ -25,31 +25,59 @@ export function migrateCancellationStatus(store) {
  }finally{store.db.exec(`PRAGMA legacy_alter_table=${legacyAlter}; PRAGMA foreign_keys=${foreignKeys}`);}
 }
 
-export function cancelledSale(row,record) {
+const refundState=(original,refunded)=>original===0?'not_required':refunded===0?'pending':refunded===original?'completed':'partial';
+const refundToken=(saleId,original,refunds,reversals)=>createHash('sha256').update(JSON.stringify({sale_id:saleId,original_cents:original,
+ refunds:refunds.map(refund=>[refund.id,refund.amount_cents,refund.method,refund.refunded_date,refund.created_at]),
+ reversals:reversals.map(reversal=>[reversal.id,reversal.refund_id,reversal.reversed_date,reversal.created_at])})).digest('hex');
+
+export function cancelledSale(row,record,refundRows=[],reversalRows=[]) {
  check(record,'Histórico de cancelamento não encontrado.',409);
  const before=JSON.parse(record.snapshot_json);
+ const original=before.reconciliation.gross_cents;
+ const reversalsByRefund=new Map(reversalRows.map(reversal=>[reversal.refund_id,reversal]));
+ const total=refundRows.filter(refund=>!reversalsByRefund.has(refund.id)).reduce((sum,refund)=>sum+BigInt(refund.amount_cents),0n);
+ check(total<=BigInt(Number.MAX_SAFE_INTEGER),'O total devolvido ultrapassa o limite de representação exata.');
+ const refunded=Number(total);
+ check(refunded<=original,'O histórico de devoluções excede o valor recebido da venda.',409);
+ const pending=original-refunded;
+ const refundReversals=reversalRows.map(reversal=>({id:reversal.id,refund_id:reversal.refund_id,amount_cents:reversal.amount_cents,
+  reason:reversal.reason,reversed_date:reversal.reversed_date,created_at:reversal.created_at,
+  author_id:reversal.actor_id,author:reversal.author}));
+ const projectedReversals=new Map(refundReversals.map(reversal=>[reversal.refund_id,reversal]));
+ const refunds=refundRows.map(refund=>{
+  const reversal=projectedReversals.get(refund.id)??null;
+  return {id:refund.id,amount_cents:refund.amount_cents,method:refund.method,
+   refunded_date:refund.refunded_date,notes:refund.notes,created_at:refund.created_at,
+   author_id:refund.actor_id,author:refund.author,effective:!reversal,reversed:!!reversal,reversal};
+ });
  return {...before,...row,is_wholesale:!!row.is_wholesale,
   items:before.items.map(item=>({...item,pending_cents:0,profit_cents:null,provisional_profit_cents:null})),
   reconciliation:{...before.reconciliation,state:'cancelled',pending_cents:0,excess_cents:0,difference_cents:0},
   profit_cents:null,provisional_profit_cents:null,profit_state:'cancelled',
   cancellation:{created_at:record.created_at,reason:record.reason,author:record.author,
-   refund_pending_cents:before.reconciliation.gross_cents,
-   refund_state:before.reconciliation.gross_cents>0?'pending':'not_required'},
+   refund_original_cents:original,refund_completed_cents:refunded,refunded_cents:refunded,refund_pending_cents:pending,
+   refund_state:refundState(original,refunded),refund_token:refundToken(row.id,original,refundRows,reversalRows),
+   refunds,refund_reversals:refundReversals},
  };
 }
 
 export function pendingRefunds(store,actor,{shopWide=false}={}) {
  if(shopWide)check(allowed(actor,'finance.view'),'Acesso não permitido.',403);
- // The cancellation snapshot is immutable through the API. A pending refund never means money was returned.
+ // O retrato do cancelamento permanece imutável; a pendência considera somente o saldo ainda não baixado.
  const scope=shopWide||allowed(actor,'sales.view_all')?'':' AND (s.seller_id=? OR s.created_by=?)';
  const params=scope?[actor.tenant_id,actor.id,actor.id]:[actor.tenant_id];
- const items=store.all(`SELECT s.id,s.number,c.created_at,
+ const items=store.all(`SELECT * FROM (SELECT s.id,s.number,c.created_at,
   json_extract(c.snapshot_json,'$.customer_name') AS customer_name,
-  json_extract(c.snapshot_json,'$.reconciliation.gross_cents') AS pending_cents
+  json_extract(c.snapshot_json,'$.reconciliation.gross_cents') AS original_cents,
+  COALESCE((SELECT SUM(r.amount_cents) FROM sale_refunds r
+   WHERE r.tenant_id=c.tenant_id AND r.sale_id=c.sale_id AND NOT EXISTS (
+    SELECT 1 FROM sale_refund_reversals rr WHERE rr.tenant_id=r.tenant_id AND rr.refund_id=r.id)),0) AS refunded_cents,
+  json_extract(c.snapshot_json,'$.reconciliation.gross_cents')-COALESCE((SELECT SUM(r.amount_cents) FROM sale_refunds r
+   WHERE r.tenant_id=c.tenant_id AND r.sale_id=c.sale_id AND NOT EXISTS (
+    SELECT 1 FROM sale_refund_reversals rr WHERE rr.tenant_id=r.tenant_id AND rr.refund_id=r.id)),0) AS pending_cents
   FROM sale_cancellations c JOIN sales s ON s.tenant_id=c.tenant_id AND s.id=c.sale_id
   WHERE c.tenant_id=? AND s.status='cancelled'${scope}
-  AND json_extract(c.snapshot_json,'$.reconciliation.gross_cents')>0
-  ORDER BY c.created_at,s.number`,...params);
+  ) WHERE pending_cents>0 ORDER BY created_at,number`,...params);
  const total=items.reduce((sum,item)=>sum+BigInt(item.pending_cents),0n);
  check(total<=BigInt(Number.MAX_SAFE_INTEGER),'O total das devoluções ultrapassa o limite de representação exata.');
  return {count:items.length,total_cents:Number(total),...(shopWide?{token:createHash('sha256').update(JSON.stringify(items.map(item=>[item.id,item.pending_cents]))).digest('hex')}:{items})};

@@ -6,10 +6,12 @@ function refundReserveFields(refunds,esc,money) {
  return refunds?.count?`${refundCashNotice(refunds,money)}<input type="hidden" name="refunds_token" value="${esc(refunds.token)}"><label class="finance-confirm"><input type="checkbox" name="acknowledge_refund_reserve" required>Conferi o caixa e separei o dinheiro das devoluções pendentes antes das retiradas.</label>`:'';
 }
 export function createFinanceUI({api,getState,can,page,heading,metric,empty,field,input,option,esc,money,value,cents,dateLabel,today,showModal,modal,icon}) {
-  let expenseMonth=today().slice(0,7), closingMonth=expenseMonth, expenseData=null, report=null, userId=null;
+  let loadGeneration=0;
+  let expenseMonth=today().slice(0,7), closingMonth=expenseMonth, expenseData=null, report=null, userIdentity=null;
   let modalDirty=false, expenseSection='', expenseAllData=null, dashboardAll=false;
   const listFilters={fixed:{month:'',status:'',search:'',category:''},variable:{month:'',status:'',search:'',category:''}};
   const kinds={fixed:'Fixa',variable:'Variável'}, states={paid:'Paga',overdue:'Atrasada',today:'Vence hoje',open:'A pagar',cancelled:'Cancelada'};
+  const currentIdentity=()=>{const current=getState(),user=current?.user;return user?JSON.stringify([current.store?.id??'',user.id,!!user.is_owner,[...(user.permissions??[])].sort()]):'';};
   const badge=e=>`<span class="badge ${e.state==='paid'?'good':e.state==='overdue'?'bad':e.state==='today'?'warn':''}">${states[e.state]}</span>`;
   const percent=bp=>`${value(bp)}%`;
   const button=(action,label,key='',className='small')=>`<button type="button" class="${className}" data-action="fin-${action}" data-id="${esc(key)}">${label}</button>`;
@@ -49,7 +51,7 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
   function categoryPage() {
     const rows=categories(),manage=can('expenses.manage');
     page(heading('Cadastros de despesas','Categorias e subcategorias, com uso separado por tipo de despesa.',manage?button('category-new',`${icon('plus')} Nova categoria`,'','primary'):'')+
-      `<section class="panel"><div class="panel-header"><div><h2>Categorias e subcategorias</h2><p>${rows.filter(c=>c.active).length} categorias ativas · ${subcategories().filter(c=>c.active).length} subcategorias ativas</p></div></div>${rows.length?`<div class="expense-category-catalog">${rows.map(c=>`<article class="expense-category-card"><div><span class="operational-badge" data-status-color="${esc(c.color)}">${esc(c.name)}</span><span class="badge ${c.active?'good':''}">${c.active?'Ativa':'Inativa'}</span></div><p><strong>${scopeLabel(c.applicability)}</strong> · ${c.expense_count} despesas vinculadas</p>${manage?button('category-edit','Editar categoria',c.id):''}<div class="subcategory-catalog"><h3>Subcategorias</h3>${subcategories().filter(sub=>sub.category_id===c.id).map(sub=>`<div class="subcategory-row"><div><strong>${esc(sub.name)}</strong><small>${scopeLabel(sub.applicability)} · ${sub.active?'Ativa':'Inativa'} · ${sub.expense_count} despesas</small></div>${manage?button('subcategory-edit','Editar',sub.id,'small subtle'):''}</div>`).join('')||'<p class="muted">Nenhuma subcategoria cadastrada.</p>'}${manage&&c.active?button('subcategory-new','+ Nova subcategoria',c.id):''}</div></article>`).join('')}</div>`:empty('Nenhuma categoria cadastrada','Use Nova categoria para organizar suas despesas.')}</section><p class="finance-footnote">Defina se cada cadastro vale para fixas, variáveis ou ambas. A subcategoria respeita os tipos permitidos na categoria. Inativar preserva históricos; renomear não altera os nomes registrados nas despesas anteriores.</p>`);
+      `<section class="panel"><div class="panel-header"><div><h2>Categorias e subcategorias</h2><p>${rows.filter(c=>c.active).length} ${rows.filter(c=>c.active).length===1?'categoria ativa':'categorias ativas'} · ${subcategories().filter(c=>c.active).length} ${subcategories().filter(c=>c.active).length===1?'subcategoria ativa':'subcategorias ativas'}</p></div></div>${rows.length?`<div class="expense-category-catalog">${rows.map(c=>`<article class="expense-category-card"><div><span class="operational-badge" data-status-color="${esc(c.color)}">${esc(c.name)}</span><span class="badge ${c.active?'good':''}">${c.active?'Ativa':'Inativa'}</span></div><p><strong>${scopeLabel(c.applicability)}</strong> · ${c.expense_count} ${c.expense_count===1?'despesa vinculada':'despesas vinculadas'}</p>${manage?button('category-edit','Editar categoria',c.id):''}<div class="subcategory-catalog"><h3>Subcategorias</h3>${subcategories().filter(sub=>sub.category_id===c.id).map(sub=>`<div class="subcategory-row"><div><strong>${esc(sub.name)}</strong><small>${scopeLabel(sub.applicability)} · ${sub.active?'Ativa':'Inativa'} · ${sub.expense_count} ${sub.expense_count===1?'despesa':'despesas'}</small></div>${manage?button('subcategory-edit','Editar',sub.id,'small subtle'):''}</div>`).join('')||'<p class="muted">Nenhuma subcategoria cadastrada.</p>'}${manage&&c.active?button('subcategory-new','+ Nova subcategoria',c.id):''}</div></article>`).join('')}</div>`:empty('Nenhuma categoria cadastrada','Use Nova categoria para organizar suas despesas.')}</section><p class="finance-footnote">Defina se cada cadastro vale para fixas, variáveis ou ambas. A subcategoria respeita os tipos permitidos na categoria. Inativar preserva históricos; renomear não altera os nomes registrados nas despesas anteriores.</p>`);
   }
   function openSubcategory(key='',categoryId='') {
     const sub=key?subcategories().find(c=>c.id===key):null;if(key&&!sub)throw Error('Atualize as subcategorias.');
@@ -190,7 +192,7 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
   function openClose() {
     modalDirty=false;
     const d=report.result;
-    showModal('Conferir fechamento',`${refundReserveFields(report.refunds_pending,esc,money)}<div class="finance-modal-summary"><strong>${esc(monthLabel(closingMonth))}</strong><span>${money(d.result_cents)}</span></div><div class="row-stat"><span>Lucro reservado à loja</span><strong>${money(d.reserve_cents)}</strong></div><div class="row-stat"><span>Total destinado aos sócios</span><strong>${money(d.distribution_cents)}</strong></div>${field('Caixa livre conferido por você (R$, opcional)',input('cash','','inputmode="decimal" placeholder="Deixe vazio se não conferiu o saldo"'))}<p class="finance-explainer">Informe somente o dinheiro disponível depois de separar contas, obrigações e outros valores que não podem ser retirados. Não preencha com o faturamento.</p><div id="finance-cash-preview" class="alert good">Sem saldo informado, o caixa após retiradas ficará como “A conferir”.</div><label class="finance-confirm"><input type="checkbox" name="acknowledge" required> Conferi as vendas, despesas e participações. Sei que o fechamento preservará esses valores e não poderá ser reaberto nesta versão.</label><p class="footer-note">${closingMonth===today().slice(0,7)?'Este mês ainda está em andamento. Vendas posteriores serão sinalizadas como diferença, sem alterar o fechamento. ':''}Fechar não paga despesas nem transfere dinheiro aos sócios.</p>`,'fin-close-form');
+    showModal('Conferir fechamento',`${refundReserveFields(report.refunds_pending,esc,money)}<div class="finance-modal-summary"><strong>${esc(monthLabel(closingMonth))}</strong><span>${money(d.result_cents)}</span></div><div class="row-stat"><span>Lucro reservado à loja</span><strong>${money(d.reserve_cents)}</strong></div><div class="row-stat"><span>Total destinado aos sócios</span><strong>${money(d.distribution_cents)}</strong></div>${field('Caixa livre conferido por você (R$, opcional)',input('cash','','inputmode="decimal" placeholder="Deixe vazio se não conferiu o saldo" aria-describedby="finance-cash-preview"'))}<p class="finance-explainer">Informe somente o dinheiro disponível depois de separar contas, obrigações e outros valores que não podem ser retirados. Não preencha com o faturamento.</p><div id="finance-cash-preview" class="alert good" role="status" aria-live="polite">Sem saldo informado, o caixa após retiradas ficará como “A conferir”.</div><label class="finance-confirm"><input type="checkbox" name="acknowledge" required> Conferi as vendas, despesas e participações. Sei que o fechamento preservará esses valores e não poderá ser reaberto nesta versão.</label><p class="footer-note">${closingMonth===today().slice(0,7)?'Este mês ainda está em andamento. Vendas posteriores serão sinalizadas como diferença, sem alterar o fechamento. ':''}Fechar não paga despesas nem transfere dinheiro aos sócios.</p>`,'fin-close-form');
     modal.querySelector('[type="submit"]').textContent='Registrar fechamento';
   }
   function openWithdrawal(key) {
@@ -199,10 +201,14 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
     showModal('Registrar retirada do sócio',`${refundReserveFields(report.refunds_pending,esc,money)}<div class="finance-modal-summary"><strong>${esc(p.name)}</strong><span>${money(p.amount_cents-paid)} a retirar</span></div><div class="fields">${field('Valor retirado (R$)',input('amount',value(p.amount_cents-paid),'required inputmode="decimal"'))}${field('Data da retirada',input('paid_date',today(),`type="date" required max="${today()}"`))}${field('Observação (opcional)',`<textarea name="notes" rows="2" maxlength="1000"></textarea>`,true)}</div><p class="footer-note">Registre somente um valor que já foi entregue ao sócio. Não há transferência bancária. Nesta versão, uma retirada registrada não pode ser estornada pela interface.</p>`,'fin-withdrawal-form',`data-id="${key}" data-request-id="${crypto.randomUUID()}"`);
   }
   return {
-    async load() {
-      const nextUser=getState()?.user.id;if(userId!==nextUser){userId=nextUser;expenseMonth=closingMonth=today().slice(0,7);expenseSection='';dashboardAll=false;expenseData=expenseAllData=report=null;for(const f of Object.values(listFilters))Object.assign(f,{month:'',status:'',search:'',category:''});}
-      const [expenses,closing,all]=await Promise.all([can('expenses.view')?api(`/expenses?month=${expenseMonth}`):null,can('finance.view')?api(`/finance?month=${closingMonth}`):null,can('expenses.view')?api('/expenses?month=all'):null]);
-      expenseData=expenses;report=closing;expenseAllData=all;
+    reset(){loadGeneration++;userIdentity=null;expenseData=expenseAllData=report=null;modalDirty=false;},
+    async load(selection={}) {
+      const nextIdentity=currentIdentity();if(userIdentity!==nextIdentity){userIdentity=nextIdentity;expenseMonth=closingMonth=today().slice(0,7);expenseSection='';dashboardAll=false;expenseData=expenseAllData=report=null;for(const f of Object.values(listFilters))Object.assign(f,{month:'',status:'',search:'',category:''});}
+      const requestedExpenseMonth=selection.expenseMonth??expenseMonth,requestedClosingMonth=selection.closingMonth??closingMonth;
+      const generation=++loadGeneration;
+      const [expenses,closing,all]=await Promise.all([can('expenses.view')?api(`/expenses?month=${requestedExpenseMonth}`):null,can('finance.view')?api(`/finance?month=${requestedClosingMonth}`):null,can('expenses.view')?api('/expenses?month=all'):null]);
+      if(generation!==loadGeneration||currentIdentity()!==nextIdentity)return false;
+      expenseMonth=requestedExpenseMonth;closingMonth=requestedClosingMonth;expenseData=expenses;report=closing;expenseAllData=all;return true;
     },expensesPage,closingPage,remindersPanel,
     afterAction(){if(modal.querySelector('#fin-bulk-form'))updateBulkSummary();},
     async action(action,key,element) {
@@ -214,10 +220,10 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
       if(action==='fin-bulk')openBulk();
       if(action==='fin-bulk-add'){const form=modal.querySelector('#fin-bulk-form');if(form.querySelectorAll('[data-bulk-row]').length>=50)return;modal.querySelector('#expense-bulk-rows').insertAdjacentHTML('beforeend',bulkRow(form.dataset.defaultMonth));modalDirty=true;updateBulkSummary();modal.querySelector('#expense-bulk-rows').lastElementChild.querySelector('input').focus();}
       if(action==='fin-bulk-remove'){if(modal.querySelectorAll('[data-bulk-row]').length<=1)return;const row=element.closest('[data-bulk-row]'),next=row.nextElementSibling??row.previousElementSibling;row.remove();modalDirty=true;updateBulkSummary();next?.querySelector('input')?.focus();}
-      if(action==='fin-dashboard-all'){await this.load();dashboardAll=true;expensesPage('');}
-      if(action==='fin-dashboard-month'){const old=expenseMonth;expenseMonth=key;try{await this.load();}catch(error){expenseMonth=old;throw error;}dashboardAll=false;expensesPage('');}
+      if(action==='fin-dashboard-all'){if(!await this.load())return;dashboardAll=true;expensesPage('');}
+      if(action==='fin-dashboard-month'){if(!await this.load({expenseMonth:key}))return;dashboardAll=false;expensesPage('');}
       if(action==='fin-drill-type'){Object.assign(listFilters[key],{month:dashboardAll?'':expenseMonth,status:'',search:'',category:''});return {view:`expenses-${key}`};}
-      if(action==='fin-all-months'){listFilters[expenseSection].month='';await this.load();expensesPage();}
+      if(action==='fin-all-months'){if(!await this.load())return;listFilters[expenseSection].month='';expensesPage();}
       if(action==='fin-list-clear'){Object.assign(listFilters[expenseSection],{month:'',status:'',search:'',category:''});expensesPage();}
       if(action==='fin-edit')openExpense(key);
       if(['fin-pay','fin-reopen','fin-cancel'].includes(action))openState(action.slice(4),key);
@@ -228,7 +234,7 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
       if(action==='fin-keep'){modal.querySelector('#finance-discard').remove();modal.querySelector('input:not([type="hidden"]):not(:disabled),textarea:not(:disabled),button:not(:disabled)').focus();}
       if(action==='fin-close')openClose();
       if(action==='fin-withdraw')openWithdrawal(key);
-      if(action==='fin-history'){closingMonth=key;await this.load();closingPage();}
+      if(action==='fin-history'){if(!await this.load({closingMonth:key}))return;closingPage();}
     },
     change:refreshClassification,
     input(element) {
@@ -236,7 +242,13 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
       if(element.form?.id==='fin-bulk-form')updateBulkSummary();
       if(element.form?.id==='fin-close-form'&&element.name==='cash'){
         const target=modal.querySelector('#finance-cash-preview');
-        try {target.textContent=element.value.trim()?`Caixa projetado após todas as retiradas: ${money(cents(element.value)-report.result.distribution_cents)}.`:'Sem saldo informado, o caixa após retiradas ficará como “A conferir”.';}catch{target.textContent='Informe um valor monetário válido.';}
+        try {const remaining=element.value.trim()?cents(element.value)-report.result.distribution_cents:null;
+          target.classList.toggle('bad',remaining!==null&&remaining<0);target.classList.toggle('good',remaining===null||remaining>=0);
+          element.setCustomValidity(remaining!==null&&remaining<0?'Caixa insuficiente para as retiradas previstas.':'');
+          if(remaining!==null&&remaining<0){element.setAttribute('aria-invalid','true');target.setAttribute('role','alert');target.setAttribute('aria-live','assertive');}
+          else{element.removeAttribute('aria-invalid');target.setAttribute('role','status');target.setAttribute('aria-live','polite');}
+          target.textContent=remaining===null?'Sem saldo informado, o caixa após retiradas ficará como “A conferir”.':remaining<0?`Caixa insuficiente: faltam ${money(-remaining)} para as retiradas previstas.`:`Caixa projetado após todas as retiradas: ${money(remaining)}.`;
+        }catch{element.setCustomValidity('Informe um valor monetário válido.');element.setAttribute('aria-invalid','true');target.classList.add('bad');target.classList.remove('good');target.setAttribute('role','alert');target.setAttribute('aria-live','assertive');target.textContent='Informe um valor monetário válido.';}
       }
     },
     dirty:()=>modalDirty,
@@ -254,7 +266,7 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
         const key=form.dataset.id;await api(key?`/expense-categories/${key}`:'/expense-categories',{name:d.name,color:d.color,applicability:d.applicability,active:d.active==='on',version:Number(form.dataset.version)},key?'PUT':'POST');
         return {message:'Categoria salva.',view:'expenses-catalogs'};
       }
-      if(form.id==='fin-expense-list-period'){const month=selectedPeriod(d);await this.load();listFilters[expenseSection].month=month;expensesPage();return {local:true};}
+      if(form.id==='fin-expense-list-period'){const month=selectedPeriod(d);if(!await this.load())return {local:true};listFilters[expenseSection].month=month;expensesPage();return {local:true};}
       if(form.id==='fin-expense-list-filter'){Object.assign(listFilters[expenseSection],{status:d.status,search:d.search.trim(),category:d.category??''});expensesPage();return {local:true};}
       if(form.id==='fin-bulk-form') {
         const rows=[...form.querySelectorAll('[data-bulk-row]')];
@@ -267,15 +279,15 @@ export function createFinanceUI({api,getState,can,page,heading,metric,empty,fiel
         Object.assign(listFilters.variable,{month:'',status:'',search:'',category:''});
         return {message:`${result.expenses.length} despesas variáveis salvas.`,view:'expenses-variable'};
       }
-      if(form.id==='fin-expenses-month'){const selected=selectedPeriod(d),old=expenseMonth;expenseMonth=selected||expenseMonth;try{await this.load();}catch(error){expenseMonth=old;throw error;}dashboardAll=!selected;expensesPage('');return {local:true};}
-      if(form.id==='fin-closing-month'){const old=closingMonth;closingMonth=d.month;try{await this.load();}catch(error){closingMonth=old;throw error;}closingPage();return {local:true};}
+      if(form.id==='fin-expenses-month'){const selected=selectedPeriod(d);if(!await this.load({expenseMonth:selected||expenseMonth}))return {local:true};dashboardAll=!selected;expensesPage('');return {local:true};}
+      if(form.id==='fin-closing-month'){if(!await this.load({closingMonth:d.month}))return {local:true};closingPage();return {local:true};}
       if(form.id==='fin-expense-form') {
         const key=form.dataset.id,legacy=d.category_id==='legacy'?findExpense(key)?.category??'':'',result=await api(key?`/expenses/${key}`:'/expenses',{...d,category_id:d.category_id==='legacy'?null:d.category_id||null,subcategory_id:d.subcategory_id||null,category:legacy,amount_cents:cents(d.amount),reminder_days:Number(d.reminder_days),repeat_count:Number(d.repeat_count??1),request_id:form.dataset.requestId,version:Number(form.dataset.version)},key?'PUT':'POST');
         return {message:`${result.expenses.length} despesa(s) salva(s).`};
       }
       if(form.id==='fin-expense-state')await api(`/expenses/${form.dataset.id}/state`,{...d,action:form.dataset.operation,version:Number(form.dataset.version)});
       if(form.id==='fin-settings-form')await api('/finance/settings',{version:Number(form.dataset.version),reserve_basis_points:cents(d.reserve),partners:[...form.querySelectorAll('[data-partner-row]')].map(row=>({id:row.dataset.id,name:row.querySelector('[name="partner_name"]').value,basis_points:cents(row.querySelector('[name="partner_percentage"]').value)}))},'PUT');
-      if(form.id==='fin-close-form')await api('/finance/close',{month:closingMonth,source_hash:report.result.source_hash,settings_version:report.result.settings_version,cash_available_cents:d.cash.trim()?cents(d.cash):null,refunds_token:d.refunds_token,acknowledge_refund_reserve:new FormData(form).has('acknowledge_refund_reserve')});
+      if(form.id==='fin-close-form'){const cash=d.cash.trim()?cents(d.cash):null;if(cash!==null&&cash<report.result.distribution_cents)throw Error('O caixa livre informado não cobre as retiradas previstas. Confira o saldo ou aumente a reserva da loja.');await api('/finance/close',{month:closingMonth,source_hash:report.result.source_hash,settings_version:report.result.settings_version,cash_available_cents:cash,refunds_token:d.refunds_token,acknowledge_refund_reserve:new FormData(form).has('acknowledge_refund_reserve')});}
       if(form.id==='fin-withdrawal-form')await api(`/finance/${report.closure_id}/withdrawals`,{partner_id:form.dataset.id,request_id:form.dataset.requestId,amount_cents:cents(d.amount),paid_date:d.paid_date,notes:d.notes,refunds_token:d.refunds_token,acknowledge_refund_reserve:new FormData(form).has('acknowledge_refund_reserve')});
       return {message:form.id==='fin-close-form'?'Fechamento registrado. Os valores foram preservados.':form.id==='fin-withdrawal-form'?'Retirada registrada.':'Registro salvo.'};
     }

@@ -34,8 +34,8 @@ function editData(x,id,extra={}) {
 test('atacado: padrão desmarcado, criação marcada e omissão preservada na edição',t=>{
  const x=setup(t),normal=sale(x),id=sale(x,{is_wholesale:true});
  assert.equal(x.db.sale(x.actor,normal).is_wholesale,false);assert.equal(x.db.sale(x.actor,id).is_wholesale,true);
- x.db.saveDraft(x.actor,draftData(x),id);assert.equal(x.db.sale(x.actor,id).is_wholesale,true);
- x.db.saveDraft(x.actor,draftData(x,{is_wholesale:false,original_is_wholesale:true}),id);
+ x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...(draftData(x))}, id);assert.equal(x.db.sale(x.actor,id).is_wholesale,true);
+ x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...(draftData(x,{is_wholesale:false,original_is_wholesale:true}))}, id);
  assert.equal(x.db.sale(x.actor,id).is_wholesale,false);
  assert.equal(x.db.snapshot(x.actor).sales.find(s=>s.id===id).is_wholesale,false);
 });
@@ -43,7 +43,7 @@ test('atacado: padrão desmarcado, criação marcada e omissão preservada na ed
 test('atacado: tipos inválidos são rejeitados sem registros parciais',t=>{
  const x=setup(t),id=sale(x,{is_wholesale:true}),before=x.db.fullSale(x.actor,id),audit=x.db.all('SELECT * FROM audit');
  for(const value of [null,0,1,'true','false','on',[],{}]) {
-  assert.throws(()=>x.db.saveDraft(x.actor,draftData(x,{is_wholesale:value}),id),/atacado inválida/);
+  assert.throws(()=>x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...(draftData(x,{is_wholesale:value}))}, id),/atacado inválida/);
   assert.throws(()=>x.db.operations.setWholesale(x.actor,id,toggleData(x,id,value)),/atacado inválida/);
  }
  assert.deepEqual(x.db.fullSale(x.actor,id),before);assert.deepEqual(x.db.all('SELECT * FROM audit'),audit);
@@ -71,7 +71,7 @@ test('atacado: token obsoleto, falha de auditoria e formulário antigo não sobr
  const x=setup(t),id=sale(x),stale=toggleData(x,id,false);
  x.db.operations.setWholesale(x.actor,id,toggleData(x,id,true));
  assert.throws(()=>x.db.operations.setWholesale(x.actor,id,stale),/venda mudou/);
- assert.throws(()=>x.db.saveDraft(x.actor,draftData(x,{is_wholesale:false,original_is_wholesale:false}),id),/outra tela/);
+ assert.throws(()=>x.db.saveDraft(x.actor, {draft_token:x.db.operations.draftToken(x.actor,id),...(draftData(x,{is_wholesale:false,original_is_wholesale:false}))}, id),/outra tela/);
  const before=x.db.fullSale(x.actor,id),requests=x.db.all('SELECT * FROM operation_requests'),audit=x.db.audit;
  x.db.audit=()=>{throw Error('falha de auditoria');};
  assert.throws(()=>x.db.operations.setWholesale(x.actor,id,toggleData(x,id,false)),/falha de auditoria/);x.db.audit=audit;
@@ -130,7 +130,7 @@ test('HTTP atacado: salvar, marcar e editar usam o servidor e exigem sessão/ori
  const base='http://127.0.0.1:'+server.address().port,headers={Cookie:'pdv_session='+x.token,Origin:origin,'Content-Type':'application/json'};
  const call=(path,data,h=headers)=>fetch(base+'/api'+path,{method:'PUT',headers:h,body:JSON.stringify(data)});
  const created=await fetch(base+'/api/sales',{method:'POST',headers,body:JSON.stringify(draftData(x,{is_wholesale:true}))});assert.equal(created.status,201);const {id}=await created.json();
- let response=await call('/sales/'+id,draftData(x,{is_wholesale:false,original_is_wholesale:true}));assert.equal(response.status,200);
+ let response=await call('/sales/'+id,{...draftData(x,{is_wholesale:false,original_is_wholesale:true}),draft_token:x.db.operations.draftToken(x.actor,id)});assert.equal(response.status,200);
  const payload=toggleData(x,id,true),path='/sales/'+id+'/wholesale';
  assert.equal((await call(path,payload,{'Content-Type':'application/json',Origin:origin})).status,401);
  assert.equal((await call(path,payload,{...headers,Origin:'https://outro.example'})).status,403);
@@ -155,7 +155,7 @@ test('interface atacado: checkbox visível no editor e no cabeçalho, sem escond
  assert.match(app,/is_wholesale:w.is_wholesale,original_is_wholesale:w.original_is_wholesale/);
  assert.equal((app.match(/working\[el\.dataset\.bind\]=el\.type==='checkbox'\?el\.checked:el\.value/g)||[]).length,2);
  const mobile=readFileSync(new URL('../public/mobile-ui.mjs',import.meta.url),'utf8');assert.doesNotMatch(mobile,/sale-wholesale|data-sale-wholesale/);
- const css=readFileSync(new URL('../public/brand.css',import.meta.url),'utf8');assert.match(css,/\.sale-wholesale \{[^}]*min-height:44px/);assert.match(css,/sale-wholesale:has\(input:focus-visible\)/);
+ const css=readFileSync(new URL('../public/brand.css',import.meta.url),'utf8');assert.match(css,/\.sale-wholesale \{[^}]*min-height:32px/);assert.match(css,/\.sale-wholesale input\[type="checkbox"\] \{[^}]*width:15px/);assert.match(css,/sale-wholesale:has\(input:focus-visible\)/);
 });
 
 test('interface atacado: estado inicial e edição mantêm o booleano e valor original',()=>{
@@ -165,13 +165,13 @@ test('interface atacado: estado inicial e edição mantêm o booleano e valor or
  for(const marked of [true,false]){const result=ctx.makeWorking({is_wholesale:marked,items:[],payments:[]});assert.equal(result.is_wholesale,marked);assert.equal(result.original_is_wholesale,marked);}
 });
 
-test('interface atacado: falha de atualização após salvar mantém payload exato para replay da correção',async()=>{
+test('interface atacado: sucesso sai do editor antes de atualizar e não repete a correção',async()=>{
  const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8'),source=app.slice(app.indexOf('async function saveWorking('),app.indexOf('async function shareSale('));
  const sent=[],working={id:'s',status:'confirmed',reason:'Classificar',is_wholesale:true,original_is_wholesale:false,correction_request_id:randomUUID(),edit_token:'token',items:[],payments:[],entry_costs:{}};
  let attempts=0;
- const ctx={working,can:()=>false,editorNumbers:()=>({diff:0}),salePaymentPayload:x=>x,api:async(path,data)=>{if(data)sent.push(JSON.parse(JSON.stringify(data)));return {id:'s'};},load:async()=>{if(attempts++===0)throw Error('Falha de conexão');},render:()=>{},toast:()=>{}};
- runInNewContext(source,ctx);await assert.rejects(ctx.saveWorking(false),/Falha de conexão/);assert.equal(working.original_is_wholesale,false);
- await ctx.saveWorking(false);assert.deepEqual(sent[1],sent[0]);
+ const ctx={finishMutation:async()=>{},forgetWorking:()=>{},working,can:()=>false,editorNumbers:()=>({diff:0}),salePaymentPayload:x=>x,api:async(path,data)=>{if(data)sent.push(JSON.parse(JSON.stringify(data)));return {id:'s'};},load:async()=>{if(attempts++===0)throw Error('Falha de conexão');},render:()=>{},toast:()=>{}};
+ runInNewContext(source,ctx);await ctx.saveWorking(false);assert.equal(working.original_is_wholesale,false);
+ assert.equal(ctx.working,null);assert.equal(ctx.view,'detail');assert.equal(sent.length,1);
 });
 
 test('interface atacado: alteração na lista usa token atual da lista e não detalhe antigo',async()=>{

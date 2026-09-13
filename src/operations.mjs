@@ -40,7 +40,7 @@ export class Operations {
   return this.s.all(`SELECT l.*,p.name AS product_name,p.sku,COALESCE(es.version,1) AS version,es.voided_at,es.reason
    FROM lots l JOIN products p ON p.tenant_id=l.tenant_id AND p.id=l.product_id
    LEFT JOIN stock_entry_state es ON es.tenant_id=l.tenant_id AND es.lot_id=l.id
-   WHERE l.tenant_id=? ORDER BY l.received_at DESC,l.rowid DESC`,actor.tenant_id).map(e=>{e.received_date=businessDate(new Date(e.received_at));if(!includeCosts)delete e.unit_cost_cents;return e;});
+   WHERE l.tenant_id=? ORDER BY l.received_at DESC,l.rowid DESC`,actor.tenant_id).map(e=>{e.received_date=businessDate(new Date(e.received_at));e.units=this.s.serials.entryUnits(actor,e.id);if(!includeCosts)delete e.unit_cost_cents;return e;});
  }
  receive(actor,data){
   requirePermission(actor,'stock.receive');requirePermission(actor,'costs.enter');
@@ -49,6 +49,18 @@ export class Operations {
    check(!(data.product_id&&data.new_product),'Escolha produto existente ou novo produto.');
    let productId=data.product_id;
    if(data.new_product){check(typeof data.new_product==='object'&&!Array.isArray(data.new_product),'Novo produto inválido.');productId=this.s.addProduct(actor,data.new_product).id;}
+   if(data.units!==undefined){
+    check(this.s.scoped('products',productId,actor).serial_tracked,'Ative o controle por SN / IMEI no produto.');
+    check(Array.isArray(data.units)&&data.units.length>0&&data.units.length<=200,'Informe de 1 a 200 aparelhos.');
+    const received=data.units.map(unit=>{
+     check(unit&&typeof unit==='object'&&!Array.isArray(unit),'Unidade inválida.');
+     const entry=this.s.receive(actor,{product_id:productId,supplier_id:data.supplier_id,quantity:1,serial_number:unit.serial_number,unit_cost_cents:unit.unit_cost_cents});
+     if(data.received_date!==undefined){const lot=this.s.get('SELECT received_at FROM lots WHERE tenant_id=? AND id=?',actor.tenant_id,entry.id);this.s.run('UPDATE lots SET received_at=? WHERE tenant_id=? AND id=?',editedTimestamp(data.received_date,lot.received_at),actor.tenant_id,entry.id);}
+     return entry;
+    });
+    this.rebuildProduct(actor,productId);
+    return {id:received[0].id,entry_ids:received.map(e=>e.id),product_id:productId,quantity_remaining:received.length,consumed_quantity:0,resolved_quantity:0};
+   }
    const received=this.s.receive(actor,{...data,product_id:productId});
    if(data.received_date!==undefined){
     const lot=this.s.get('SELECT received_at FROM lots WHERE tenant_id=? AND id=?',actor.tenant_id,received.id);
@@ -79,6 +91,17 @@ export class Operations {
     supplierId=data.supplier_id||null; supplierName=supplierId===old.supplier_id?old.supplier_name:supplierId?this.s.scoped('suppliers',supplierId,actor).name:null;
    }
    const affected=[...new Set([old.product_id,productId])],before=affected.flatMap(p=>this.productCosts(actor,p)),at=now();
+   const units=this.s.serials.entryUnits(actor,key);
+   check(!units.some(u=>u.sold)||(productId===old.product_id&&!remove),'Esta entrada tem aparelho vendido. Edite ou cancele a venda antes de trocar o produto ou excluir a entrada.',409);
+   if(units.length)check(this.s.scoped('products',productId,actor).serial_tracked,'O produto de destino precisa usar SN / IMEI.');
+   if(!remove&&data.units!==undefined){
+    check(this.s.scoped('products',productId,actor).serial_tracked,'Ative o controle por SN / IMEI no produto.');
+    this.s.serials.setEntryUnits(actor,{id:key,quantity_initial:quantity},data.units);
+   }else check(remove||quantity>=units.length,'A quantidade não pode ser menor que os aparelhos identificados.');
+   if(!remove&&this.s.scoped('products',productId,actor).serial_tracked){
+    const nextCount=this.s.serials.entryUnits(actor,key).length;
+    check(quantity-nextCount<=old.quantity_initial-units.length,'Informe um SN / IMEI para cada unidade adicionada. Remover uma identificação exige reduzir a quantidade correspondente.',409);
+   }
    this.s.run('UPDATE lots SET product_id=?,received_at=?,quantity_initial=?,unit_cost_cents=?,supplier_id=?,supplier_name=? WHERE tenant_id=? AND id=?',productId,receivedAt,quantity,cost,supplierId,supplierName,actor.tenant_id,key);
    this.s.run(`INSERT INTO stock_entry_state VALUES(?,?,?,?,?,?) ON CONFLICT(tenant_id,lot_id) DO UPDATE SET version=excluded.version,voided_at=excluded.voided_at,reason=excluded.reason,updated_at=excluded.updated_at`,actor.tenant_id,key,old.version+1,remove?at:null,reason,at);
    for(const product of affected)this.rebuildProduct(actor,product);
@@ -94,22 +117,30 @@ export class Operations {
  rebuildProduct(actor,productId){
   const lots=this.s.all(`SELECT l.* FROM lots l WHERE l.tenant_id=? AND l.product_id=?
    AND NOT EXISTS(SELECT 1 FROM stock_entry_state es WHERE es.tenant_id=l.tenant_id AND es.lot_id=l.id AND es.voided_at IS NOT NULL)
-   ORDER BY l.received_at,l.rowid`,actor.tenant_id,productId).map(l=>({...l,quantity_remaining:l.quantity_initial}));
+   ORDER BY l.received_at,l.rowid`,actor.tenant_id,productId).map(l=>({...l,quantity_remaining:l.quantity_initial,
+    anonymous_remaining:l.quantity_initial-this.s.serials.entryUnits(actor,l.id).length}));
+  const usedUnits=new Set();
   const items=this.s.all(`SELECT i.* FROM sale_items i JOIN sales s ON s.tenant_id=i.tenant_id AND s.id=i.sale_id
    JOIN sale_fifo_order o ON o.tenant_id=s.tenant_id AND o.sale_id=s.id
    WHERE i.tenant_id=? AND i.product_id=? AND s.status='confirmed' ORDER BY o.sequence,i.ordinal`,actor.tenant_id,productId);
   for(const item of items){
-   const plan=planFIFO(lots,item.quantity).allocations;
+   const plan=this.s.serials.plan(actor,item,lots,usedUnits),tracked=!!this.s.get('SELECT 1 FROM sale_item_tracking WHERE tenant_id=? AND item_id=?',actor.tenant_id,item.id);
    const previous=this.s.all('SELECT lot_id,quantity,unit_cost_cents FROM allocations WHERE tenant_id=? AND item_id=?',actor.tenant_id,item.id);
    const normalize=rows=>rows.map(r=>JSON.stringify(r)).sort();
    if(JSON.stringify(normalize(previous))!==JSON.stringify(normalize(plan))){
     this.s.run('DELETE FROM allocations WHERE tenant_id=? AND item_id=?',actor.tenant_id,item.id);
     for(const a of plan)this.s.run('INSERT INTO allocations VALUES(?,?,?,?,?,?)',randomUUID(),actor.tenant_id,item.id,a.lot_id,a.quantity,a.unit_cost_cents);
    }
-   for(const a of plan)if(a.lot_id)lots.find(l=>l.id===a.lot_id).quantity_remaining-=a.quantity;
+   for(const a of plan)if(a.lot_id){const lot=lots.find(l=>l.id===a.lot_id);lot.quantity_remaining-=a.quantity;if(!tracked)lot.anonymous_remaining-=a.quantity;}
   }
   this.s.run('UPDATE lots SET quantity_remaining=0 WHERE tenant_id=? AND product_id=?',actor.tenant_id,productId);
   for(const lot of lots)this.s.run('UPDATE lots SET quantity_remaining=? WHERE tenant_id=? AND id=?',lot.quantity_remaining,actor.tenant_id,lot.id);
+ }
+ draftToken(actor,key){
+  const sale=this.s.saleAccess(actor,key);
+  const fields=['id','tenant_id','status','customer_id','seller_id','freight_cents','expenses_json','public_notes','business_date','is_wholesale','review_manual'];
+  const revision=this.s.get("SELECT MAX(rowid) AS revision FROM audit WHERE tenant_id=? AND entity_id=? AND action IN ('draft_updated','draft_created')",actor.tenant_id,key)?.revision;
+  return createHmac('sha256',this.editSecret).update(JSON.stringify({sale:Object.fromEntries(fields.map(f=>[f,sale[f]])),items:this.s.saleItems(actor,key),revision})).digest('hex');
  }
  editToken(sale){
   const {share_hash,share_expires,store_name,customer_name,seller_name,...data}=sale;
@@ -153,9 +184,72 @@ export class Operations {
    return {id:key,cancelled:true,refund_pending_cents:refund};
   }));
  }
+ refundResponse(actor,key,result,refundId=result.id){
+  const cancellation=this.s.sale(actor,key).cancellation;
+  const refund=cancellation.refunds.find(item=>item.id===refundId);
+  return {...result,effective:refund?.effective??false,reversed:refund?.reversed??false,reversal:refund?.reversal??null,
+   refund_completed_cents:cancellation.refund_completed_cents,refund_pending_cents:cancellation.refund_pending_cents,
+   refund_state:cancellation.refund_state,refund_token:cancellation.refund_token};
+ }
+ recordRefund(actor,key,data){
+  requirePermission(actor,'sales.refund');this.s.saleAccess(actor,key);
+  check(data&&typeof data==='object'&&!Array.isArray(data),'Dados da devolução inválidos.');
+  const result=this.request(actor,'sale_refund',key,data,()=>{
+   const sale=this.s.sale(actor,key);check(sale.status==='cancelled','Somente uma venda cancelada pode registrar devolução.',409);
+   check(data.acknowledge_refund_completed===true,'Confirme que o dinheiro já foi devolvido fora do sistema.');
+   check(data.refund_token===sale.cancellation.refund_token,'As devoluções desta venda mudaram. Atualize e confira o saldo antes de continuar.',409);
+   const amount=integer(data.amount_cents,'Valor devolvido',1);
+   check(amount<=sale.cancellation.refund_pending_cents,'O valor devolvido não pode ser maior que o saldo pendente.');
+   const method=text(data.method,'Método da devolução',20);
+   check(['pix','cash','card','other'].includes(method),'Método da devolução inválido.');
+   const refundedDate=validDate(data.refunded_date),cancellationDate=businessDate(new Date(sale.cancellation.created_at));
+   check(refundedDate>=cancellationDate,'A data da devolução não pode ser anterior ao cancelamento.');
+   check(refundedDate<=businessDate(),'A data da devolução não pode estar no futuro.');
+   check(!this.s.get('SELECT id FROM finance_closures WHERE tenant_id=? AND reference_month=?',actor.tenant_id,refundedDate.slice(0,7)),
+    'O mês desta devolução já foi fechado. Escolha uma data de mês aberto.',409);
+   const notes=text(data.notes,'Observações da devolução',1000,false),refundId=randomUUID(),at=now(),normalizedRequest=requestId(data.request_id);
+   this.s.run(`INSERT INTO sale_refunds(id,tenant_id,sale_id,actor_id,actor_name_snapshot,request_id,amount_cents,method,refunded_date,notes,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)`,refundId,actor.tenant_id,key,actor.id,actor.name,normalizedRequest,amount,method,refundedDate,notes,at);
+   const pending=sale.cancellation.refund_pending_cents-amount;
+   this.s.audit(actor,'sale',key,'refund_recorded',{refund_id:refundId,amount_cents:amount,method,refunded_date:refundedDate,
+    refund_pending_before_cents:sale.cancellation.refund_pending_cents,refund_pending_after_cents:pending});
+   return {id:refundId,sale_id:key,amount_cents:amount,method,refunded_date:refundedDate,notes,
+    author_id:actor.id,author:actor.name};
+  });
+  return this.refundResponse(actor,key,result);
+ }
+ reverseRefund(actor,key,refundKey,data){
+  requirePermission(actor,'sales.refund_correct');this.s.saleAccess(actor,key);
+  check(data&&typeof data==='object'&&!Array.isArray(data),'Dados da correção inválidos.');
+  const result=this.request(actor,'sale_refund_reversal',`${key}:${refundKey}`,data,()=>{
+   const sale=this.s.sale(actor,key);check(sale.status==='cancelled','Somente uma venda cancelada pode corrigir devolução.',409);
+   const refund=this.s.get('SELECT * FROM sale_refunds WHERE tenant_id=? AND sale_id=? AND id=?',actor.tenant_id,key,refundKey);
+   check(refund,'Baixa de devolução não encontrada.',404);
+   check(!this.s.get('SELECT id FROM sale_refund_reversals WHERE tenant_id=? AND refund_id=?',actor.tenant_id,refundKey),
+    'Esta baixa de devolução já foi corrigida.',409);
+   check(data.refund_token===sale.cancellation.refund_token,'As devoluções desta venda mudaram. Atualize e confira o saldo antes de continuar.',409);
+   check(data.acknowledge_refund_reversal===true,
+    'Confirme que a baixa foi lançada por engano. A correção não recupera dinheiro do cliente e restaura o valor como pendente.');
+   check(!Object.hasOwn(data,'amount_cents'),'O valor da correção é sempre o valor integral da baixa original.');
+   const reason=text(data.reason,'Motivo da correção',500),reversedDate=validDate(data.reversed_date);
+   check(reversedDate>=refund.refunded_date,'A data da correção não pode ser anterior à data informada na devolução.');
+   check(reversedDate<=businessDate(),'A data da correção não pode estar no futuro.');
+   check(!this.s.get('SELECT id FROM finance_closures WHERE tenant_id=? AND reference_month=?',actor.tenant_id,reversedDate.slice(0,7)),
+    'O mês desta correção já foi fechado. Escolha uma data de mês aberto.',409);
+   const reversalId=randomUUID(),at=now(),normalizedRequest=requestId(data.request_id);
+   this.s.run(`INSERT INTO sale_refund_reversals(id,tenant_id,sale_id,refund_id,actor_id,actor_name_snapshot,request_id,reason,reversed_date,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`,reversalId,actor.tenant_id,key,refundKey,actor.id,actor.name,normalizedRequest,reason,reversedDate,at);
+   const pending=sale.cancellation.refund_pending_cents+refund.amount_cents;
+   this.s.audit(actor,'sale',key,'refund_reversal_recorded',{reversal_id:reversalId,refund_id:refundKey,
+    amount_cents:refund.amount_cents,reason,reversed_date:reversedDate,
+    refund_pending_before_cents:sale.cancellation.refund_pending_cents,refund_pending_after_cents:pending});
+   return {id:reversalId,sale_id:key,refund_id:refundKey,amount_cents:refund.amount_cents,reason,
+    reversed_date:reversedDate,author_id:actor.id,author:actor.name};
+  });
+  return this.refundResponse(actor,key,result,refundKey);
+ }
  editSale(actor,key,data){
   requirePermission(actor,'sales.edit_confirmed');
-  this.s.saleAccess(actor,key);
   return this.request(actor,'sale_edit',key,data,()=>this.guardClosures(actor,()=>{
    const before=this.s.fullSale(actor,key);check(before.status==='confirmed','Esta venda não está confirmada.',409);
    check(data.edit_token===this.editToken(before),'A venda, os pagamentos ou os custos mudaram. Atualize antes de editar.',409);
@@ -181,15 +275,16 @@ export class Operations {
    }
    this.s.run('DELETE FROM allocations WHERE tenant_id=? AND item_id IN (SELECT id FROM sale_items WHERE tenant_id=? AND sale_id=?)',actor.tenant_id,actor.tenant_id,key);
    this.s.run("UPDATE sales SET status='draft' WHERE tenant_id=? AND id=?",actor.tenant_id,key);
-   this.s.saveDraft({...actor,permissions:[...actor.permissions,'sales.edit_draft']},data,key);
+   this.s.saveDraft({...actor,permissions:[...actor.permissions,'sales.edit_draft']},{...data,draft_token:this.draftToken(actor,key)},key);
    this.s.run("UPDATE sales SET status='confirmed',business_date=? WHERE tenant_id=? AND id=?",saleDate,actor.tenant_id,key);
-   if(data.operational_status_id!==undefined)this.s.setOperationalStatus(actor,key,{operational_status_id:data.operational_status_id});
+   const validationActor={...actor,permissions:[...actor.permissions,'sales.view_all']};
+   if(data.operational_status_id!==undefined)this.s.setOperationalStatus(validationActor,key,{operational_status_id:data.operational_status_id});
    for(const productId of products)this.rebuildProduct(actor,productId);
    correctPayments(this.s,actor,key,data.payments,reason);
-   const after=this.s.fullSale(actor,key);
+   const after=this.s.fullSale(validationActor,key);
    check(after.reconciliation.state==='matched'||data.acknowledge_difference===true,'Há diferença entre o novo total e os pagamentos. Confirme que deseja manter a diferença.',409);
    this.s.audit(actor,'sale',key,'confirmed_corrected',{reason,before,after});
-   return {id:key,updated:true};
+   return {id:key,updated:true,access_lost:!allowed(actor,'sales.view_all')&&after.seller_id!==actor.id&&after.created_by!==actor.id};
   }));
  }
  report(actor){

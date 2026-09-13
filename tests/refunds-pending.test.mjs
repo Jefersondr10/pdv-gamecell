@@ -134,11 +134,11 @@ test('HTTP devolução: confirmação e resumo persistem em chamada autenticada,
  assert.equal((await post('/sales/'+id+'/payments',{method:'cash',amount_cents:1,request_id:randomUUID()})).status,409);
 });
 
-test('interface devolução: alerta compacto, dinheiro e pagamentos históricos escapados, sem botão de estorno',()=>{
+test('interface devolução: alerta orienta abrir o pedido e pagamentos históricos continuam escapados',()=>{
  const esc=v=>String(v??'').replaceAll('<','&lt;').replaceAll('"','&quot;'),money=String;
  const summary={count:1,total_cents:1000,items:[{id:'x',number:1,customer_name:'<script>',pending_cents:1000}]};
- const html=refundReminders(summary,{esc,money});assert.match(html,/Devoluções pendentes/);assert.match(html,/Todos os períodos/);assert.match(html,/data-action="open-sale"/);assert.doesNotMatch(html,/<script>/);assert.equal(refundReminders({count:0},{esc,money}),'');
- assert.match(refundBadge({cancellation:{refund_pending_cents:1000}},money),/Devolução pendente · 1000/);
+ const html=refundReminders(summary,{esc,money});assert.match(html,/Valores a devolver/);assert.match(html,/Registrar devolução realizada/);assert.match(html,/data-action="open-sale"/);assert.doesNotMatch(html,/<script>/);assert.equal(refundReminders({count:0},{esc,money}),'');
+ assert.match(refundBadge({cancellation:{refund_pending_cents:1000}},money),/Falta devolver · 1000/);
  const history=cancellationPayments({reconciliation:{gross_cents:1000},payments:[{method:'pix',amount_cents:1000,pix_account_name:'<Conta>'}]},{esc,money});assert.match(history,/Histórico preservado/);assert.doesNotMatch(history,/<Conta>|data-action=/);
  assert.match(refundCashNotice(summary,money),/Separe este valor antes das retiradas/);
  const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');assert.match(app,/acknowledge_refund_pending:new FormData\(form\).has/);

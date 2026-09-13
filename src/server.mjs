@@ -36,10 +36,14 @@ export function application(options = {}) {
     ['/google-ui.mjs', ['google-ui.mjs', 'text/javascript; charset=utf-8']],
     ['/stock-ui.mjs', ['stock-ui.mjs', 'text/javascript; charset=utf-8']],
     ['/sales-view.mjs', ['sales-view.mjs', 'text/javascript; charset=utf-8']],
+    ['/sales-filter-controller.mjs', ['sales-filter-controller.mjs', 'text/javascript; charset=utf-8']],
+    ['/serial-ui.mjs', ['serial-ui.mjs', 'text/javascript; charset=utf-8']],
+    ['/refund-ui.mjs', ['refund-ui.mjs', 'text/javascript; charset=utf-8']],
     ['/select-control.mjs', ['select-control.mjs', 'text/javascript; charset=utf-8']],
     ['/finance-ui.mjs', ['finance-ui.mjs', 'text/javascript; charset=utf-8']],
     ['/finance.css', ['finance.css', 'text/css; charset=utf-8']],
     ['/brand.css', ['brand.css', 'text/css; charset=utf-8']],
+    ['/calculator-extra.css', ['calculator-extra.css', 'text/css; charset=utf-8']],
     ['/date-control.mjs', ['date-control.mjs', 'text/javascript; charset=utf-8']],
     ['/gamecell-logo.png', ['gamecell-logo.png', 'image/png']],
     ['/style.css', ['style.css', 'text/css; charset=utf-8']],
@@ -115,6 +119,7 @@ export function application(options = {}) {
         return json({ user: result.user }, path === '/api/register' ? 201 : 200);
       }
       const token = cookieToken(req), actor = store.actor(token);
+      check(!req.headers['x-pdv-user']||req.headers['x-pdv-user']===actor.id,'A conta mudou em outra aba. Recarregue antes de continuar.',409);
       if (method === 'POST' && path === '/api/logout') {
         store.logout(token); res.setHeader('Set-Cookie', [cookie('pdv_session', '', 0), cookie('pdv_google', '', 0)]); return json({ ok: true });
       }
@@ -141,7 +146,13 @@ export function application(options = {}) {
         if(resource==='finance' && method==='POST' && action==='withdrawals')return json(store.finance.withdraw(actor,key,data),201);
       }
       if (method === 'POST' && path === '/api/products') return json(store.addProduct(actor, data), 201);
+      const productRoute=path.match(/^\/api\/products\/([a-f0-9-]{36})(?:\/(units))?$/);
+      if(method==='GET'&&productRoute)return json(productRoute[2]?store.serials.units(actor,productRoute[1]):store.product(actor,productRoute[1]));
+      if(method==='PUT'&&productRoute&&!productRoute[2])return json(store.updateProduct(actor,productRoute[1],data));
       if (method === 'POST' && path === '/api/customers') return json(store.addCustomer(actor, data), 201);
+      const customerRoute = path.match(/^\/api\/customers\/([a-f0-9-]{36})$/);
+      if (method === 'GET' && customerRoute) return json(store.customer(actor, customerRoute[1]));
+      if (method === 'PUT' && customerRoute) return json(store.updateCustomer(actor, customerRoute[1], data));
       if (method === 'POST' && path === '/api/users') return json(store.addUser(actor, data), 201);
       if (method === 'POST' && path === '/api/rates') return json(store.saveRate(actor, data), 201);
       if (method === 'POST' && path === '/api/card-machines') return json(store.saveCardMachine(actor, data), 201);
@@ -161,22 +172,29 @@ export function application(options = {}) {
       const editSaleRoute=path.match(/^\/api\/sales\/([a-f0-9-]{36})\/edit$/);
       const wholesaleRoute=path.match(/^\/api\/sales\/([a-f0-9-]{36})\/wholesale$/);
       const cancelSaleRoute=path.match(/^\/api\/sales\/([a-f0-9-]{36})\/cancel$/);
+      const refundReversalRoute=path.match(/^\/api\/sales\/([a-f0-9-]{36})\/refunds\/([a-f0-9-]{36})\/reversal$/);
       if(method==='POST'&&cancelSaleRoute)return json(store.operations.cancelSale(actor,cancelSaleRoute[1],data));
+      if(method==='POST'&&refundReversalRoute){const result=store.operations.reverseRefund(actor,refundReversalRoute[1],refundReversalRoute[2],data);return json(result,result.replayed?200:201);}
       if(method==='PUT'&&wholesaleRoute)return json(store.operations.setWholesale(actor,wholesaleRoute[1],data));
       if(method==='PUT'&&editSaleRoute)return json(store.operations.editSale(actor,editSaleRoute[1],data));
       if (method === 'POST' && path === '/api/sales') return json(store.saveDraft(actor, data), 201);
-      const route = path.match(/^\/api\/(sales|rates|card-machines|users|sale-statuses|pix-accounts|suppliers|products)\/([a-f0-9-]{36})(?:\/(confirm|payments|share|permissions|status|history))?$/);
+      const route = path.match(/^\/api\/(sales|rates|card-machines|users|sale-statuses|pix-accounts|suppliers|products)\/([a-f0-9-]{36})(?:\/(confirm|payments|refunds|share|permissions|status|review|history))?$/);
       if (route) {
         const [, resource, itemId, action] = route;
         if (resource === 'sales') {
           if (method === 'GET' && !action) return json(store.sale(actor, itemId));
           if (method === 'PUT' && !action) return json(store.saveDraft(actor, data, itemId));
           if (method === 'PUT' && action === 'status') return json(store.setOperationalStatus(actor, itemId, data));
-          if (method === 'POST' && action === 'confirm') return json(store.confirm(actor, itemId, data.acknowledge_difference));
-          if (method === 'POST' && action === 'payments') {
-            const result = store.addPayment(actor, itemId, data);
-            return json(result, result.replayed ? 200 : 201);
-          }
+          if (method === 'PUT' && action === 'review') return json(store.setReviewManual(actor, itemId, data));
+          if (method === 'POST' && action === 'confirm') {check(typeof data.draft_token==='string','Atualize e confira a venda antes de confirmar.',409);return json(store.confirm(actor,itemId,data.acknowledge_difference,data.draft_token));}
+           if (method === 'POST' && action === 'payments') {
+             const result = store.addPayment(actor, itemId, data);
+             return json(result, result.replayed ? 200 : 201);
+           }
+           if (method === 'POST' && action === 'refunds') {
+             const result = store.operations.recordRefund(actor, itemId, data);
+             return json(result, result.replayed ? 200 : 201);
+           }
           if (method === 'POST' && action === 'share') { const link = store.share(actor, itemId); return json({ url: `${origin}/s/${link.token}` }); }
         }
         if (resource === 'users' && method === 'PUT' && action === 'permissions') return json(store.updatePermissions(actor, itemId, data));

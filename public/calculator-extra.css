@@ -1,0 +1,38 @@
+.calculator-interest-help {
+  align-self: end;
+  margin: 0;
+  padding-bottom: 8px;
+  color: var(--muted);
+  font-size: .75rem;
+  line-height: 1.4;
+}
+
+/* One stage at a time on both desktop and mobile. Inputs are not in the result DOM. */
+.calculator-step { width:100%; max-width:760px; margin-inline:auto; }
+.calculator-step-form { max-width:600px; }
+.calculator-step .calculator-layout { grid-template-columns:minmax(0,1fr); }
+.calculator-step .calculator-result-heading h2 { margin:0; font-size:1rem; color:#12475b; }
+.calculator-step .calculator-internal-details { display:block; margin:6px auto 0; }
+.calculator-step .page-heading > button { min-height:44px; }
+.calculator-step #calculator-result-title:focus { outline:none; }
+
+/* Expand the result into available space; retain natural scrolling for zoom/short screens. */
+@media screen {
+  .layout:has(.calculator-step-result) { min-height:100dvh; }
+  .main:has(.calculator-step-result) { display:flex; flex-direction:column; min-height:100dvh; }
+  .main:has(.calculator-step-result) > .topbar { flex:none; }
+  .main > .content:has(.calculator-step-result) { display:flex; flex-direction:column; flex:1; margin-block:0; padding-bottom:max(12px,env(safe-area-inset-bottom)); }
+  #page:has(.calculator-step-result) { display:flex; flex-direction:column; flex:1; }
+  .calculator-step-result { display:flex; flex-direction:column; flex:1; max-width:none; }
+  .calculator-step-result > .page-heading { flex:none; }
+  .calculator-step-result .calculator-layout,
+  .calculator-step-result .calculator-result,
+  .calculator-step-result #calculator-result { display:flex; flex-direction:column; align-items:stretch; flex:1; }
+  .calculator-step-result .calculator-result { overflow:visible; }
+  .calculator-step-result .installment-grid { flex:1; grid-template-rows:repeat(9,minmax(auto,1fr)); }
+  .calculator-step-result .installment-option { padding:clamp(4px,1dvh,12px) clamp(7px,1vw,16px); font-size:clamp(.875rem,2dvh,1.125rem); }
+  .calculator-step-result .calculator-submit { flex:none; }
+}
+@media screen and (min-width:901px) {
+  .calculator-step-result .installment-grid { grid-template-rows:repeat(6,minmax(auto,1fr)); }
+}

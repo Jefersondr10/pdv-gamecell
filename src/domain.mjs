@@ -60,7 +60,7 @@ export function planFIFO(lots, quantity) {
 export const PERMISSIONS = [
   'sales.edit_confirmed', 'stock.correct', 'payments.correct',
   'sales.create', 'sales.confirm', 'sales.edit_draft', 'sales.view_all', 'sales.assign_seller',
-  'sales.change_status', 'sales.cancel',
+  'sales.change_status', 'sales.cancel', 'sales.refund', 'sales.refund_correct',
   'payments.record', 'costs.view', 'costs.enter', 'profit.view',
   'products.manage', 'customers.manage', 'stock.receive', 'settings.manage', 'users.manage', 'sales.share',
   'expenses.view', 'expenses.manage', 'finance.view', 'finance.manage'

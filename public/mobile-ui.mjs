@@ -30,6 +30,11 @@ function compactExpenses(table){
  }
  table.closest('.table-wrap').replaceWith(list);
 }
+let mobileFiltersExpanded=null;
+export function rememberMobileFilterState(root){
+ const details=root.querySelector('#filter-form .compact-filters');
+ if(details)mobileFiltersExpanded=details.open;
+}
 export function compactMobilePage(root,view){
  if(!window.matchMedia('(max-width: 700px)').matches)return;
  root.classList.add('compact-page');
@@ -46,19 +51,21 @@ export function compactMobilePage(root,view){
  }
  const filters=root.querySelector('#filter-form');
  if(filters){
-  const fields=[...filters.children].filter(el=>el.matches('.field')&&el.querySelector('select:not([name="date_preset"])'));
+  const fields=[...filters.children].filter(el=>el.matches('.field')&&el.querySelector('select:not([name="date_preset"]):not([name="sale_type"])'));
   const count=fields.filter(el=>el.querySelector('select').value).length;
   const extras=document.createElement('div');extras.className='compact-filter-fields';extras.append(...fields);
   const clear=filters.querySelector('[data-action="clear-filters"]');extras.append(clear);
-  filters.append(disclosure(`Mais filtros${count?' · '+count+' ativo(s)':''}`,[extras],'compact-disclosure compact-filters'));
-  filters.querySelector('[type="submit"]').textContent='Consultar';
+  const more=disclosure(`Mais filtros${count?' · '+count+' ativo(s)':''}`,[extras],'compact-disclosure compact-filters');
+  more.open=mobileFiltersExpanded??count>0;
+  filters.append(more);
+  filters.querySelector('[type="submit"]').textContent='Buscar';
  }
  if(view==='sales')for(const record of root.querySelectorAll('.sale-record')){
   const table=record.querySelector('.table-wrap'),count=[...table.querySelectorAll('tbody tr')].filter(row=>!row.querySelector('td[colspan]')).length;
   const more=disclosure(`${count} ${count===1?'item':'itens'} · Ver produtos e valores`,[table],'compact-disclosure sale-items-disclosure');
   const key=record.querySelector('[data-action="open-sale"]')?.dataset.id;more.open=expandedSales.has(key);more.addEventListener('toggle',()=>{if(more.open)expandedSales.add(key);else expandedSales.delete(key);});
   record.querySelector('.sale-record-footer').before(more);
-  const status=record.querySelector('.status-control');if(status){const select=status.querySelector('select');if(select?.value){const badge=document.createElement('span');badge.className='operational-badge';badge.textContent=select.selectedOptions[0].textContent;for(const prop of ['--status-color','--status-bg','--status-text'])badge.style.setProperty(prop,select.style.getPropertyValue(prop));record.querySelector('.sale-record-status').append(badge);}more.append(status);}
+  const status=record.querySelector('.status-control');if(status){const select=status.querySelector('select');if(select?.value){const badge=document.createElement('span');badge.className='operational-badge';badge.textContent=select.selectedOptions[0].textContent;for(const prop of ['--status-color','--status-bg','--status-text'])badge.style.setProperty(prop,select.style.getPropertyValue(prop));status.before(badge);}more.append(status);}
   const note=record.querySelector('.sale-record-note');if(note)more.append(note);
   for(const p of record.querySelectorAll('.provisional-profit small'))p.textContent='Estimado';
   if(record.querySelector('.provisional-profit')){const hint=document.createElement('p');hint.textContent='Lucro estimado: o pagamento ainda precisa ser conferido. Esse valor não entra no lucro apurado.';more.append(hint);}
@@ -168,10 +175,10 @@ export function saleMobileSteps(root,w,{cents}){
  for(const [n,item]of items.entries()){
   const basic=el('section','panel flow-item'),body=el('div','panel-body');basic.append(body);
   body.append(item.querySelector('.item-row'));add('item-'+n,`Produto ${n+1} de ${items.length}`,basic);
+  body.append(n===items.length-1?addItem:addItem.cloneNode(true));
   const details=el('section','panel'),inner=el('div','panel-body');details.append(inner);
   item.querySelector('.item-details-toggle')?.remove();const identification=item.querySelector('.item-details-fields');identification.hidden=false;inner.append(identification);
   const costs=item.querySelector('.item-entry-costs');if(costs)inner.append(costs);
-  if(n===items.length-1)inner.append(addItem);
   add('item-details-'+n,'IMEI / SN e detalhes',details,true);
  }
  const payments=panels.shift(),rows=[...payments.querySelectorAll('.editable-payment')],addPayment=payments.querySelector('[data-action="add-payment"]'),alert=payments.querySelector('#payment-alert');
@@ -216,7 +223,7 @@ export function stockMobileSteps(form){
  const mode=form.querySelector('[name="product_mode"]')?.closest('.fields'),existing=form.querySelector('[data-entry-existing]'),fresh=form.querySelector('[data-entry-new]');
  const qty=form.querySelector('[name="quantity"]')?.closest('.field'),cost=form.querySelector('[name="cost"]')?.closest('.field'),day=form.querySelector('[name="received_date"]')?.closest('.field'),supplier=form.querySelector('[name="supplier_id"]')?.closest('.field'),reason=form.querySelector('[name="reason"]')?.closest('.field');
  const notes=[...form.querySelectorAll(':scope > .footer-note')],actions=form.querySelector(':scope > .actions');
- add('product','Produto',[mode,existing,fresh]);add('entry','Quantidade e custo',[qty,cost,day]);add('supplier','Fornecedor',[supplier],true);
+ add('product','Produto',[mode,existing,fresh]);add('entry','Quantidade, custo e aparelhos',[qty,cost,day,form.querySelector('[data-entry-serials]')]);add('supplier','Fornecedor',[supplier],true);
  const review=el('div','flow-entry-review');add('review','Conferir entrada',[review,reason,...notes,actions]);
  const flow=setup(form,steps,{});
  form.noValidate=true;
@@ -230,7 +237,9 @@ export function stockMobileSteps(form){
  form.addEventListener('input',()=>updateReview());form.addEventListener('change',()=>updateReview());
  function updateReview(){
   review.replaceChildren();const data=new FormData(form),newProduct=data.get('product_mode')==='new',product=form.querySelector('[name="product_id"]');
-  const values=[['Produto',newProduct?data.get('product_name'):product?.selectedOptions[0]?.textContent],['Quantidade',data.get('quantity')],['Custo por unidade',data.get('cost')||'Manter custo atual'],['Data',data.get('received_date')],['Fornecedor',form.querySelector('[name="supplier_id"]')?.selectedOptions[0]?.textContent]];
+  const serials=form.querySelector('[data-entry-serials]'),rows=serials&&!serials.disabled?[...serials.querySelectorAll('[data-entry-unit]')]:[],costLabel=rows.length&&!form.dataset.id?'Custos por aparelho':'Custo por unidade';
+  const costValue=rows.length&&!form.dataset.id?rows.map(row=>row.querySelector('[data-entry-serial]').value+' · R$ '+(row.querySelector('[data-unit-cost]').value||'A informar')).join('\n'):data.get('cost')||'Manter custo atual';
+  const values=[['Produto',newProduct?data.get('product_name'):product?.selectedOptions[0]?.textContent],['Quantidade',data.get('quantity')],[costLabel,costValue],['Data',data.get('received_date')],['Fornecedor',form.querySelector('[name="supplier_id"]')?.selectedOptions[0]?.textContent]];
   for(const [label,value]of values){const row=el('div','row-stat');row.append(el('span','',label),el('strong','',String(value??'')));review.append(row);}
  }
  // Native final validation opens the owning step through the invalid listener.
@@ -303,4 +312,39 @@ export function initMobileNavigation(doc = document, win = window) {
     if (!viewport.matches && focusWasInNav && !doc.activeElement.getClientRects().length) (find('#app-navigation [aria-current="page"]') ?? find('#main-content'))?.focus({ preventScroll: true });
   });
   return { sync, close, reset() { const wasOpen=opened; close(false); return wasOpen; } };
+}
+// Only route identifiers enter history; forms and commercial data stay in memory.
+export function createPageHistory({history,onNavigate,isBlocked=()=>false,onBlocked=()=>{},onError=()=>{}}) {
+ let owner='',current=null,restoring=false,reverting=false;
+ const valid=s=>s?.kind==='gamecell-page'&&s.owner===owner&&Number.isInteger(s.index);
+ const write=(route,index)=>({kind:'gamecell-page',owner,index,route});
+ return {
+  record(user,route) {
+   if(!user){owner='';current=null;return;}
+   if(owner!==user){owner=user;current=write(route,0);history.replaceState(current,'');return;}
+   if(current&&JSON.stringify(current.route)===JSON.stringify(route))return;
+   current=write(route,restoring?(current?.index??0):(current?.index??0)+1);
+   history[restoring?'replaceState':'pushState'](current,'');
+  },
+  reset(){owner='';current=null;history.replaceState(null,'');},
+  async pop(target) {
+   if(reverting){reverting=false;return;}
+   if(!owner)return;
+   if(isBlocked()){
+    const delta=valid(target)?current.index-target.index:0;
+    if(delta){reverting=true;history.go(delta);}else history.pushState(current,'');
+    onBlocked();return;
+   }
+   if(!valid(target)){target=write({view:'dashboard'},0);history.replaceState(target,'');}
+   current=target;restoring=true;
+   try{await onNavigate(target.route);}catch(error){onError(error);}finally{restoring=false;}
+  },
+  async restore(user) {
+   const saved=history.state;
+   owner=user;
+   if(!valid(saved)){owner='';current=null;return false;}
+   current=saved;restoring=true;
+   try{await onNavigate(saved.route);return true;}catch(error){onError(error);return false;}finally{restoring=false;}
+  },
+ };
 }

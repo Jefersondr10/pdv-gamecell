@@ -7,10 +7,16 @@ Sistema de gestão de lojas com vendas, estoque, pagamentos, despesas e fechamen
 - Lojas independentes, usuários e permissões por loja; acesso Google configurável e login da equipe.
 - Cadastros de clientes, produtos, fornecedores, vendedores, contas Pix e máquinas de cartão.
 - Vendas com rascunho, classificação de atacado, data editável, correções auditadas e cancelamento.
+- Filtros de vendas e dashboard por período, atacado/varejo, vendedor, status e busca por número, cliente ou produto.
+- Edição de clientes com CPF opcional, proteção contra alterações simultâneas e histórico de auditoria.
+- Busca nos cadastros de clientes e produtos; edição de produtos e cadastro de novo produto durante a venda.
 - Pagamentos divididos entre dinheiro, Pix e cartão, com fotografia das taxas utilizadas.
 - Estoque por entradas e custo FIFO, histórico, busca de produtos e relatório.
+- Controle opcional por SN/IMEI: um cadastro por modelo, entrada com custo por aparelho e escolha da unidade vendida.
+- Navegação entre menus com retomada do preenchimento da venda na mesma aba, sem confirmação automática.
 - Despesas fixas e variáveis, categorias e subcategorias, lembretes e fechamento com participação dos sócios.
-- Calculadora de parcelamento e pedido compartilhável sem custos ou lucro internos.
+- Calculadora de 1 a 18 parcelas em duas etapas: preenchimento e resultado, com juros adicionais internos opcionais e cópia para WhatsApp sem expor taxas.
+- Pedido compartilhável sem custos ou lucro internos.
 
 ## Executar localmente
 
@@ -57,8 +63,10 @@ Para produção são necessários HTTPS, login Google configurado, banco persist
 ## Limites importantes
 
 - Este repositório contém o código em desenvolvimento; um envio ao GitHub não atualiza automaticamente uma instalação online.
-- Cancelar uma venda preserva o histórico e pode gerar devolução pendente. Não há estorno bancário automático nem baixa de devoluções realizadas.
+- Cancelar uma venda preserva o histórico e pode gerar valor a devolver. O sistema permite registrar devoluções parciais ou totais já realizadas fora dele, mas não executa Pix nem estorno bancário automático.
 - Os pagamentos são registros operacionais, sem confirmação automática por bancos ou adquirentes.
+- Preenchimentos não salvos ficam somente na aba atual. Para conservar uma nova venda após fechar a aba, use Salvar rascunho; para aplicar uma edição, use Salvar alterações.
+- Produtos com controle por SN/IMEI exigem aparelhos identificados antes de confirmar a saída. O estoque antigo não ganha identificações inventadas: os números reais das unidades restantes devem ser informados nas entradas.
 - O caixa disponível precisa ser conferido: lucro não equivale a saldo bancário.
 - Relatórios para PDF utilizam a impressão do navegador. Testes automatizados não substituem validação operacional e visual.
 

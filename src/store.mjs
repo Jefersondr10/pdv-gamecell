@@ -1,17 +1,19 @@
 import { DatabaseSync } from 'node:sqlite';
 import { Finance, validDate } from './finance.mjs';
 import { Operations } from './operations.mjs';
+import { SerialInventory } from './serial-inventory.mjs';
 import { migrateCancellationStatus, cancelledSale, pendingRefunds } from './sale-cancellation.mjs';
 import { migrateGoogleUsers, googleLogin } from './google-store.mjs';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash, createHmac } from 'node:crypto';
 import { AppError, check, integer, text, feeCents, sumMoney, saleTotal, reconcile, planFIFO,
   PERMISSIONS, allowed, requirePermission, businessDate, publicSale, itemFinancials } from './domain.mjs';
 
 const id = () => randomUUID();
 const now = () => new Date().toISOString();
 const hash = value => createHash('sha256').update(value).digest('hex');
+const searchFold = value => String(value ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
 const paymentPayloadHash = ({ saleId, method, amount, rateId, pixAccountId, pixAccountName }) => hash(JSON.stringify({
   sale_id: saleId, method, amount_cents: amount, rate_id: rateId,
   pix_account_id: pixAccountId, pix_account_name: pixAccountName
@@ -63,20 +65,44 @@ function saleStatusColor(value, fallback = 'neutral') {
 const parseUser = row => row ? { ...row, permissions: JSON.parse(row.permissions) } : null;
 const safeUser = user => ({ id: user.id, name: user.name, email: user.email,
   is_owner: !!user.is_owner, permissions: user.is_owner ? PERMISSIONS : user.permissions });
+const validStoredDate = value => {
+  try { return validDate(value) === value; } catch { return false; }
+};
+function saleReview(row, items, payments, reconciliation, pendingQuantity) {
+  const manual = !!row.review_manual;
+  if (row.status !== 'confirmed') return { manual, automatic: false, required: false, reasons: [] };
+  const reasons = [];
+  if (reconciliation.state !== 'matched') reasons.push('payment_mismatch');
+  if (pendingQuantity > 0) reasons.push('pending_cost');
+  if (!row.customer_id) reasons.push('missing_customer');
+  if (!row.seller_id) reasons.push('missing_seller');
+  if (!validStoredDate(row.business_date)) reasons.push('missing_business_date');
+  if (!items.length) reasons.push('missing_items');
+  if (items.some(item => item.tracks_serials === true && (!Array.isArray(item.unit_ids) || item.unit_ids.length !== item.quantity))) reasons.push('missing_serials');
+  if (payments.some(payment => payment.method === 'pix' && (!payment.pix_account_id || !payment.pix_account_name))) reasons.push('missing_pix_account');
+  if (payments.some(payment => payment.method === 'card' && (!payment.machine || !payment.brand || !['credit', 'debit'].includes(payment.mode) || !Number.isInteger(payment.installments) || payment.installments < 1))) reasons.push('missing_card_details');
+  if (payments.some(payment => typeof payment.created_at !== 'string' || !Number.isFinite(new Date(payment.created_at).getTime()))) reasons.push('missing_payment_date');
+  return { manual, automatic: reasons.length > 0, required: manual || reasons.length > 0, reasons };
+}
 
 export class Store {
   constructor(path = ':memory:') {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
+    this.db.function('search_fold', { deterministic: true }, searchFold);
+    this.customerEditSecret = randomBytes(32);
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
+    this.migrateLegacyBusinessDateColumn();
     this.db.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
     this.migrateAdditiveColumns();
     migrateCancellationStatus(this);
+    this.migrateLegacyBusinessDates();
     this.migrateSaleStatusColors();
     this.migrateCardHierarchy();
     this.installCatalogIntegrityTriggers();
     this.db.exec(readFileSync(new URL('./finance-schema.sql', import.meta.url), 'utf8'));
     this.finance = new Finance(this);
+    this.serials = new SerialInventory(this);
     this.operations = new Operations(this);
     migrateGoogleUsers(this);
   }
@@ -84,6 +110,12 @@ export class Store {
   get(sql, ...params) { return this.db.prepare(sql).get(...params); }
   all(sql, ...params) { return this.db.prepare(sql).all(...params); }
   run(sql, ...params) { return this.db.prepare(sql).run(...params); }
+  migrateLegacyBusinessDateColumn() {
+    const columns = this.all('PRAGMA table_info(sales)');
+    if (columns.length && !columns.some(column => column.name === 'business_date')) {
+      this.transaction(() => this.db.exec('ALTER TABLE sales ADD COLUMN business_date TEXT'));
+    }
+  }
   migrateAdditiveColumns() {
     const ensure = (table, column, definition) => {
       if (!this.all(`PRAGMA table_info(${table})`).some(item => item.name === column)) {
@@ -98,7 +130,25 @@ export class Store {
       ensure('rates', 'machine_id', 'TEXT');
       ensure('rates', 'brand_id', 'TEXT');
       ensure('customers', 'cpf', "TEXT NOT NULL DEFAULT ''");
+      ensure('sales', 'business_date', 'TEXT');
       ensure('sales', 'is_wholesale', 'INTEGER NOT NULL DEFAULT 0 CHECK(is_wholesale IN (0,1))');
+      ensure('sales', 'review_manual', 'INTEGER NOT NULL DEFAULT 0 CHECK(review_manual IN (0,1))');
+      ensure('products', 'serial_tracked', 'INTEGER NOT NULL DEFAULT 0 CHECK(serial_tracked IN (0,1))');
+      ensure('sale_refunds', 'actor_name_snapshot', "TEXT NOT NULL DEFAULT ''");
+    });
+  }
+  migrateLegacyBusinessDates() {
+    const updates = this.all('SELECT rowid AS sale_rowid,created_at FROM sales WHERE business_date IS NULL ORDER BY rowid').map(row => {
+      const instant = new Date(row.created_at);
+      check(Number.isFinite(instant.getTime()), 'Uma venda antiga possui data de criação inválida; nenhuma data foi migrada.', 500);
+      return { rowid: row.sale_rowid, business_date: businessDate(instant) };
+    });
+    if (!updates.length) return;
+    this.transaction(() => {
+      for (const update of updates) this.run(
+        'UPDATE sales SET business_date=? WHERE rowid=? AND business_date IS NULL',
+        update.business_date, update.rowid
+      );
     });
   }
   migrateSaleStatusColors() {
@@ -287,22 +337,87 @@ export class Store {
   addProduct(actor, data) {
     requirePermission(actor, 'products.manage');
     const name = text(data.name, 'Produto'), sku = text(data.sku, 'SKU', 80, false), price = integer(data.price_cents ?? 0, 'Preço');
+    check(data.serial_tracked === undefined || typeof data.serial_tracked === 'boolean', 'Controle por SN / IMEI inválido.');
     return this.transaction(() => {
       const productId = id();
-      this.run('INSERT INTO products VALUES(?,?,?,?,?,?)', productId, actor.tenant_id, name, sku, price, now());
+      this.run('INSERT INTO products(id,tenant_id,name,sku,price_cents,created_at,serial_tracked) VALUES(?,?,?,?,?,?,?)', productId, actor.tenant_id, name, sku, price, now(), Number(!!data.serial_tracked));
       this.audit(actor, 'product', productId, 'created');
-      return { id: productId, name, sku, price_cents: price };
+      return { id: productId, name, sku, price_cents: price, serial_tracked: !!data.serial_tracked };
+    });
+  }
+  productEditToken(row) {
+    const revision=this.get("SELECT COALESCE(MAX(rowid),0) AS revision FROM audit WHERE tenant_id=? AND entity='product' AND entity_id=?",row.tenant_id,row.id).revision;
+    return createHmac('sha256',this.customerEditSecret).update(JSON.stringify([row,revision])).digest('hex');
+  }
+  product(actor,key) {
+    const row=this.scoped('products',key,actor);
+    return {id:row.id,name:row.name,sku:row.sku,price_cents:row.price_cents,serial_tracked:!!row.serial_tracked,
+      ...(allowed(actor,'products.manage')?{edit_token:this.productEditToken(row)}:{})};
+  }
+  updateProduct(actor,key,data) {
+    requirePermission(actor,'products.manage');
+    check(data&&typeof data==='object'&&!Array.isArray(data),'Dados do produto inválidos.');
+    for(const field of ['name','sku'])check(data[field]===undefined||typeof data[field]==='string','Dados do produto inválidos.');
+    return this.transaction(()=>{
+      const before=this.scoped('products',key,actor);
+      check(data.edit_token===this.productEditToken(before),'O produto mudou. Atualize o cadastro antes de editar.',409);
+      const after={name:data.name===undefined?before.name:text(data.name,'Produto'),sku:data.sku===undefined?before.sku:text(data.sku,'SKU',80,false),
+        price_cents:data.price_cents===undefined?before.price_cents:integer(data.price_cents,'Preço'),serial_tracked:data.serial_tracked===undefined?!!before.serial_tracked:data.serial_tracked};
+      check(typeof after.serial_tracked==='boolean','Controle por SN / IMEI inválido.');
+      if(before.serial_tracked&&!after.serial_tracked)check(!this.get(`SELECT 1 FROM sale_item_tracking t JOIN sale_items i ON i.tenant_id=t.tenant_id AND i.id=t.item_id
+        WHERE i.tenant_id=? AND i.product_id=?`,actor.tenant_id,key),'Este produto já está selecionado em vendas por SN / IMEI. Mantenha o controle ou remova esses itens dos rascunhos antes.',409);
+      if(before.serial_tracked&&!after.serial_tracked)check(!this.get(`SELECT 1 FROM inventory_units u JOIN lots l ON l.tenant_id=u.tenant_id AND l.id=u.lot_id
+        WHERE l.tenant_id=? AND l.product_id=?`,actor.tenant_id,key),'Este produto já possui aparelhos identificados. Mantenha o controle por SN / IMEI para preservar o histórico.',409);
+      this.run('UPDATE products SET name=?,sku=?,price_cents=?,serial_tracked=? WHERE tenant_id=? AND id=?',after.name,after.sku,after.price_cents,Number(after.serial_tracked),actor.tenant_id,key);
+      this.audit(actor,'product',key,'updated',{before,after});
+      return this.product(actor,key);
     });
   }
   addCustomer(actor, data) {
     requirePermission(actor, 'customers.manage');
-    const name = text(data.name, 'Cliente'), email = text(data.email, 'E-mail', 254, false), phone = text(data.phone, 'Telefone', 40, false);
+    const name = text(data.name, 'Cliente'), email = optionalEmailAddress(data.email), phone = text(data.phone, 'Telefone', 40, false);
     const cpf = optionalCpf(data.cpf);
     return this.transaction(() => {
       const customerId = id();
       this.run('INSERT INTO customers(id,tenant_id,name,email,phone,created_at,cpf) VALUES(?,?,?,?,?,?,?)', customerId, actor.tenant_id, name, email, phone, now(), cpf);
       this.audit(actor, 'customer', customerId, 'created');
       return { id: customerId, name, email, phone, cpf };
+    });
+  }
+  customerEditToken(row) {
+    const revision = this.get("SELECT COALESCE(MAX(rowid),0) AS revision FROM audit WHERE tenant_id=? AND entity='customer' AND entity_id=?", row.tenant_id, row.id).revision;
+    return createHmac('sha256', this.customerEditSecret).update(JSON.stringify([
+      row.tenant_id, row.id, row.name, row.email, row.phone, row.cpf, revision
+    ])).digest('hex');
+  }
+  customer(actor, customerId) {
+    const row = this.scoped('customers', customerId, actor);
+    const result = { id: row.id, name: row.name, email: row.email, phone: row.phone, cpf: row.cpf };
+    if (allowed(actor, 'customers.manage')) result.edit_token = this.customerEditToken(row);
+    return result;
+  }
+  updateCustomer(actor, customerId, data) {
+    requirePermission(actor, 'customers.manage');
+    check(data && typeof data === 'object' && !Array.isArray(data), 'Dados do cliente inválidos.');
+    return this.transaction(() => {
+      const existing = this.scoped('customers', customerId, actor);
+      check(data.edit_token === this.customerEditToken(existing), 'O cliente mudou. Atualize o cadastro antes de editar.', 409);
+      for (const field of ['name', 'email', 'phone', 'cpf']) {
+        check(data[field] === undefined || data[field] === null || typeof data[field] === 'string', 'Dados do cliente inválidos.');
+      }
+      const before = { name: existing.name, email: existing.email, phone: existing.phone, cpf: existing.cpf };
+      const after = {
+        name: data.name === undefined ? existing.name : text(data.name, 'Cliente'),
+        email: data.email === undefined ? existing.email : optionalEmailAddress(data.email),
+        phone: data.phone === undefined ? existing.phone : text(data.phone, 'Telefone', 40, false),
+        cpf: data.cpf === undefined ? existing.cpf : optionalCpf(data.cpf)
+      };
+      if (Object.keys(before).some(field => before[field] !== after[field])) {
+        this.run('UPDATE customers SET name=?,email=?,phone=?,cpf=? WHERE tenant_id=? AND id=?',
+          after.name, after.email, after.phone, after.cpf, actor.tenant_id, customerId);
+        this.audit(actor, 'customer', customerId, 'updated', { before, after });
+      }
+      return this.customer(actor, customerId);
     });
   }
   savePixAccount(actor, data, accountId = null) {
@@ -483,18 +598,27 @@ export class Store {
   }
   receive(actor, data) {
     requirePermission(actor, 'stock.receive'); requirePermission(actor, 'costs.enter');
-    this.scoped('products', data.product_id, actor);
+    const product=this.scoped('products', data.product_id, actor);
+    const serialized=!!product.serial_tracked;
+    check(!serialized || typeof data.serial_number==='string','Este produto exige entrada por SN / IMEI. Informe as unidades.');
+    check(serialized || data.serial_number===undefined,'Ative o controle por SN / IMEI no cadastro do produto.');
     const rawSupplierId = data.supplier_id;
     check(rawSupplierId === undefined || rawSupplierId === null || rawSupplierId === '' ||
       (typeof rawSupplierId === 'string' && rawSupplierId.trim()), 'Fornecedor inválido.');
     const supplierId = rawSupplierId ? rawSupplierId.trim().toLowerCase() : null;
     const supplier = supplierId ? this.scoped('suppliers', supplierId, actor) : null;
     const quantity = integer(data.quantity, 'Quantidade', 1, 1_000_000), cost = integer(data.unit_cost_cents, 'Custo');
+    check(!serialized||quantity===1,'Cada entrada por SN / IMEI representa uma unidade.');
     return this.transaction(() => {
       const lotId = id(); let remaining = quantity;
       this.run(`INSERT INTO lots(id,tenant_id,product_id,quantity_initial,quantity_remaining,unit_cost_cents,received_at,supplier_id,supplier_name)
         VALUES(?,?,?,?,?,?,?,?,?)`, lotId, actor.tenant_id, data.product_id, quantity, quantity, cost, now(),
         supplier?.id ?? null, supplier?.name ?? null);
+      if(serialized){
+        this.serials.setEntryUnits(actor,{id:lotId,quantity_initial:1},[{serial_number:data.serial_number}]);
+        this.audit(actor,'lot',lotId,'received',{quantity:1,unit_cost_cents:cost,serial_number:data.serial_number});
+        return {id:lotId,quantity_remaining:1,resolved_quantity:0,supplier_id:supplier?.id??null,supplier_name:supplier?.name??null};
+      }
       // A entrada cobre primeiro as saídas sem custo, pela ordem da confirmação.
       const pending = this.all(`SELECT a.* FROM allocations a JOIN sale_items i ON i.id=a.item_id AND i.tenant_id=a.tenant_id
         JOIN sales s ON s.id=i.sale_id AND s.tenant_id=i.tenant_id
@@ -532,6 +656,12 @@ export class Store {
     const existingItems = existingSale ? this.saleItems(actor, saleId) : [];
     const wholesale = data.is_wholesale === undefined ? !!existingSale?.is_wholesale : data.is_wholesale;
     check(typeof wholesale === 'boolean', 'Marcação de venda de atacado inválida.');
+    let reviewManual = !!existingSale?.review_manual;
+    if (Object.hasOwn(data, 'review_manual')) {
+      requirePermission(actor, 'sales.change_status');
+      check(typeof data.review_manual === 'boolean', 'Marcação de conferência inválida.');
+      reviewManual = data.review_manual;
+    }
     if (existingSale && data.is_wholesale !== undefined && data.original_is_wholesale !== undefined) {
       check(typeof data.original_is_wholesale === 'boolean', 'Marcação original de atacado inválida.');
       check(data.original_is_wholesale === !!existingSale.is_wholesale,
@@ -562,6 +692,7 @@ export class Store {
       check(name, 'Informe o nome do produto avulso.');
       const originalItem = item.id ? existingItems.find(i => i.id === item.id) : null;
       const originalDetails = originalItem?.product_id === productId ? originalItem : null;
+      const unitSelection=this.serials.normalizeItem(actor,item,productId?this.scoped('products',productId,actor):null,originalDetails,!!existingSale?.confirmed_at);
       check(!item.id || !!originalItem, 'Item não encontrado nesta venda.', 404);
       if (!productId && Object.hasOwn(item, 'manual_cost_cents')) requirePermission(actor, 'costs.enter');
       let manualCost = !productId && item.manual_cost_cents === undefined ? originalItem?.manual_cost_cents ?? null : null;
@@ -571,33 +702,44 @@ export class Store {
       return { id: originalItem?.id ?? id(), product_id: productId, description: name,
         quantity: integer(item.quantity, 'Quantidade', 1, 1_000_000), unit_price_cents: integer(item.unit_price_cents, 'Preço'),
         manual_cost_cents: manualCost, ordinal,
-        serial_number: text(item.serial_number === undefined ? originalDetails?.serial_number : item.serial_number, 'IMEI / SN', 1000, false),
+        serial_number: unitSelection.tracks_serials ? unitSelection.serial_number : text(item.serial_number === undefined ? originalDetails?.serial_number : item.serial_number, 'IMEI / SN', 1000, false),
         details: text(item.details === undefined ? originalDetails?.details : item.details, 'Detalhes do produto', 2000, false),
-        share_details: item.share_details === undefined ? !!originalDetails?.share_details : item.share_details };
+        share_details: item.share_details === undefined ? !!originalDetails?.share_details : item.share_details, ...unitSelection };
     });
     check(items.every(i => typeof i.share_details === 'boolean'), 'Escolha de exibição dos detalhes inválida.');
     check(new Set(items.map(i => i.id)).size === items.length, 'Não repita o mesmo item na venda.');
+    const selectedUnits=items.flatMap(i=>i.unit_ids);check(new Set(selectedUnits).size===selectedUnits.length,'Não selecione o mesmo aparelho em dois itens da venda.');
 
     saleTotal(items); sumMoney([freight, ...cleanExpenses.map(e => e.amount_cents)]);
     return this.transaction(() => {
       const key = saleId ?? id(), at = now();
       if (saleId) {
         check(this.saleAccess(actor,saleId).status==='draft','Esta venda não é mais um rascunho. Atualize a tela.',409);
-        this.run(`UPDATE sales SET customer_id=?,seller_id=?,freight_cents=?,expenses_json=?,public_notes=?,updated_at=?,is_wholesale=?,business_date=?
-          WHERE tenant_id=? AND id=?`, customerId, sellerId, freight, JSON.stringify(cleanExpenses), notes, at, Number(wholesale), saleDate, actor.tenant_id, key);
+        check(typeof data.draft_token==='string'&&data.draft_token===this.operations.draftToken(actor,saleId),'Este rascunho mudou em outra tela. Reabra a venda antes de salvar; seu preenchimento não foi aplicado.',409);
+        this.run(`UPDATE sales SET customer_id=?,seller_id=?,freight_cents=?,expenses_json=?,public_notes=?,updated_at=?,is_wholesale=?,business_date=?,review_manual=?
+          WHERE tenant_id=? AND id=?`, customerId, sellerId, freight, JSON.stringify(cleanExpenses), notes, at, Number(wholesale), saleDate, Number(reviewManual), actor.tenant_id, key);
         this.run('DELETE FROM sale_items WHERE tenant_id=? AND sale_id=?', actor.tenant_id, key);
       } else {
         const number = this.get('SELECT COALESCE(MAX(number),0)+1 AS number FROM sales WHERE tenant_id=?', actor.tenant_id).number;
-        this.run(`INSERT INTO sales(id,tenant_id,number,customer_id,seller_id,created_by,freight_cents,expenses_json,public_notes,created_at,updated_at,is_wholesale,business_date)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, key, actor.tenant_id, number, customerId, sellerId, actor.id, freight, JSON.stringify(cleanExpenses), notes, at, at, Number(wholesale), saleDate);
+        this.run(`INSERT INTO sales(id,tenant_id,number,customer_id,seller_id,created_by,freight_cents,expenses_json,public_notes,created_at,updated_at,is_wholesale,business_date,review_manual)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, key, actor.tenant_id, number, customerId, sellerId, actor.id, freight, JSON.stringify(cleanExpenses), notes, at, at, Number(wholesale), saleDate, Number(reviewManual));
       }
       for (const item of items) this.run('INSERT INTO sale_items VALUES(?,?,?,?,?,?,?,?,?)', item.id, actor.tenant_id, key,
         item.product_id, item.description, item.quantity, item.unit_price_cents, item.manual_cost_cents, item.ordinal);
       for (const item of items) if(item.serial_number || item.details || item.share_details) this.run('INSERT INTO sale_item_details VALUES(?,?,?,?,?)', actor.tenant_id,item.id,item.serial_number,item.details,Number(item.share_details));
+      for (const item of items) this.serials.saveItem(actor,item);
       this.audit(actor, 'sale', key, saleId ? 'draft_updated' : 'draft_created', {
         business_date_before: existingSale?.business_date ?? null, business_date: saleDate
       });
-      return { id: key };
+      if (reviewManual !== !!existingSale?.review_manual) this.audit(actor, 'sale', key, 'review_manual_changed', {
+        review_manual_before: !!existingSale?.review_manual, review_manual_after: reviewManual
+      });
+      // The actor was authorized above. Reassignment may remove their future
+      // visibility, but must not invalidate this already-authorized transaction.
+      const validationActor={...actor,permissions:[...actor.permissions,'sales.view_all']};
+      this.fullSale(validationActor,key);
+      const access_lost=!allowed(actor,'sales.view_all')&&sellerId!==actor.id&&(existingSale?.created_by??actor.id)!==actor.id;
+      return { id: key, draft_token:this.operations.draftToken(validationActor,key), item_ids:items.map(i=>i.id), access_lost };
     });
   }
   addPayment(actor, saleId, data) {
@@ -666,12 +808,13 @@ export class Store {
       'O mês desta data já foi fechado. Escolha uma data de mês aberto.', 409);
     return day;
   }
-  confirm(actor, saleId, acknowledgeDifference = false) {
+  confirm(actor, saleId, acknowledgeDifference = false, expectedDraftToken = null) {
     requirePermission(actor, 'sales.confirm');
     return this.transaction(() => {
       const sale = this.saleAccess(actor, saleId);
       check(sale.status!=='cancelled','Venda cancelada não pode ser confirmada novamente.',409);
       if (sale.status === 'confirmed') return { id: saleId, already_confirmed: true };
+      if(expectedDraftToken!==null)check(expectedDraftToken===this.operations.draftToken(actor,saleId),'A venda mudou em outra tela. Reabra e confira antes de confirmar.',409);
       const saleDate = this.validateSaleDate(actor, sale.business_date ?? businessDate());
       check(sale.customer_id && sale.seller_id, 'Escolha o cliente e o vendedor antes de confirmar.');
       const items = this.all('SELECT * FROM sale_items WHERE tenant_id=? AND sale_id=? ORDER BY ordinal', actor.tenant_id, saleId);
@@ -680,22 +823,14 @@ export class Store {
       const reconciliation = reconcile(saleTotal(items), payments);
       check(reconciliation.state === 'matched' || acknowledgeDifference === true,
         'Há diferença entre pagamentos e venda. Confirme que deseja continuar.', 409);
-      for (const item of items) {
-        if (!item.product_id) continue;
-        const lots = this.all(`SELECT * FROM lots WHERE tenant_id=? AND product_id=? AND quantity_remaining>0
-          ORDER BY received_at, rowid`, actor.tenant_id, item.product_id);
-        const plan = planFIFO(lots, item.quantity);
-        for (const allocation of plan.allocations) {
-          if (allocation.lot_id) this.run(`UPDATE lots SET quantity_remaining=quantity_remaining-?
-            WHERE tenant_id=? AND id=?`, allocation.quantity, actor.tenant_id, allocation.lot_id);
-          this.run('INSERT INTO allocations VALUES(?,?,?,?,?,?)', id(), actor.tenant_id, item.id,
-            allocation.lot_id, allocation.quantity, allocation.unit_cost_cents);
-        }
-      }
+      for(const item of items)if(item.product_id&&this.scoped('products',item.product_id,actor).serial_tracked)
+        check(this.get('SELECT 1 FROM sale_item_tracking WHERE tenant_id=? AND item_id=?',actor.tenant_id,item.id),'Este produto agora usa SN / IMEI. Edite a venda e escolha os aparelhos.',409);
       this.run(`UPDATE sales SET status='confirmed',confirmed_at=?,business_date=?,updated_at=? WHERE tenant_id=? AND id=?`,
         now(), saleDate, now(), actor.tenant_id, saleId);
       this.audit(actor, 'sale', saleId, 'confirmed', { difference_cents: reconciliation.difference_cents, business_date: saleDate });
       this.operations.recordOrder(actor,saleId);
+      for(const productId of new Set(items.map(i=>i.product_id).filter(Boolean)))this.operations.rebuildProduct(actor,productId);
+      this.fullSale(actor,saleId);
       return { id: saleId };
     });
   }
@@ -728,11 +863,33 @@ export class Store {
     });
     return this.sale(actor, saleId);
   }
+  setReviewManual(actor, saleId, data) {
+    requirePermission(actor, 'sales.change_status');
+    check(data && typeof data === 'object' && !Array.isArray(data), 'Marcação de conferência inválida.');
+    check(Object.hasOwn(data, 'review_manual') && typeof data.review_manual === 'boolean',
+      'Informe review_manual como verdadeiro ou falso.');
+    check(typeof data.edit_token === 'string' && data.edit_token,
+      'Atualize e confira a venda antes de alterar a conferência.', 409);
+    return this.transaction(() => {
+      const before = this.fullSale(actor, saleId);
+      check(before.status !== 'cancelled', 'A conferência de uma venda cancelada não pode ser alterada.', 409);
+      check(data.edit_token === this.operations.editToken(before),
+        'A venda mudou em outra tela. Atualize antes de alterar a conferência.', 409);
+      if (before.review.manual !== data.review_manual) {
+        this.run('UPDATE sales SET review_manual=?,updated_at=? WHERE tenant_id=? AND id=?',
+          Number(data.review_manual), now(), actor.tenant_id, saleId);
+        this.audit(actor, 'sale', saleId, 'review_manual_changed', {
+          review_manual_before: before.review.manual, review_manual_after: data.review_manual
+        });
+      }
+      return this.sale(actor, saleId);
+    });
+  }
   saleItems(actor, saleId) {
     return this.all(`SELECT i.*,COALESCE(d.serial_number,'') AS serial_number,COALESCE(d.details,'') AS details,
       COALESCE(d.share_details,0) AS share_details FROM sale_items i LEFT JOIN sale_item_details d
       ON d.tenant_id=i.tenant_id AND d.item_id=i.id WHERE i.tenant_id=? AND i.sale_id=? ORDER BY i.ordinal`,actor.tenant_id,saleId)
-      .map(i=>({...i,share_details:!!i.share_details}));
+      .map(i=>this.serials.enrichItem(actor,{...i,share_details:!!i.share_details}));
   }
   effectivePayments(actor,saleId) {
     return this.all(`SELECT p.* FROM payments p WHERE p.tenant_id=? AND p.sale_id=?
@@ -741,8 +898,23 @@ export class Store {
   }
   fullSale(actor, saleId) {
     const row = this.saleAccess(actor, saleId);
-    if(row.status==='cancelled')return cancelledSale(row,this.get(`SELECT c.*,u.name AS author FROM sale_cancellations c
-      JOIN users u ON u.tenant_id=c.tenant_id AND u.id=c.actor_id WHERE c.tenant_id=? AND c.sale_id=?`,actor.tenant_id,saleId));
+    if(row.status==='cancelled') {
+      const cancellation=this.get(`SELECT c.*,u.name AS author FROM sale_cancellations c
+        JOIN users u ON u.tenant_id=c.tenant_id AND u.id=c.actor_id WHERE c.tenant_id=? AND c.sale_id=?`,actor.tenant_id,saleId),
+       refundRows=this.all(`SELECT r.id,r.actor_id,r.amount_cents,r.method,r.refunded_date,r.notes,r.created_at,
+          COALESCE(NULLIF(r.actor_name_snapshot,''),u.name,'Usuário') AS author
+          FROM sale_refunds r LEFT JOIN users u ON u.tenant_id=r.tenant_id AND u.id=r.actor_id
+          WHERE r.tenant_id=? AND r.sale_id=? ORDER BY r.refunded_date,r.created_at,r.rowid`,actor.tenant_id,saleId),
+       reversalRows=this.all(`SELECT rr.id,rr.refund_id,rr.actor_id,rr.reason,rr.reversed_date,rr.created_at,r.amount_cents,
+          COALESCE(NULLIF(rr.actor_name_snapshot,''),u.name,'Usuário') AS author
+          FROM sale_refund_reversals rr JOIN sale_refunds r
+            ON r.tenant_id=rr.tenant_id AND r.sale_id=rr.sale_id AND r.id=rr.refund_id
+          LEFT JOIN users u ON u.tenant_id=rr.tenant_id AND u.id=rr.actor_id
+          WHERE rr.tenant_id=? AND rr.sale_id=? ORDER BY rr.reversed_date,rr.created_at,rr.rowid`,actor.tenant_id,saleId),
+       cancelled=cancelledSale(row,cancellation,refundRows,reversalRows);
+      return {...cancelled,review_manual:!!row.review_manual,
+        review:{manual:!!row.review_manual,automatic:false,required:false,reasons:[]}};
+    }
     const items = this.saleItems(actor, saleId);
     const payments = this.effectivePayments(actor,saleId);
     const operationalStatusRow = this.get(`SELECT ss.id,ss.name,ss.color FROM sale_status_assignments a
@@ -765,7 +937,8 @@ export class Store {
     }
     const expenses = JSON.parse(row.expenses_json), total = saleTotal(items), reconciliation = reconcile(total, payments);
     const provisionalProfit = pendingQuantity || row.status === 'draft' ? null : total - reconciliation.fee_cents - knownCost - row.freight_cents - sumMoney(expenses.map(e => e.amount_cents));
-    return { ...row, is_wholesale: !!row.is_wholesale, items:itemFinancials(items,reconciliation,row.freight_cents,sumMoney(expenses.map(e=>e.amount_cents)),provisionalProfit), payments, expenses, total_cents: total, reconciliation,
+    const review=saleReview(row,items,payments,reconciliation,pendingQuantity);
+    return { ...row, is_wholesale: !!row.is_wholesale, review_manual:review.manual, review, items:itemFinancials(items,reconciliation,row.freight_cents,sumMoney(expenses.map(e=>e.amount_cents)),provisionalProfit), payments, expenses, total_cents: total, reconciliation,
       operational_status_id: operationalStatus?.id ?? null, operational_status: operationalStatus,
       store_name: this.get('SELECT name FROM tenants WHERE id=?', actor.tenant_id).name,
       customer_name: row.customer_id ? this.scoped('customers', row.customer_id, actor).name : null,
@@ -778,6 +951,7 @@ export class Store {
   sale(actor, saleId) {
     const sale = this.fullSale(actor, saleId);
     sale.edit_token=this.operations.editToken(sale);
+    if(sale.status==='draft')sale.draft_token=this.operations.draftToken(actor,saleId);
     sale.corrections=this.all("SELECT a.created_at,u.name AS author,json_extract(a.data_json,'$.reason') AS reason FROM audit a JOIN users u ON u.id=a.actor_id AND u.tenant_id=a.tenant_id WHERE a.tenant_id=? AND a.entity='sale' AND a.entity_id=? AND a.action='confirmed_corrected' ORDER BY a.created_at DESC,a.rowid DESC",actor.tenant_id,saleId);
     delete sale.share_hash; delete sale.share_expires; delete sale.expenses_json;
     if (!allowed(actor, 'costs.view')) {
@@ -820,16 +994,35 @@ export class Store {
       LEFT JOIN users u ON u.tenant_id=s.tenant_id AND u.id=s.seller_id
       WHERE i.tenant_id=? AND i.product_id=? AND s.status='confirmed'${saleScope}
       ORDER BY s.confirmed_at DESC,s.rowid DESC,i.ordinal`, ...params);
-    return { product, entries, sales };
+    return { product, entries, sales, units:this.serials.units(actor,productId) };
   }
   listSales(actor, filters = {}) {
     let where = 'tenant_id=?', params = [actor.tenant_id];
     if (!allowed(actor, 'sales.view_all')) { where += ' AND (seller_id=? OR created_by=?)'; params.push(actor.id, actor.id); }
     for (const [name, operator] of [['from', '>='], ['to', '<=']]) {
       if (filters[name]) {
-        check(/^\d{4}-\d{2}-\d{2}$/.test(filters[name]), 'Data inválida.');
-        where += ` AND COALESCE(business_date,date(created_at,'-3 hours'))${operator}?`; params.push(filters[name]);
+        where += ` AND business_date${operator}?`; params.push(validDate(filters[name]));
       }
+    }
+    check(!filters.from || !filters.to || filters.from <= filters.to, 'A data inicial deve ser anterior ou igual à data final.');
+    const saleType = filters.sale_type === undefined ? 'all' : filters.sale_type;
+    check(['all', 'wholesale', 'retail'].includes(saleType), 'Tipo de venda inválido.');
+    if (saleType !== 'all') { where += ' AND is_wholesale=?'; params.push(saleType === 'wholesale' ? 1 : 0); }
+    check(filters.q === undefined || typeof filters.q === 'string', 'Busca inválida.');
+    const query = text(filters.q, 'Busca', 120, false);
+    if (query) {
+      const folded = searchFold(query), number = /^#?\s*\d+$/.test(query) ? query.replace(/^#?\s*/, '').replace(/^0+(?=\d)/, '') : '';
+      where += ` AND (CAST(sales.number AS TEXT)=?
+        OR instr(search_fold(CASE WHEN sales.status='cancelled' THEN
+          (SELECT json_extract(c.snapshot_json,'$.customer_name') FROM sale_cancellations c WHERE c.tenant_id=sales.tenant_id AND c.sale_id=sales.id)
+          ELSE (SELECT c.name FROM customers c WHERE c.tenant_id=sales.tenant_id AND c.id=sales.customer_id) END),?)>0
+        OR instr(search_fold(CASE WHEN sales.status='cancelled' THEN
+          (SELECT json_extract(c.snapshot_json,'$.seller_name') FROM sale_cancellations c WHERE c.tenant_id=sales.tenant_id AND c.sale_id=sales.id)
+          ELSE (SELECT u.name FROM users u WHERE u.tenant_id=sales.tenant_id AND u.id=sales.seller_id) END),?)>0
+        OR EXISTS (SELECT 1 FROM sale_items i LEFT JOIN products p ON p.tenant_id=i.tenant_id AND p.id=i.product_id
+          WHERE i.tenant_id=sales.tenant_id AND i.sale_id=sales.id
+          AND (instr(search_fold(i.description),?)>0 OR instr(search_fold(p.name),?)>0 OR instr(search_fold(p.sku),?)>0)))`;
+      params.push(number, folded, folded, folded, folded, folded);
     }
     if (filters.status) { check(['draft', 'confirmed', 'cancelled'].includes(filters.status), 'Situação inválida.'); where += ' AND status=?'; params.push(filters.status); }
     if (filters.operational_status_id) {
@@ -840,7 +1033,11 @@ export class Store {
       params.push(statusId);
     }
     if (filters.seller_id) { this.scoped('users', filters.seller_id, actor); where += ' AND seller_id=?'; params.push(filters.seller_id); }
-    return this.all(`SELECT id FROM sales WHERE ${where} ORDER BY created_at DESC,rowid DESC`, ...params).map(s => this.sale(actor, s.id));
+    const reviewFilter = filters.review ?? '';
+    check(reviewFilter === '' || reviewFilter === 'required' || reviewFilter === 'clear', 'Filtro de conferência inválido.');
+    const sales=this.all(`SELECT id FROM sales WHERE ${where} ORDER BY created_at DESC,rowid DESC`, ...params).map(s => this.sale(actor, s.id));
+    if (!reviewFilter) return sales;
+    return sales.filter(sale => sale.review.required === (reviewFilter === 'required'));
   }
   snapshot(actor, filters = {}) {
     const sales = this.listSales(actor, filters), confirmed = sales.filter(s => s.status === 'confirmed');
@@ -854,7 +1051,7 @@ export class Store {
       gross_cents: confirmed.reduce((sum, s) => sum + s.reconciliation.gross_cents, 0),
       pending_cents: confirmed.reduce((sum, s) => sum + s.reconciliation.pending_cents, 0),
       excess_cents: confirmed.reduce((sum, s) => sum + s.reconciliation.excess_cents, 0),
-      incomplete_sales: confirmed.filter(s => s.profit_state !== 'complete').length };
+      incomplete_sales: confirmed.filter(s => s.review.required).length };
     if (allowed(actor, 'profit.view')) dashboard.profit_cents = confirmed.reduce((sum, s) => sum + (s.profit_cents ?? 0), 0);
     if (allowed(actor, 'costs.view')) dashboard.fees_cents = confirmed.reduce((sum, s) => sum + s.reconciliation.fee_cents, 0);
     return { user: safeUser(actor), store: this.get('SELECT id,name FROM tenants WHERE id=?', actor.tenant_id),

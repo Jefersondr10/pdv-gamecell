@@ -4,7 +4,7 @@ import { Store } from '../src/store.mjs';
 import { application } from '../src/server.mjs';
 import { businessDate } from '../src/domain.mjs';
 import { installMobilePreview } from './mobile-preview-shell.mjs';
-const previewPort=Number(process.env.PDV_PREVIEW_PORT??3011);
+const previewPort=Number(process.env.PDV_PREVIEW_PORT??process.argv[2]??3011);
 if(!Number.isInteger(previewPort)||previewPort<1024||previewPort>65535)throw Error('Porta de prévia inválida.');
 const store = new Store(':memory:');
 const actor = store.actor(store.register({ name: 'Pessoa de teste', store_name: 'Gamecell · Teste mobile', email: 'mobile@example.test', password: 'teste-mobile-isolado-2026' }).token);
@@ -15,6 +15,19 @@ store.operations.receive(actor, { product_id: product.id, quantity: 10, unit_cos
 const sale = store.saveDraft(actor, { customer_id: customer.id, seller_id: actor.id, items: [{ product_id: product.id, quantity: 1, unit_price_cents: 279990, serial_number: 'SN-TESTE-001' }]}).id;
 store.addPayment(actor, sale, { method: 'cash', amount_cents: 279990, request_id: randomUUID() });
 store.confirm(actor, sale, true);
+const readyStatus=store.saveSaleStatus(actor,{name:'Pronto para entrega',color:'blue'});
+store.setOperationalStatus(actor,sale,{operational_status_id:readyStatus.id});
+store.setReviewManual(actor,sale,{review_manual:true,edit_token:store.sale(actor,sale).edit_token});
+const yesterdayDate=new Date(`${today}T12:00:00Z`);yesterdayDate.setUTCDate(yesterdayDate.getUTCDate()-1);
+const yesterday=yesterdayDate.toISOString().slice(0,10);
+const wholesaleSale=store.saveDraft(actor,{customer_id:customer.id,seller_id:actor.id,business_date:yesterday,is_wholesale:true,items:[{product_id:product.id,quantity:1,unit_price_cents:250000,serial_number:'SN-TESTE-002'}]}).id;
+store.addPayment(actor,wholesaleSale,{method:'cash',amount_cents:200000,request_id:randomUUID()});
+store.confirm(actor,wholesaleSale,true);
+const cancelledSale=store.saveDraft(actor,{customer_id:customer.id,seller_id:actor.id,items:[{product_id:product.id,quantity:1,unit_price_cents:125000,serial_number:'SN-TESTE-003'}]}).id;
+store.addPayment(actor,cancelledSale,{method:'cash',amount_cents:125000,request_id:randomUUID()});
+store.confirm(actor,cancelledSale,true);
+const cancellationToken=store.sale(actor,cancelledSale).edit_token;
+store.operations.cancelSale(actor,cancelledSale,{request_id:randomUUID(),edit_token:cancellationToken,reason:'Pedido cancelado para testar a devolução',acknowledge_stock_return:true,acknowledge_refund_pending:true});
 store.savePixAccount(actor, { name: 'Conta Pix de demonstração' });
 // Percentuais fictícios para demonstração, sem representar condições de uma loja/adquirente.
 store.saveCardMachine(actor,{name:'Máquina de demonstração',brands:[{name:'Visa / Mastercard',debit_basis_points:200,credit_rates:Array.from({length:18},(_,i)=>({installments:i+1,basis_points:300+i*100}))}]});

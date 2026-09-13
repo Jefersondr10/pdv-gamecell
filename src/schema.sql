@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS sales (
  public_notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  confirmed_at TEXT, business_date TEXT, share_hash TEXT UNIQUE, share_expires INTEGER,
  is_wholesale INTEGER NOT NULL DEFAULT 0 CHECK(is_wholesale IN (0,1)),
+ review_manual INTEGER NOT NULL DEFAULT 0 CHECK(review_manual IN (0,1)),
  FOREIGN KEY(tenant_id, customer_id) REFERENCES customers(tenant_id, id),
  FOREIGN KEY(tenant_id, seller_id) REFERENCES users(tenant_id, id),
  FOREIGN KEY(tenant_id, created_by) REFERENCES users(tenant_id, id),
@@ -94,6 +95,37 @@ CREATE TABLE IF NOT EXISTS sale_cancellations (
  FOREIGN KEY(tenant_id,sale_id) REFERENCES sales(tenant_id,id),
  FOREIGN KEY(tenant_id,actor_id) REFERENCES users(tenant_id,id)
 );
+CREATE TABLE IF NOT EXISTS sale_refunds (
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, sale_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+ actor_name_snapshot TEXT NOT NULL DEFAULT '',
+ request_id TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents > 0),
+ method TEXT NOT NULL CHECK(method IN ('pix','cash','card','other')),
+ refunded_date TEXT NOT NULL CHECK(length(refunded_date)=10), notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+ UNIQUE(tenant_id,id), UNIQUE(tenant_id,request_id),
+ FOREIGN KEY(tenant_id,sale_id) REFERENCES sale_cancellations(tenant_id,sale_id),
+ FOREIGN KEY(tenant_id,actor_id) REFERENCES users(tenant_id,id)
+);
+CREATE TRIGGER IF NOT EXISTS trg_sale_refunds_immutable_update
+BEFORE UPDATE ON sale_refunds BEGIN SELECT RAISE(ABORT,'sale refunds are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_sale_refunds_immutable_delete
+BEFORE DELETE ON sale_refunds BEGIN SELECT RAISE(ABORT,'sale refunds are immutable'); END;
+CREATE INDEX IF NOT EXISTS idx_sale_refunds_sale ON sale_refunds(tenant_id,sale_id,refunded_date,created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sale_refunds_tenant_sale_id ON sale_refunds(tenant_id,sale_id,id);
+CREATE TABLE IF NOT EXISTS sale_refund_reversals (
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, sale_id TEXT NOT NULL, refund_id TEXT NOT NULL,
+ actor_id TEXT NOT NULL, actor_name_snapshot TEXT NOT NULL, request_id TEXT NOT NULL,
+ reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 500),
+ reversed_date TEXT NOT NULL CHECK(length(reversed_date)=10), created_at TEXT NOT NULL,
+ UNIQUE(tenant_id,id), UNIQUE(tenant_id,refund_id), UNIQUE(tenant_id,request_id),
+ FOREIGN KEY(tenant_id,sale_id) REFERENCES sale_cancellations(tenant_id,sale_id),
+ FOREIGN KEY(tenant_id,sale_id,refund_id) REFERENCES sale_refunds(tenant_id,sale_id,id),
+ FOREIGN KEY(tenant_id,actor_id) REFERENCES users(tenant_id,id)
+);
+CREATE TRIGGER IF NOT EXISTS trg_sale_refund_reversals_immutable_update
+BEFORE UPDATE ON sale_refund_reversals BEGIN SELECT RAISE(ABORT,'sale refund reversals are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_sale_refund_reversals_immutable_delete
+BEFORE DELETE ON sale_refund_reversals BEGIN SELECT RAISE(ABORT,'sale refund reversals are immutable'); END;
+CREATE INDEX IF NOT EXISTS idx_sale_refund_reversals_sale ON sale_refund_reversals(tenant_id,sale_id,reversed_date,created_at);
 CREATE TABLE IF NOT EXISTS allocations (
  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, item_id TEXT NOT NULL, lot_id TEXT,
  quantity INTEGER NOT NULL CHECK(quantity > 0), unit_cost_cents INTEGER CHECK(unit_cost_cents >= 0),
@@ -177,3 +209,21 @@ CREATE INDEX IF NOT EXISTS idx_alloc_item ON allocations(tenant_id, item_id);
 CREATE INDEX IF NOT EXISTS idx_payments_sale ON payments(tenant_id, sale_id);
 CREATE INDEX IF NOT EXISTS idx_payment_requests_sale ON payment_requests(tenant_id, sale_id);
 CREATE INDEX IF NOT EXISTS idx_sale_status_assignments_status ON sale_status_assignments(tenant_id, status_id);
+CREATE TABLE IF NOT EXISTS inventory_units (
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, lot_id TEXT NOT NULL,
+ serial_number TEXT NOT NULL, serial_key TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+ FOREIGN KEY(tenant_id,lot_id) REFERENCES lots(tenant_id,id),
+ UNIQUE(tenant_id,id), UNIQUE(tenant_id,serial_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_units_lot ON inventory_units(tenant_id,lot_id,active);
+CREATE TABLE IF NOT EXISTS sale_item_tracking (
+ tenant_id TEXT NOT NULL, item_id TEXT NOT NULL, PRIMARY KEY(tenant_id,item_id),
+ FOREIGN KEY(tenant_id,item_id) REFERENCES sale_items(tenant_id,id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS sale_item_units (
+ tenant_id TEXT NOT NULL, item_id TEXT NOT NULL, unit_id TEXT NOT NULL,
+ PRIMARY KEY(tenant_id,item_id,unit_id),
+ FOREIGN KEY(tenant_id,item_id) REFERENCES sale_item_tracking(tenant_id,item_id) ON DELETE CASCADE,
+ FOREIGN KEY(tenant_id,unit_id) REFERENCES inventory_units(tenant_id,id)
+);
+CREATE INDEX IF NOT EXISTS idx_sale_item_units_unit ON sale_item_units(tenant_id,unit_id);

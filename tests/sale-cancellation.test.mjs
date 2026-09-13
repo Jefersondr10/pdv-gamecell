@@ -194,7 +194,7 @@ test('interface cancelar: busca dados atuais e exige ciência de devolução par
  for(const paid of [false,true]){
   const calls=[],shown=[],submit={remove(){this.removed=true;}},back={};
   const ctx={can:()=>true,api:async(path,...args)=>{calls.push([path,...args]);return {id:'sale',number:1,total_cents:1000,status:'confirmed',edit_token:'novo',customer_name:'<Cliente>',reconciliation:{gross_cents:paid?1000:0}};},showModal:(...args)=>shown.push(args),modal:{querySelector:selector=>selector==='[type="submit"]'?submit:back},money:String,esc:v=>String(v).replaceAll('<','&lt;'),field:(label,html)=>label+html,paymentRequestId:randomUUID};
-  ctx.view='sales';ctx.working=null;ctx.workingDirty=false;
+  ctx.view='sales';ctx.working=null;ctx.workingDirty=false;ctx.pendingWorks=new Map();
   runInNewContext(fn,ctx);await ctx.openCancelSale('sale');assert.deepEqual(calls,[['/sales/sale']]);assert.equal(back.textContent,'Voltar');
   assert.equal(submit.textContent,'Confirmar cancelamento');assert.match(shown[0][1],/edit_token" value="novo"/);assert.match(shown[0][1],/acknowledge_stock_return" required/);assert.doesNotMatch(shown[0][1],/<Cliente>/);
   if(paid){assert.match(shown[0][1],/acknowledge_refund_pending" required/);assert.match(shown[0][1],/Devolução pendente: 1000/);}
