@@ -307,7 +307,9 @@ export function ReconciliationSummary({
             ? `Comprovantes: ${formatMoney(reconciliation.confirmedTotalCents)} · Pix: ${formatMoney(targetCents)}.`
             : divergent
               ? `Os comprovantes estão ${formatMoney(Math.abs(reconciliation.differenceCents ?? 0))} ${(reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(cashCents)}.${cashCents > 0 ? ' O dinheiro recebido já foi descontado do saldo.' : ''}`
-              : `${reconciliation.pendingReceiptCount} comprovante(s) ainda sem valor confirmado.`}
+              : reconciliation.reviewReceiptCount
+                ? 'Há comprovante para revisar. Confira o aviso no documento; o valor lido sozinho não confirma o recebimento.'
+                : `${reconciliation.pendingReceiptCount} comprovante(s) ainda sem valor confirmado.`}
       </p>
     </div>
   );

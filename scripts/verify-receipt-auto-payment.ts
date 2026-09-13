@@ -13,6 +13,7 @@ import {
   requestReceiptPaymentSync,
   settleReceiptPaymentSync,
   stopReceiptPaymentSync,
+  processReceiptPaymentSync,
 } from '../lib/server/receipt-payment-sync.ts';
 import { receiptEvidenceProblem } from '../lib/server/receipt-evidence-safety.ts';
 import { readOverview } from '../lib/server/overview.ts';
@@ -270,9 +271,57 @@ assert.equal(
   (await readReceiptPaymentSync(db, 'shop', 'second'))!.request?.status,
   'review',
 );
+// A terminal unreadable receipt leaves review, not an endless pending sync.
+seed();
+addReceipt();
+adapter.database.exec(
+  "UPDATE attachments SET receipt_amount_cents=NULL; INSERT INTO receipt_ocr_jobs(attachment_id,status,next_attempt_at,created_at,updated_at) VALUES('r1','needs_review',1,1,1)",
+);
+await adapter.batch(
+  requestReceiptPaymentSync(db, scope, 'terminal-read', Date.now()),
+);
+await processReceiptPaymentSync(db);
+assert.equal((await state())!.request?.status, 'review');
+adapter.database.exec(
+  "UPDATE sale_receipt_payment_sync SET status='pending'; UPDATE receipt_ocr_jobs SET status='processing'",
+);
+await processReceiptPaymentSync(db);
+assert.equal((await state())!.request?.status, 'pending');
+// Bank registration is optional: unidentified/inactive registry uses receipt bank.
 for (const mutation of [
   'UPDATE pix_accounts SET active=0',
   "UPDATE pix_accounts SET receipt_bank='Outro banco'",
+]) {
+  seed();
+  addReceipt();
+  adapter.database.exec(mutation);
+  await sync();
+  await check(710000, 2);
+}
+// Upgrading this receipt's provisional identity must keep its payment, not duplicate it.
+seed();
+addReceipt();
+adapter.database.exec('UPDATE attachments SET receipt_details_json=NULL');
+await sync();
+const provisional = (await state())!.payments.find(
+  (p) => p.method === 'pix',
+)!.id;
+adapter.database
+  .prepare('UPDATE attachments SET receipt_details_json=?')
+  .run(JSON.stringify(document.details));
+await sync();
+await check(710000, 2);
+assert.equal(
+  (await state())!.payments.find((p) => p.method === 'pix')!.id,
+  provisional,
+);
+assert.equal(
+  adapter.database
+    .prepare('SELECT transaction_id AS id FROM receipt_payment_links')
+    .get()!.id,
+  document.details.transactionId,
+);
+for (const mutation of [
   "UPDATE attachments SET receipt_details_json=json_set(receipt_details_json,'$.state','scheduled')",
   "UPDATE attachments SET receipt_details_json=json_set(receipt_details_json,'$.ambiguous',json('true'))",
   'UPDATE users SET active=0',

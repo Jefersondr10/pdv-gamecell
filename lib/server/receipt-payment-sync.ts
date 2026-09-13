@@ -565,6 +565,16 @@ export async function settleReceiptPaymentSync(
 }
 
 export async function processReceiptPaymentSync(db: D1Database) {
+  // A terminal OCR failure is review, not an endlessly pending settlement.
+  await db
+    .prepare(`UPDATE sale_receipt_payment_sync SET status='review',updated_at=?
+    WHERE status='pending' AND EXISTS(SELECT 1 FROM sales s WHERE s.id=sale_id AND s.status='completed')
+    AND EXISTS(SELECT 1 FROM attachments a WHERE a.sale_id=sale_receipt_payment_sync.sale_id AND a.store_id=sale_receipt_payment_sync.store_id AND a.kind='receipt' AND a.receipt_amount_cents IS NULL)
+    AND NOT EXISTS(SELECT 1 FROM attachments a LEFT JOIN receipt_ocr_jobs j ON j.attachment_id=a.id
+      WHERE a.sale_id=sale_receipt_payment_sync.sale_id AND a.store_id=sale_receipt_payment_sync.store_id AND a.kind='receipt'
+      AND (j.status IN ('pending','processing','retry') OR (j.attachment_id IS NULL AND a.receipt_amount_cents IS NULL)))`)
+    .bind(Date.now())
+    .run();
   const rows = await db
     .prepare(`SELECT q.sale_id AS saleId, q.store_id AS storeId FROM sale_receipt_payment_sync q
     JOIN sales s ON s.id=q.sale_id AND s.store_id=q.store_id WHERE q.status='pending' AND s.status='completed'

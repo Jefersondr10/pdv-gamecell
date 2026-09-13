@@ -48,7 +48,7 @@ export function ServerReceiptProvider({
             pending: number;
           }>('/api/receipt-ocr/status');
           if (!alive) return;
-          if (previous && previous !== result.version)
+          if (previous !== result.version)
             window.dispatchEvent(new Event('pdv:sales-changed'));
           previous = result.version;
           if (result.pending) delay = 15_000;
@@ -124,15 +124,14 @@ export function useServerReceiptJobs(
           );
           callback.current(result.receipts);
           const signature = JSON.stringify(result.receipts);
-          if (previous && previous !== signature)
+          if (previous !== signature)
             window.dispatchEvent(new Event('pdv:sales-changed'));
           previous = signature;
           if (
             result.receipts.some(
               (row) =>
-                row.amountCents === null &&
-                (!row.status ||
-                  ['pending', 'processing', 'retry'].includes(row.status)),
+                (!row.status && row.amountCents === null) ||
+                ['pending', 'processing', 'retry'].includes(row.status ?? ''),
             )
           )
             delay = 5000;

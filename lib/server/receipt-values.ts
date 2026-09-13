@@ -5,6 +5,18 @@ import type {
   ReceiptValueInput,
 } from '../receipt-reconciliation.ts';
 
+export function prepareReceiptUploadValues(
+  values: ReceiptValueInput[],
+  serverOcrEnabled: boolean,
+) {
+  // Browser OCR is a preview, not a completed server document analysis.
+  return values.map((value) =>
+    serverOcrEnabled && value.source === 'ocr'
+      ? { amountCents: null, source: null }
+      : value,
+  );
+}
+
 export function parseReceiptValues(
   value: unknown,
   expectedLength: number,

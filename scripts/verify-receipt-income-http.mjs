@@ -37,8 +37,9 @@ const ocr = createServer(async (request, response) => {
     /* consume the uploaded test file */
   }
   await readingGate;
-  const reading = extractReceiptDocument(`Pronto! Seu pagamento foi realizado.
-Comprovante do Pix
+  const reading = extractReceiptDocument(`Comprovante de
+transferência
+Pix
 12/09/2026 14:30:00
 Valor: R$ 7.100,00
 Pagador
@@ -209,9 +210,13 @@ try {
   assert.equal((await list(zero.id)).receivedTotalCents, 0);
   assert.ok((await list(zero.id)).issueKeys.includes('pending_payment'));
   assert.equal((await list(mixed.id)).receivedTotalCents, 300000);
-  // A late receipt has NO manually supplied amount or bank.
+  // An old client's numeric OCR preview must not skip full server analysis.
   const late = new FormData();
   late.set('operationId', crypto.randomUUID());
+  late.set(
+    'receiptValues',
+    JSON.stringify([{ amountCents: 12300, source: 'ocr' }]),
+  );
   late.append('receipts', photo(), 'late-receipt.png');
   await call('/api/sales/' + zero.id + '/attachments', {
     method: 'POST',
@@ -258,6 +263,61 @@ try {
   assert.equal(received.displayStatus.key, 'reconciled');
   assert.equal(received.receipts.length, 1);
   const fixture = new DatabaseSync(join(directory, 'pdv.sqlite'));
+  const recoveredId = completed.receipts[0].id;
+  const oldGeneration = fixture
+    .prepare('SELECT generation FROM receipt_ocr_jobs WHERE attachment_id=?')
+    .get(recoveredId).generation;
+  fixture
+    .prepare(
+      'UPDATE attachments SET receipt_details_json=?,receipt_review_reason=? WHERE id=?',
+    )
+    .run(
+      JSON.stringify(extractReceiptDocument('Valor R$ 7.100,00').details),
+      'Old reader did not identify completion',
+      recoveredId,
+    );
+  fixture
+    .prepare(
+      "UPDATE receipt_ocr_jobs SET reader_revision=0,status='done' WHERE attachment_id=?",
+    )
+    .run(recoveredId);
+  fixture
+    .prepare(
+      "UPDATE sale_receipt_payment_sync SET status='review' WHERE sale_id=?",
+    )
+    .run(zero.id);
+  fixture
+    .prepare(
+      'UPDATE sales SET received_total_cents=0,received_difference_cents=-products_total_cents WHERE id=?',
+    )
+    .run(zero.id);
+  let recovered;
+  for (let attempt = 0; attempt < 150; attempt++) {
+    recovered = await list(zero.id);
+    const raw = fixture
+      .prepare('SELECT received_total_cents AS total FROM sales WHERE id=?')
+      .get(zero.id);
+    if (recovered.displayStatus.key === 'reconciled' && raw.total === 710000)
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  assert.equal(
+    recovered.displayStatus.key,
+    'reconciled',
+    'old incomplete reading recovers without a reread request',
+  );
+  assert.equal(
+    fixture
+      .prepare('SELECT received_total_cents AS total FROM sales WHERE id=?')
+      .get(zero.id).total,
+    710000,
+  );
+  assert.equal(
+    fixture
+      .prepare('SELECT generation FROM receipt_ocr_jobs WHERE attachment_id=?')
+      .get(recoveredId).generation,
+    oldGeneration + 1,
+  );
   for (const saleId of [zero.id, mixed.id]) {
     const unit = fixture
       .prepare('SELECT status, sale_id FROM inventory_units WHERE sale_id=?')
@@ -348,7 +408,7 @@ try {
   );
   fixture.close();
   console.log(
-    'PASS HTTP: sale without receipt decrements stock; late upload with no amount runs queued OCR and reconciles; cash + receipt, legacy Pix ignored, correct balance, manual Pix rejected, reread resets income. Test database isolated.',
+    'PASS HTTP: late upload with client OCR is analyzed on server; prior incomplete reading recovers automatically with saved totals and status; cash preserved, stock decremented, legacy Pix ignored, manual Pix rejected. Test database isolated.',
   );
 } finally {
   server.kill();

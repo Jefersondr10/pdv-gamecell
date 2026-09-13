@@ -560,6 +560,7 @@ export const receiptOcrJobs = sqliteTable(
       .default('pending'),
     attempts: integer('attempts').notNull().default(0),
     generation: integer('generation').notNull().default(1),
+    readerRevision: integer('reader_revision').notNull().default(0),
     leaseToken: text('lease_token'),
     leaseUntil: integer('lease_until'),
     nextAttemptAt: integer('next_attempt_at').notNull(),

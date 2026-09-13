@@ -24,6 +24,7 @@ for (const header of [
   'Transferência foi efetuada',
   'Pix efetuado',
   'Comprovante de Pix',
+  'Comprovante de\ntransferência\nPix',
 ]) {
   const reading = extractReceiptDocument(fixture(header));
   assert.equal(reading.amountCents, 664000);
@@ -64,11 +65,16 @@ for (const status of [
   'Aguardando',
   'Não foi possível',
 ]) {
-  const blocked = extractReceiptDocument(fixture('Comprovante do Pix', status));
-  assert.equal(blocked.details.blocked, true, status);
-  const preferred = preferReceiptReading([complete, blocked]);
-  assert.equal(preferred.details.blocked, true, status);
-  assert.equal(preferred.details.automaticEligible, false, status);
+  for (const header of [
+    'Comprovante do Pix',
+    'Comprovante de\ntransferência\nPix',
+  ]) {
+    const blocked = extractReceiptDocument(fixture(header, status));
+    assert.equal(blocked.details.blocked, true, status);
+    const preferred = preferReceiptReading([complete, blocked]);
+    assert.equal(preferred.details.blocked, true, status);
+    assert.equal(preferred.details.automaticEligible, false, status);
+  }
 }
 for (const conflicting of [
   fixture('Comprovante de Pix').replace('6.640,00', '6.650,00'),

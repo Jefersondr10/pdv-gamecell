@@ -26,7 +26,10 @@ import {
   consumeFixedWindowLimits,
   consumeStoreWriteBudget,
 } from '@/lib/server/rate-limit';
-import { parseReceiptValues } from '@/lib/server/receipt-values';
+import {
+  parseReceiptValues,
+  prepareReceiptUploadValues,
+} from '@/lib/server/receipt-values';
 import { runtime } from '@/lib/server/runtime';
 import { releaseUpload, reserveUpload } from '@/lib/server/storage-quota';
 
@@ -184,9 +187,13 @@ export async function POST(
         'INVALID_RECEIPT_VALUES',
       );
     }
-    const receiptValues = receiptValuesFromForm(
+    const submittedReceiptValues = receiptValuesFromForm(
       receiptValueFields[0] ?? null,
       receiptFiles.length,
+    );
+    const receiptValues = prepareReceiptUploadValues(
+      submittedReceiptValues,
+      Boolean(runtime().RECEIPT_OCR_ENGINE_URL),
     );
     const requestedItemIds = Array.from(
       new Set(
@@ -228,7 +235,7 @@ export async function POST(
     operationFingerprint = await attachmentFingerprint(
       saleId,
       receiptFiles,
-      receiptValues,
+      submittedReceiptValues,
       itemFiles,
     );
     if (preservePayments)

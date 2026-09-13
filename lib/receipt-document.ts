@@ -1,5 +1,8 @@
 import { extractReceiptAmount } from './receipt-amount.ts';
 
+// Engine/parser revision, independent of the saved document format version.
+export const RECEIPT_READER_REVISION = 1;
+
 export type ReceiptDocument = {
   version: 1;
   payerName: string | null;
@@ -101,7 +104,11 @@ export function extractReceiptDocument(text: string) {
             ? 'completed'
             : c6Timeline
               ? 'unknown'
-              : /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
+              : (/comprovante\s+(?:de|da)\s+transferencia\b/.test(
+                    normalized.slice(0, 500),
+                  ) &&
+                    /\bpix\b/.test(normalized)) ||
+                  /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
                     normalized,
                   )
                 ? 'completed'

@@ -220,7 +220,11 @@ export async function settleAutomaticReceiptPayments(
         'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
       );
     const transactionId = doc?.transactionId ?? `receipt:${receipt.id}`;
-    if (link && link.transactionId !== transactionId)
+    if (
+      link &&
+      link.transactionId !== transactionId &&
+      link.transactionId !== `receipt:${receipt.id}`
+    )
       return review(
         'A identificação da transação mudou na releitura. Confira o pagamento registrado.',
       );
@@ -313,6 +317,20 @@ export async function settleAutomaticReceiptPayments(
   ];
   for (const p of planned) {
     if (p.link) {
+      if (p.link.transactionId !== p.transactionId)
+        statements.push(
+          db
+            .prepare(`UPDATE receipt_payment_links SET transaction_id=?
+          WHERE attachment_id=? AND store_id=? AND sale_id=? AND payment_id=? AND transaction_id=?`)
+            .bind(
+              p.transactionId,
+              p.receipt.id,
+              storeId,
+              saleId,
+              p.paymentId,
+              `receipt:${p.receipt.id}`,
+            ),
+        );
       statements.push(
         db
           .prepare(

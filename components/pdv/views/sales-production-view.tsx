@@ -1657,13 +1657,20 @@ function EditSaleDialog({
   const reconciliation = sale
     ? deriveReceiptReconciliation(
         [
-          ...activeReceipts.map(
-            (receipt) =>
-              savedReceiptValues[receipt.id] ?? {
-                amountCents: receipt.receiptAmountCents,
-                source: receipt.receiptAmountSource,
-              },
-          ),
+          ...activeReceipts.map((receipt) => ({
+            ...(savedReceiptValues[receipt.id] ?? {
+              amountCents: receipt.receiptAmountCents,
+              source: receipt.receiptAmountSource,
+            }),
+            receiptReviewReason:
+              receipt.receiptReviewReason ||
+              (receipt.receiptDetails &&
+              (receipt.receiptDetails.blocked ||
+                receipt.receiptDetails.ambiguous ||
+                receipt.receiptDetails.state !== 'completed')
+                ? 'Confira a leitura do documento.'
+                : null),
+          })),
           ...receiptValues,
         ],
         draftPixCents,

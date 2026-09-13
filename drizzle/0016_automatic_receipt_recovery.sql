@@ -1,0 +1,1 @@
+ALTER TABLE `receipt_ocr_jobs` ADD `reader_revision` integer DEFAULT 0 NOT NULL;

@@ -28,7 +28,10 @@ import {
   consumeStoreWriteBudget,
 } from '@/lib/server/rate-limit';
 import { runtime } from '@/lib/server/runtime';
-import { parseReceiptValues } from '@/lib/server/receipt-values';
+import {
+  parseReceiptValues,
+  prepareReceiptUploadValues,
+} from '@/lib/server/receipt-values';
 import { queueSaleReceipts } from '@/lib/server/receipt-ocr-jobs';
 import { requestReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
 import { duplicateReceiptSql } from '@/lib/server/sale-status-sql';
@@ -547,9 +550,9 @@ export async function POST(request: Request) {
       receipts: true,
       max: 8,
     });
-    const receiptValues = parseReceiptValues(
-      payload.receiptValues,
-      receiptFiles.length,
+    const receiptValues = prepareReceiptUploadValues(
+      parseReceiptValues(payload.receiptValues, receiptFiles.length),
+      Boolean(runtime().RECEIPT_OCR_ENGINE_URL),
     );
     const allFiles = [...itemFiles.flat(), ...receiptFiles];
     await validateFileSignatures(allFiles);
