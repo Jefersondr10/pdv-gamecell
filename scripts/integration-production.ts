@@ -762,27 +762,24 @@ assert.equal(
   ).body.code,
   'OPERATION_ALREADY_USED',
 );
-const initialReceiptState = (
+let initialReceiptPayment = (
   await call(`/api/sales/${saleId}/receipt-payment`, { cookie: ownerCookie })
 ).body;
-const initialReceiptPayment = await call(
-  `/api/sales/${saleId}/receipt-payment`,
-  {
-    method: 'POST',
-    cookie: ownerCookie,
-    headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      operationId: crypto.randomUUID(),
-      pixAccountId: pixId,
-      expectedPayments: initialReceiptState.expectedPayments,
-      expectedReceipts: initialReceiptState.expectedReceipts,
-      expectedRequestId: initialReceiptState.requestId,
-    }),
-  },
-);
-assert.equal(initialReceiptPayment.body.receivedTotalCents, 850_000);
+for (let attempt = 0; attempt < 30; attempt++) {
+  if (
+    (initialReceiptPayment.payments as Array<{ method: string }>).some(
+      (payment) => payment.method === 'pix',
+    )
+  )
+    break;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  initialReceiptPayment = (
+    await call(`/api/sales/${saleId}/receipt-payment`, { cookie: ownerCookie })
+  ).body;
+}
+assert.equal(initialReceiptPayment.receivedTotalCents, 850_000);
 assert.equal(
-  (initialReceiptPayment.body.payments as Array<{ method: string }>)[0].method,
+  (initialReceiptPayment.payments as Array<{ method: string }>)[0].method,
   'pix',
 );
 // Existing SNs of an inactive product can still be sold; reactivation changes no records.

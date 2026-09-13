@@ -92,8 +92,13 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
           </p>
           {(sale.receiptCents > 0 || sale.cashCents > 0) && (
             <p className="text-xs text-muted-foreground">
-              Pix recebido {money(sale.receiptCents)} · dinheiro (manual){' '}
-              {money(sale.cashCents)}
+              {sale.receiptCents > 0 && (
+                <>Recebido Pix {money(sale.receiptCents)}</>
+              )}
+              {sale.receiptCents > 0 && sale.cashCents > 0 && ' · '}
+              {sale.cashCents > 0 && (
+                <>Recebido Dinheiro {money(sale.cashCents)}</>
+              )}
             </p>
           )}
         </div>

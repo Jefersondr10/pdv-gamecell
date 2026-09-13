@@ -1,7 +1,7 @@
 import { extractReceiptAmount } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 2;
+export const RECEIPT_READER_REVISION = 3;
 
 export type ReceiptDocument = {
   version: 1;
@@ -35,6 +35,21 @@ function cleanParticipantName(value: string | null | undefined) {
       .trim()
       .slice(0, 150) || null
   );
+}
+
+const VALID_SHORT_BANK_IDENTITIES = new Set(['bb', 'bv', 'c6', 'xp']);
+
+function cleanParticipantBank(value: string | null | undefined) {
+  if (!value) return null;
+  const cleaned = value.trim().slice(0, 150);
+  const identity = normalizeReceiptIdentity(cleaned);
+  if (!identity) return null;
+  // OCR occasionally returns a cropped accent/symbol (for example "és" or
+  // "6:") for the C6 recipient bank. Keep genuinely short brands while
+  // requiring other readings to contain enough alphabetic evidence.
+  if (VALID_SHORT_BANK_IDENTITIES.has(identity)) return cleaned;
+  const letters = identity.replace(/\d/g, '');
+  return identity.length >= 3 && letters.length >= 2 ? cleaned : null;
 }
 
 // Parse labelled participants only. A logo/header never identifies the recipient.
@@ -193,7 +208,7 @@ export function extractReceiptDocument(text: string) {
     )?.replace(/\D/g, '');
     return {
       name: cleanParticipantName(name),
-      bank: bank?.slice(0, 150) || null,
+      bank: cleanParticipantBank(bank),
       document: doc && [11, 14].includes(doc.length) ? doc : null,
     };
   };
@@ -245,14 +260,17 @@ export function extractReceiptDocument(text: string) {
     };
     recipient = {
       name: nameBeforeBank(recipientBankLine),
-      bank:
-        lines[recipientBankLine].replace(/^banco\s*:\s*/i, '').trim() || null,
+      bank: cleanParticipantBank(
+        lines[recipientBankLine].replace(/^banco\s*:\s*/i, ''),
+      ),
       document: documents.length === 1 ? documents[0].replace(/\D/g, '') : null,
     };
     if (bankAt > originAccount)
       payer = {
         name: nameBeforeBank(bankAt),
-        bank: lines[bankAt].replace(/^banco\s*:\s*/i, '').trim() || null,
+        bank: cleanParticipantBank(
+          lines[bankAt].replace(/^banco\s*:\s*/i, ''),
+        ),
         document: null,
       };
   }
@@ -282,6 +300,12 @@ export function extractReceiptDocument(text: string) {
     .filter((line) => /R\s*[$S]/i.test(line))
     .map((line) => extractReceiptAmount(line))
     .filter(Boolean);
+  const c6CurrencyAmounts = c6
+    ? lines
+        .filter((line) => /R\s*[$S]/i.test(line))
+        .map((line) => extractReceiptAmount(line))
+        .filter(Boolean)
+    : [];
   const suggestion =
     extractReceiptAmount(heading) ?? extractReceiptAmount(text);
   const c6ValueIndexes = lines
@@ -291,15 +315,20 @@ export function extractReceiptDocument(text: string) {
     c6ValueIndexes.length === 1
       ? extractReceiptAmount(lines[c6ValueIndexes[0] + 1] ?? '')
       : null;
-  const ambiguous = ids.length > 1 || headingAmounts.length > 1;
+  const ambiguous =
+    ids.length > 1 ||
+    headingAmounts.length > 1 ||
+    c6CurrencyAmounts.length > 1;
   const uniqueAmount =
     !ambiguous &&
     suggestion !== null &&
     (suggestion.confidence === 'high' ||
       (headingAmounts.length === 1 &&
         headingAmounts[0]!.amountCents === suggestion.amountCents) ||
-      (c6Completed &&
-        c6LabelledAmount?.amountCents === suggestion.amountCents));
+      (c6 &&
+        (c6LabelledAmount?.amountCents === suggestion.amountCents ||
+          (c6CurrencyAmounts.length === 1 &&
+            c6CurrencyAmounts[0]!.amountCents === suggestion.amountCents))));
   const details: ReceiptDocument = {
     version: 1,
     payerName: payer.name,
@@ -360,6 +389,8 @@ export function parseReceiptDocument(value: unknown): ReceiptDocument | null {
     // the original document or changing amounts, bank data or identifiers.
     result.payerName = cleanParticipantName(result.payerName);
     result.recipientName = cleanParticipantName(result.recipientName);
+    result.payerBank = cleanParticipantBank(result.payerBank);
+    result.recipientBank = cleanParticipantBank(result.recipientBank);
     return result;
   } catch {
     return null;
@@ -422,7 +453,26 @@ export function preferReceiptReading(
         reading.details.recipientBank &&
         reading.details.recipientDocument,
     ) ??
+    found.find(
+      (reading) =>
+        reading.details.automaticEligible && reading.details.recipientBank,
+    ) ??
     found.find((reading) => reading.details.automaticEligible) ??
+    found.find(
+      (reading) =>
+        reading.details.state === 'completed' &&
+        !reading.details.blocked &&
+        !reading.details.ambiguous &&
+        reading.details.recipientBank &&
+        reading.details.recipientDocument,
+    ) ??
+    found.find(
+      (reading) =>
+        reading.details.state === 'completed' &&
+        !reading.details.blocked &&
+        !reading.details.ambiguous &&
+        reading.details.recipientBank,
+    ) ??
     found.find(
       (reading) =>
         reading.details.state === 'completed' &&
@@ -432,6 +482,34 @@ export function preferReceiptReading(
     found[0] ??
     readings[0];
   if (!preferred) return extractReceiptDocument('');
+  // Keep the financially eligible reading as the base. A second PSM pass may
+  // repair only its missing bank label when both readings describe the same
+  // completed payment and the same recipient. Never inherit amount, state,
+  // transaction id or eligibility from the enrichment candidate.
+  const bankEnrichment =
+    preferred.details.automaticEligible && !preferred.details.recipientBank
+      ? found.find((candidate) => {
+          if (
+            candidate === preferred ||
+            candidate.amountCents !== preferred.amountCents ||
+            candidate.details.state !== 'completed' ||
+            candidate.details.blocked ||
+            candidate.details.ambiguous ||
+            !candidate.details.recipientBank
+          )
+            return false;
+          const sameName =
+            Boolean(preferred.details.recipientName) &&
+            Boolean(candidate.details.recipientName) &&
+            normalizeReceiptIdentity(preferred.details.recipientName!) ===
+              normalizeReceiptIdentity(candidate.details.recipientName!);
+          const sameDocument =
+            Boolean(preferred.details.recipientDocument) &&
+            preferred.details.recipientDocument ===
+              candidate.details.recipientDocument;
+          return sameName || sameDocument;
+        })?.details.recipientBank ?? null
+      : null;
   const amountConflict =
     new Set(found.map((reading) => reading.amountCents)).size > 1;
   const idConflict =
@@ -447,6 +525,7 @@ export function preferReceiptReading(
     ...preferred,
     details: {
       ...preferred.details,
+      recipientBank: preferred.details.recipientBank ?? bankEnrichment,
       blocked,
       ambiguous,
       automaticEligible:

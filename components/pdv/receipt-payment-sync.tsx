@@ -41,12 +41,29 @@ export function ReceiptPaymentSync({
         comparado com o preço da venda.
       </p>
       <div className="mt-2 space-y-1">
+        {received > 0 && (
+          <p>
+            {state.receiptTotalCents > 0 && (
+              <>
+                Recebido Pix:{' '}
+                <strong>{formatMoney(state.receiptTotalCents)}</strong>
+              </>
+            )}
+            {state.receiptTotalCents > 0 && cashCents > 0 && ' · '}
+            {cashCents > 0 && (
+              <>
+                Recebido Dinheiro: <strong>{formatMoney(cashCents)}</strong>
+              </>
+            )}
+          </p>
+        )}
         <p>
-          Comprovantes: <strong>{formatMoney(state.receiptTotalCents)}</strong>{' '}
-          · Dinheiro: <strong>{formatMoney(cashCents)}</strong>
-        </p>
-        <p>
-          Total recebido: <strong>{formatMoney(received)}</strong> · Venda:{' '}
+          {received > 0 && (
+            <>
+              Total recebido: <strong>{formatMoney(received)}</strong> ·{' '}
+            </>
+          )}
+          Venda:{' '}
           <strong>{formatMoney(productsTotalCents)}</strong>
         </p>
       </div>

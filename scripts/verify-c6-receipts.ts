@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {
   extractReceiptDocument,
+  needsReceiptOcrEnrichment,
+  parseReceiptDocument,
   preferReceiptReading,
 } from '../lib/receipt-document.ts';
 import { receiptIncomeCents } from '../lib/receipt-income.ts';
@@ -108,6 +110,100 @@ for (const text of [
 
 const completed = extractReceiptDocument(
   receipt('Pixem Pix\nandamento realizado!'),
+);
+const garbageBank = extractReceiptDocument(
+  receipt('Pixem Pix\nandamento realizado!').replace(
+    'Banco: 999 - Banco recebedor de teste',
+    'Banco: és',
+  ),
+);
+assert.equal(garbageBank.details.recipientBank, null);
+assert.equal(needsReceiptOcrEnrichment(garbageBank), true);
+const plausibleSecondReading = {
+  ...completed,
+  details: {
+    ...completed.details,
+    automaticEligible: false,
+    transactionId: null,
+  },
+};
+const sparseEligible = extractReceiptDocument(
+  receipt('Pixem Pix\nandamento realizado!')
+    .replace('Banco: 999 - Banco recebedor de teste', 'Banco: és')
+    .replace('\nValor\nR$ 13.940,00', '\nR$ 13.940,00'),
+);
+assert.equal(sparseEligible.details.recipientBank, null);
+assert.equal(sparseEligible.details.automaticEligible, true);
+const realPatternPreferred = preferReceiptReading([
+  plausibleSecondReading,
+  sparseEligible,
+]);
+assert.equal(realPatternPreferred.amountCents, 1394000);
+assert.equal(realPatternPreferred.details.automaticEligible, true);
+assert.equal(
+  realPatternPreferred.details.transactionId,
+  sparseEligible.details.transactionId,
+);
+assert.equal(
+  realPatternPreferred.details.recipientBank,
+  '999 - Banco recebedor de teste',
+);
+assert.equal(
+  preferReceiptReading([garbageBank, plausibleSecondReading]).details
+    .recipientBank,
+  '999 - Banco recebedor de teste',
+);
+const enriched = preferReceiptReading([garbageBank, plausibleSecondReading]);
+assert.equal(enriched.details.automaticEligible, true);
+assert.equal(
+  enriched.details.transactionId,
+  garbageBank.details.transactionId,
+  'bank enrichment must preserve the eligible reading transaction id',
+);
+const otherAmount = {
+  ...extractReceiptDocument(
+    receipt('Pixem Pix\nandamento realizado!').replace(
+      'R$ 13.940,00',
+      'R$ 14.940,00',
+    ),
+  ),
+  details: {
+    ...completed.details,
+    automaticEligible: false,
+    transactionId: null,
+  },
+};
+const amountConflict = preferReceiptReading([garbageBank, otherAmount]);
+assert.equal(amountConflict.details.recipientBank, null);
+assert.equal(amountConflict.details.ambiguous, true);
+assert.equal(amountConflict.details.automaticEligible, false);
+const otherRecipientReading = extractReceiptDocument(
+  receipt('Pixem Pix\nandamento realizado!')
+    .replace('Loja fictícia', 'Outro recebedor')
+    .replace('12.345.678/0001-99', '98.765.432/0001-10'),
+);
+const otherRecipient = {
+  ...otherRecipientReading,
+  details: {
+    ...otherRecipientReading.details,
+    automaticEligible: false,
+    transactionId: null,
+  },
+};
+const recipientConflict = preferReceiptReading([garbageBank, otherRecipient]);
+assert.equal(recipientConflict.details.recipientBank, null);
+assert.equal(recipientConflict.details.automaticEligible, true);
+const shortC6 = extractReceiptDocument(
+  receipt('Pixem Pix\nandamento realizado!').replace(
+    'Banco: 999 - Banco recebedor de teste',
+    'Banco: C6',
+  ),
+);
+assert.equal(shortC6.details.recipientBank, 'C6');
+assert.equal(
+  parseReceiptDocument({ ...completed.details, recipientBank: 'és' })
+    ?.recipientBank,
+  null,
 );
 const blocked = extractReceiptDocument(receipt('Pix em andamento'));
 assert.equal(preferReceiptReading([completed, blocked]).details.blocked, true);
