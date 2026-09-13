@@ -9,9 +9,9 @@ import { createOperationId } from '@/lib/client-operation-id';
 import { cn } from '@/lib/utils';
 import type { SaleRecord } from '@/lib/pdv-types';
 import { parseSalePriceInput, type SalePrices } from '@/lib/sale-prices';
+import { saleReceiptIncome } from '@/lib/receipt-income';
 import {
   deriveReceiptReconciliation,
-  paymentMethodTotals,
   receiptTargetLabel,
 } from '@/lib/receipt-reconciliation';
 
@@ -64,7 +64,7 @@ export function SalePricesEditor({
   );
   const newTotal = items.reduce((total, item) => total + item.priceCents, 0);
   const difference = sale.receivedTotalCents - newTotal;
-  const cashCents = paymentMethodTotals(sale.payments).cashCents;
+  const { pixCents, cashCents } = saleReceiptIncome(sale);
   const receiptCheck = deriveReceiptReconciliation(
     sale.receipts,
     Math.max(0, newTotal - cashCents),
@@ -222,10 +222,24 @@ export function SalePricesEditor({
           <div className="rounded-xl bg-muted/40 p-3 text-sm">
             <p>Total anterior: {money(current.productsTotalCents)}</p>
             <p className="font-extrabold">Novo total: {money(newTotal)}</p>
-            <p>Comprovantes + dinheiro: {money(sale.receivedTotalCents)}</p>
-            <p>
-              Comprovantes com valor: {money(receiptCheck.confirmedTotalCents)}
-            </p>
+            {sale.receivedTotalCents > 0 && (
+              <p>
+                {pixCents > 0 && cashCents > 0
+                  ? 'Comprovantes + dinheiro'
+                  : pixCents > 0
+                    ? 'Comprovantes'
+                    : cashCents > 0
+                      ? 'Dinheiro recebido'
+                      : 'Total recebido'}
+                : {money(sale.receivedTotalCents)}
+              </p>
+            )}
+            {sale.receipts.length > 0 && (
+              <p>
+                Comprovantes com valor:{' '}
+                {money(receiptCheck.confirmedTotalCents)}
+              </p>
+            )}
             {!invalid && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {receiptCheck.status === 'not_required'

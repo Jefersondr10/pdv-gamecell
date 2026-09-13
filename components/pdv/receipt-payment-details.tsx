@@ -3,14 +3,16 @@ import { shortReceiptDate } from '@/lib/receipt-document';
 
 export function ReceiptPaymentDetails({
   receipts,
+  required = true,
 }: {
   receipts: ReceiptAttachmentRecord[];
+  required?: boolean;
 }) {
+  if (!receipts.length && !required) return null;
   if (!receipts.length)
     return (
       <p className="mt-2 text-sm text-muted-foreground">
         Sem comprovante. Anexe agora ou depois em Vendas para identificar o Pix.
-        Dinheiro é informado manualmente.
       </p>
     );
   return (

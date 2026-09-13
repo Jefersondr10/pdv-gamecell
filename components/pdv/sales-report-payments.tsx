@@ -8,12 +8,20 @@ export function SalesReportPayments({
 }: {
   summary: SalesPaymentSummary;
 }) {
+  const hasCash = summary.groups.some((group) => group.key === 'cash');
+  const hasPix = summary.groups.some((group) => group.key !== 'cash');
   return (
     <section className="report-section mt-3 rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
       <h3 className="text-base font-extrabold">Onde foi recebido</h3>
       <p className="mt-1 text-xs text-slate-500">
-        Pagamentos informados das vendas deste relatório. Não confirma crédito
-        no banco.
+        {hasPix && hasCash
+          ? 'Valores identificados nos comprovantes e recebimentos em dinheiro deste relatório.'
+          : hasPix
+            ? 'Valores identificados nos comprovantes deste relatório.'
+            : hasCash
+              ? 'Recebimentos em dinheiro deste relatório.'
+              : 'Nenhum recebimento foi identificado neste relatório.'}{' '}
+        {hasPix && 'Não confirma crédito no banco.'}
       </p>
       <dl className="mt-3 grid gap-x-6 sm:grid-cols-2">
         {summary.groups.map((group) => (
@@ -42,7 +50,7 @@ export function SalesReportPayments({
       )}
       <dl className="mt-3 space-y-2 rounded-lg bg-slate-100 px-3 py-2 text-sm">
         <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 font-extrabold text-slate-950">
-          <dt>Total recebido informado</dt>
+          <dt>Total recebido</dt>
           <dd className="tabular-nums">{money(summary.receivedCents)}</dd>
         </div>
         {summary.outstandingCents > 0 && (

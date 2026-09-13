@@ -154,7 +154,11 @@ export function ClientPurchaseHistory({
                 <span className="text-xs text-muted-foreground">
                   {date(sale.createdAt)}
                 </span>
-                <SaleDisplayStatusBadge status={sale.displayStatus} />
+                <SaleDisplayStatusBadge
+                  status={sale.displayStatus}
+                  pixCents={sale.pixCents}
+                  cashCents={sale.cashCents}
+                />
               </div>
               <Button
                 disabled={!onOpenSale}

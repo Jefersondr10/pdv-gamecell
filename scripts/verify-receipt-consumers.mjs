@@ -7,10 +7,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { useEffect, useRef } from 'react';
 import { SqliteDatabase } from '../lib/server/node/sqlite.mjs';
 import { parseReceiptDocument } from '../lib/receipt-document.ts';
-import { saleReceiptIncome } from '../lib/receipt-income.ts';
+import {
+  receiptDrivenPayments,
+  saleReceiptIncome,
+} from '../lib/receipt-income.ts';
 import {
   deriveReceiptReconciliation,
   paymentMethodTotals,
+  receiptTargetLabel,
 } from '../lib/receipt-reconciliation.ts';
 import {
   duplicateReceiptSql,
@@ -25,6 +29,7 @@ import {
   requestReceiptPaymentSync,
   settleReceiptPaymentSync,
 } from '../lib/server/receipt-payment-sync.ts';
+import { SYSTEM_SALE_STATUSES } from '../lib/sale-display-status.ts';
 
 // Execute the real API hydration and display function while isolating routing,
 // authentication and browser dependencies. SQL still runs against full schema.
@@ -76,6 +81,7 @@ const { SaleComparison } = functionsFrom(
   ['SaleComparison'],
   {
     overviewSaleComparison,
+    receiptTargetLabel,
     money: (cents) => `BRL ${cents / 100}`,
     cn: (...values) => values.filter(Boolean).join(' '),
     TriangleAlert: () => null,
@@ -92,6 +98,24 @@ const { ReceiptPaymentSync } = functionsFrom(
     useEffect,
     useRef,
   },
+);
+const { SystemSaleStatusBadge } = functionsFrom(
+  'components/pdv/sale-status-badge.tsx',
+  ['SystemSaleStatusBadge'],
+  {
+    SYSTEM_SALE_STATUSES,
+    cn: (...values) => values.filter(Boolean).join(' '),
+  },
+);
+const { ReceiptPaymentDetails } = functionsFrom(
+  'components/pdv/receipt-payment-details.tsx',
+  ['ReceiptPaymentDetails'],
+  { shortReceiptDate: () => '' },
+);
+const { SalesReportPayments } = functionsFrom(
+  'components/pdv/sales-report-payments.tsx',
+  ['SalesReportPayments'],
+  { money: (cents) => `BRL ${cents / 100}` },
 );
 const db = new SqliteDatabase(':memory:');
 for (const file of readdirSync('drizzle')
@@ -265,8 +289,12 @@ const markup = renderToStaticMarkup(
   jsx(SaleComparison, { sale: { ...partial, saleInvalid: 0 } }),
 );
 assert.match(markup, /Recebido Pix BRL 4100/);
-assert.doesNotMatch(markup, /Recebido Pix BRL 7100|Pix informado|Recebido Dinheiro/);
-assert.match(markup, /BRL 3000.*abaixo.*saldo.*esperado/s);
+assert.doesNotMatch(
+  markup,
+  /Recebido Pix BRL 7100|Pix informado|Recebido Dinheiro/,
+);
+assert.match(markup, /BRL 3000.*abaixo.*valor da venda/s);
+assert.doesNotMatch(markup, /dinheiro/i);
 const cashOnlyMarkup = renderToStaticMarkup(
   jsx(SaleComparison, {
     sale: {
@@ -280,6 +308,8 @@ const cashOnlyMarkup = renderToStaticMarkup(
 );
 assert.match(cashOnlyMarkup, /Recebido Dinheiro BRL 3000/);
 assert.doesNotMatch(cashOnlyMarkup, /Recebido Pix/);
+assert.match(cashOnlyMarkup, /Dinheiro recebido/);
+assert.doesNotMatch(cashOnlyMarkup, /Comprovantes \+ dinheiro/);
 const zeroReceivedMarkup = renderToStaticMarkup(
   jsx(SaleComparison, {
     sale: {
@@ -296,6 +326,21 @@ assert.doesNotMatch(
   /Recebido Pix|Recebido Dinheiro/,
   'a zero-value sale keeps its summary card without displaying a redundant received-value breakdown',
 );
+const reconciledPixOverviewMarkup = renderToStaticMarkup(
+  jsx(SaleComparison, {
+    sale: {
+      ...partial,
+      automaticStatus: 'reconciled',
+      saleInvalid: 0,
+      receivedCents: 710000,
+      receiptCents: 710000,
+      pixCents: 710000,
+      cashCents: 0,
+    },
+  }),
+);
+assert.match(reconciledPixOverviewMarkup, /Comprovantes conferem com a venda/);
+assert.doesNotMatch(reconciledPixOverviewMarkup, /dinheiro/i);
 const syncMarkup = (receiptTotalCents, payments = []) =>
   renderToStaticMarkup(
     jsx(ReceiptPaymentSync, {
@@ -318,11 +363,115 @@ assert.doesNotMatch(
 const pixSyncMarkup = syncMarkup(410000);
 assert.match(pixSyncMarkup, /Recebido Pix:.*BRL 4100/s);
 assert.doesNotMatch(pixSyncMarkup, /Recebido Dinheiro/);
-const cashSyncMarkup = syncMarkup(0, [
-  { method: 'cash', amountCents: 300000 },
-]);
+const reconciledPixSyncMarkup = syncMarkup(710000);
+assert.match(reconciledPixSyncMarkup, /Comprovantes conferem com a venda/);
+assert.doesNotMatch(reconciledPixSyncMarkup, /dinheiro/i);
+const cashSyncMarkup = syncMarkup(0, [{ method: 'cash', amountCents: 300000 }]);
 assert.match(cashSyncMarkup, /Recebido Dinheiro:.*BRL 3000/s);
 assert.doesNotMatch(cashSyncMarkup, /Recebido Pix/);
+const reconciledCashSyncMarkup = syncMarkup(0, [
+  { method: 'cash', amountCents: 710000 },
+]);
+assert.match(
+  reconciledCashSyncMarkup,
+  /Dinheiro recebido igual ao valor da venda/,
+);
+assert.doesNotMatch(reconciledCashSyncMarkup, /Pix|comprovante|banco/i);
+const pixStatusMarkup = renderToStaticMarkup(
+  jsx(SystemSaleStatusBadge, {
+    statusKey: 'reconciled',
+    pixCents: 710000,
+    cashCents: 0,
+  }),
+);
+assert.match(pixStatusMarkup, /Pix confere com a venda/);
+assert.doesNotMatch(pixStatusMarkup, /dinheiro/i);
+const mixedStatusMarkup = renderToStaticMarkup(
+  jsx(SystemSaleStatusBadge, {
+    statusKey: 'reconciled',
+    pixCents: 410000,
+    cashCents: 300000,
+  }),
+);
+assert.match(mixedStatusMarkup, /Pix e dinheiro conferem com a venda/);
+const cashStatusMarkup = renderToStaticMarkup(
+  jsx(SystemSaleStatusBadge, {
+    statusKey: 'reconciled',
+    pixCents: 0,
+    cashCents: 710000,
+  }),
+);
+assert.match(cashStatusMarkup, /Dinheiro confere com a venda/);
+assert.doesNotMatch(cashStatusMarkup, /Pix|comprovante|banco/i);
+assert.equal(
+  renderToStaticMarkup(
+    jsx(ReceiptPaymentDetails, { receipts: [], required: false }),
+  ),
+  '',
+  'cash-only sales do not show a missing-receipt prompt',
+);
+const cashReportMarkup = renderToStaticMarkup(
+  jsx(SalesReportPayments, {
+    summary: {
+      groups: [
+        {
+          key: 'cash',
+          label: 'Dinheiro',
+          amountCents: 710000,
+          aliases: [],
+        },
+      ],
+      soldCents: 710000,
+      receivedCents: 710000,
+      detailedCents: 710000,
+      outstandingCents: 0,
+      excessCents: 0,
+      inconsistentSaleCount: 0,
+    },
+  }),
+);
+assert.match(cashReportMarkup, /Recebimentos em dinheiro/);
+assert.doesNotMatch(cashReportMarkup, /Pix|comprovante|banco/i);
+assert.equal(
+  receiptDrivenPayments({
+    payments: [],
+    receipts: [
+      {
+        id: 'pix-without-legacy-payment',
+        receiptAmountCents: 710000,
+        receiptPaymentId: null,
+        receiptReviewReason: null,
+        receiptDetails: {
+          version: 1,
+          state: 'completed',
+          automaticEligible: true,
+          blocked: false,
+          ambiguous: false,
+          payerName: 'Pagador',
+          payerBank: 'Banco pagador',
+          recipientName: 'Recebedor',
+          recipientBank: 'Banco recebedor',
+          recipientDocument: null,
+          transactionId: 'E123',
+          paidAtText: '09/09/2026 12:00',
+        },
+      },
+    ],
+  }).length,
+  1,
+  'a valid receipt remains a rendered Pix payment without a legacy payment row',
+);
+const salesReportSource = readFileSync(
+  'components/pdv/views/sales-production-view.tsx',
+  'utf8',
+);
+assert.doesNotMatch(salesReportSource, /sale\.payments\.length\s*===\s*0/);
+assert.equal(
+  (salesReportSource.match(/receiptDrivenPayments\(sale\)\.length\s*===/g) || [])
+    .length,
+  2,
+  'both HTML sale-report variants detect receipt-driven payments',
+);
 db.close();
 console.log(
   'PASS: actual sales hydration, overview aggregate/attachment warnings, atomic deletion cleanup, masked details, fail-closed reconciliation, and rendered Pix received versus expected balance.',

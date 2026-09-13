@@ -413,3 +413,107 @@ await identifiedTask.destroy();
 console.log(
   'PASS: single-sale PDF customer/items/payments order, bank/date/ID metadata and separate cash.',
 );
+
+const pixOnly = sale(31);
+pixOnly.items[0].photos = [asset('pix-only-photo')];
+pixOnly.receipts = [
+  {
+    ...first.receipts[0],
+    id: 'pix-only-receipt',
+    name: 'pix-only-receipt.png',
+    receiptAmountCents: pixOnly.productsTotalCents,
+  },
+];
+pixOnly.payments = [];
+pixOnly.reconciliation = {
+  status: 'reconciled',
+  confirmedTotalCents: pixOnly.productsTotalCents,
+  differenceCents: 0,
+  pendingReceiptCount: 0,
+};
+const pixOnlyBytes = await buildSalesReportPdf({
+  storeName: 'Loja demonstração',
+  sales: [pixOnly],
+  singleSale: true,
+  level: 'detailed',
+  includePhotos: false,
+  includeReceipts: false,
+});
+const pixOnlyTask = getDocument({
+  data: pixOnlyBytes,
+  useSystemFonts: true,
+});
+const pixOnlyPdf = await pixOnlyTask.promise;
+let pixOnlyText = '';
+for (let n = 1; n <= pixOnlyPdf.numPages; n++)
+  pixOnlyText += (await (await pixOnlyPdf.getPage(n)).getTextContent()).items
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ');
+assert.match(pixOnlyText, /Comprovantes iguais ao valor da venda/);
+assert.doesNotMatch(
+  pixOnlyText,
+  /dinheiro/i,
+  'a Pix-only sale must not claim that cash was received or checked',
+);
+await pixOnlyTask.destroy();
+const pixOnlyPeriodTask = getDocument({
+  data: await buildSalesReportPdf({
+    storeName: 'Loja demonstração',
+    sales: [pixOnly],
+    level: 'simple',
+  }),
+  useSystemFonts: true,
+});
+const pixOnlyPeriodPdf = await pixOnlyPeriodTask.promise;
+let pixOnlyPeriodText = '';
+for (let n = 1; n <= pixOnlyPeriodPdf.numPages; n++)
+  pixOnlyPeriodText += (
+    await (await pixOnlyPeriodPdf.getPage(n)).getTextContent()
+  ).items
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ');
+assert.match(pixOnlyPeriodText, /Comprovantes das vendas deste relatório/);
+assert.doesNotMatch(pixOnlyPeriodText, /dinheiro/i);
+await pixOnlyPeriodTask.destroy();
+console.log('PASS: Pix-only PDF does not mention cash.');
+
+const cashOnly = sale(32);
+cashOnly.items[0].photos = [asset('cash-only-photo')];
+cashOnly.payments = [
+  {
+    id: 'cash-only-payment',
+    method: 'cash',
+    amountCents: cashOnly.productsTotalCents,
+    accountName: null,
+    pixAccountId: null,
+  },
+];
+cashOnly.receipts = [];
+cashOnly.reconciliation = {
+  status: 'not_required',
+  confirmedTotalCents: 0,
+  differenceCents: 0,
+  pendingReceiptCount: 0,
+};
+const cashOnlyTask = getDocument({
+  data: await buildSalesReportPdf({
+    storeName: 'Loja demonstração',
+    sales: [cashOnly],
+    level: 'detailed',
+  }),
+  useSystemFonts: true,
+});
+const cashOnlyPdf = await cashOnlyTask.promise;
+let cashOnlyText = '';
+for (let n = 1; n <= cashOnlyPdf.numPages; n++)
+  cashOnlyText += (await (await cashOnlyPdf.getPage(n)).getTextContent()).items
+    .map((item) => ('str' in item ? item.str : ''))
+    .join(' ');
+assert.match(cashOnlyText, /Dinheiro recebido nas vendas deste relatório/);
+assert.doesNotMatch(
+  cashOnlyText,
+  /comprovante/i,
+  'a cash-only report must not request or claim receipt proof',
+);
+await cashOnlyTask.destroy();
+console.log('PASS: cash-only PDF does not mention receipt proof.');

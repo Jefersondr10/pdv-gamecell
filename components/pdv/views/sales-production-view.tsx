@@ -2997,7 +2997,7 @@ function SaleReport({
                   <section className="report-section mt-5">
                     <h3 className="font-extrabold">Pagamentos recebidos</h3>
                     <div className="mt-2 space-y-2">
-                      {sale.payments.length === 0 ? (
+                      {receiptDrivenPayments(sale).length === 0 ? (
                         <div className="report-row rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-950">
                           Pagamento não informado — pendente
                         </div>
@@ -3019,7 +3019,10 @@ function SaleReport({
                     </div>
                   </section>
                 }
-                <ReceiptPaymentDetails receipts={sale.receipts} />
+                <ReceiptPaymentDetails
+                  receipts={sale.receipts}
+                  required={sale.reconciliation.status !== 'not_required'}
+                />
                 {sale.status === 'completed' && (
                   <SalesReportPayments summary={paymentSummary} />
                 )}
@@ -3052,36 +3055,37 @@ function SaleReport({
                     )}
                   </div>
                 )}
-                <div
-                  className={cn(
-                    'report-section mt-3 rounded-lg border px-3 py-2 text-sm',
-                    saleFinancialSummary(sale).reconciled &&
-                      'border-emerald-200 bg-emerald-50 text-emerald-950',
-                    sale.reconciliation.status === 'pending' &&
-                      'border-amber-200 bg-amber-50 text-amber-950',
-                    sale.reconciliation.status === 'divergent' &&
-                      'border-rose-200 bg-rose-50 text-rose-950',
-                  )}
-                >
-                  <p className="font-extrabold">
-                    {sale.reconciliation.status === 'not_required'
-                      ? 'Sem Pix — comprovante não exigido'
-                      : sale.reconciliation.status === 'reconciled'
+                {(sale.receipts.length > 0 ||
+                  sale.reconciliation.status !== 'not_required') && (
+                  <div
+                    className={cn(
+                      'report-section mt-3 rounded-lg border px-3 py-2 text-sm',
+                      saleFinancialSummary(sale).reconciled &&
+                        'border-emerald-200 bg-emerald-50 text-emerald-950',
+                      sale.reconciliation.status === 'pending' &&
+                        'border-amber-200 bg-amber-50 text-amber-950',
+                      sale.reconciliation.status === 'divergent' &&
+                        'border-rose-200 bg-rose-50 text-rose-950',
+                    )}
+                  >
+                    <p className="font-extrabold">
+                      {sale.reconciliation.status === 'reconciled'
                         ? 'Comprovantes conferem com o Pix'
                         : sale.reconciliation.status === 'divergent'
                           ? 'Comprovantes não conferem'
                           : 'Conciliação pendente'}
-                  </p>
-                  <p className="mt-0.5">
-                    Comprovantes confirmados:{' '}
-                    {formatMoney(sale.reconciliation.confirmedTotalCents)} ·{' '}
-                    {receiptTargetLabel(saleReceiptIncome(sale).cashCents)}:{' '}
-                    {formatMoney(saleReceiptIncome(sale).receiptTargetCents)}
-                    {sale.reconciliation.status === 'divergent'
-                      ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(saleReceiptIncome(sale).cashCents)}`
-                      : ''}
-                  </p>
-                </div>
+                    </p>
+                    <p className="mt-0.5">
+                      Comprovantes confirmados:{' '}
+                      {formatMoney(sale.reconciliation.confirmedTotalCents)} ·{' '}
+                      {receiptTargetLabel(saleReceiptIncome(sale).cashCents)}:{' '}
+                      {formatMoney(saleReceiptIncome(sale).receiptTargetCents)}
+                      {sale.reconciliation.status === 'divergent'
+                        ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(saleReceiptIncome(sale).cashCents)}`
+                        : ''}
+                    </p>
+                  </div>
+                )}
                 {includeReceipts && sale.receipts.length > 0 && (
                   <section className="report-section mt-5">
                     <h3 className="font-extrabold">
@@ -3716,7 +3720,8 @@ function SalesPeriodReport({
                                 sale.status === 'completed' && (
                                   <div className="mt-2 rounded-lg bg-slate-50 p-2 text-xs">
                                     <p className="font-extrabold">Pagamentos</p>
-                                    {sale.payments.length === 0 ? (
+                                    {receiptDrivenPayments(sale).length ===
+                                    0 ? (
                                       <p className="mt-1 text-amber-800">
                                         Pagamento não informado — pendente
                                       </p>
@@ -3741,12 +3746,19 @@ function SalesPeriodReport({
                                     )}
                                     <ReceiptPaymentDetails
                                       receipts={sale.receipts}
+                                      required={
+                                        sale.reconciliation.status !==
+                                        'not_required'
+                                      }
                                     />
                                   </div>
                                 )}
 
                               {level === 'complete' &&
-                                sale.status === 'completed' && (
+                                sale.status === 'completed' &&
+                                (sale.receipts.length > 0 ||
+                                  sale.reconciliation.status !==
+                                    'not_required') && (
                                   <div className="mt-2 space-y-2">
                                     <div
                                       className={cn(
@@ -3764,10 +3776,7 @@ function SalesPeriodReport({
                                     >
                                       <p className="font-extrabold">
                                         {sale.reconciliation.status ===
-                                        'not_required'
-                                          ? 'Sem Pix — comprovante não exigido'
-                                          : sale.reconciliation.status ===
-                                              'reconciled'
+                                        'reconciled'
                                             ? 'Comprovantes conferem com o Pix'
                                             : sale.reconciliation.status ===
                                                 'divergent'

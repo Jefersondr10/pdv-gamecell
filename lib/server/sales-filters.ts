@@ -234,8 +234,13 @@ function buildFilterClauses({
   }
   if (query) {
     const pattern = `%${query}%`;
+    const saleNumberMatch = query.match(/^#?\s*0*(\d{1,10})$/);
+    const exactSaleNumber = saleNumberMatch
+      ? Number(saleNumberMatch[1])
+      : -1;
     where.push(`(
-      CAST(s.number AS TEXT) LIKE ? OR s.customer_name LIKE ? COLLATE NOCASE
+      CAST(s.number AS TEXT) LIKE ? OR s.number = ?
+      OR s.customer_name LIKE ? COLLATE NOCASE
       OR s.seller_name LIKE ? COLLATE NOCASE OR EXISTS (
         SELECT 1 FROM sale_items search_item
         WHERE search_item.sale_id = s.id AND search_item.store_id = s.store_id
@@ -244,7 +249,15 @@ function buildFilterClauses({
             OR search_item.serial LIKE ? COLLATE NOCASE)
       )
     )`);
-    bindings.push(pattern, pattern, pattern, pattern, pattern, pattern);
+    bindings.push(
+      pattern,
+      exactSaleNumber,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+    );
   }
   if (alertOnly) {
     where.push(`(s.status = 'completed' AND ${SALE_ALERT_SQL})`);

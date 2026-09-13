@@ -260,12 +260,17 @@ export async function GET(request: Request) {
     const sales = ids.length ? await hydrateSales(db, storeId, visible) : [];
     const last = visible.at(-1);
     const page = {
-      items: sales.map((sale) => ({
-        ...sale,
-        automaticStatus: automaticSaleStatus(sale)?.key ?? null,
-        displayStatus: saleDisplayStatus(sale),
-        issueKeys: saleIssues(sale).map((issue) => issue.key),
-      })),
+      items: sales.map((sale) => {
+        const income = saleReceiptIncome(sale);
+        return {
+          ...sale,
+          automaticStatus: automaticSaleStatus(sale)?.key ?? null,
+          displayStatus: saleDisplayStatus(sale),
+          issueKeys: saleIssues(sale).map((issue) => issue.key),
+          pixCents: income.pixCents,
+          cashCents: income.cashCents,
+        };
+      }),
       groups: [],
       nextCursor:
         hasMore && last ? encodeCursor(last.createdAt, last.id) : null,
@@ -276,30 +281,35 @@ export async function GET(request: Request) {
     if (!can(session, 'sales')) {
       return json({
         ...page,
-        items: sales.map((sale) => ({
-          id: sale.id,
-          number: sale.number,
-          customerId: sale.customerId,
-          customerName: sale.customerName,
-          sellerName: sale.sellerName,
-          orderStatus: sale.orderStatus,
-          automaticStatus: automaticSaleStatus(sale)?.key ?? null,
-          displayStatus: saleDisplayStatus(sale),
-          issueKeys: saleIssues(sale).map((issue) => issue.key),
-          productsTotalCents: sale.productsTotalCents,
-          receivedTotalCents: sale.receivedTotalCents,
-          status: sale.status,
-          createdAt: sale.createdAt,
-          cancelledAt: sale.cancelledAt,
-          cancellationReason: sale.cancellationReason,
-          items: sale.items.map((item) => ({
-            id: item.id,
-            productName: item.productName,
-            productDetail: item.productDetail,
-            serial: item.serial,
-            soldPriceCents: item.soldPriceCents,
-          })),
-        })),
+        items: sales.map((sale) => {
+          const income = saleReceiptIncome(sale);
+          return {
+            id: sale.id,
+            number: sale.number,
+            customerId: sale.customerId,
+            customerName: sale.customerName,
+            sellerName: sale.sellerName,
+            orderStatus: sale.orderStatus,
+            automaticStatus: automaticSaleStatus(sale)?.key ?? null,
+            displayStatus: saleDisplayStatus(sale),
+            issueKeys: saleIssues(sale).map((issue) => issue.key),
+            pixCents: income.pixCents,
+            cashCents: income.cashCents,
+            productsTotalCents: sale.productsTotalCents,
+            receivedTotalCents: sale.receivedTotalCents,
+            status: sale.status,
+            createdAt: sale.createdAt,
+            cancelledAt: sale.cancelledAt,
+            cancellationReason: sale.cancellationReason,
+            items: sale.items.map((item) => ({
+              id: item.id,
+              productName: item.productName,
+              productDetail: item.productDetail,
+              serial: item.serial,
+              soldPriceCents: item.soldPriceCents,
+            })),
+          };
+        }),
       } satisfies ClientHistoryPage);
     }
     return json(page);

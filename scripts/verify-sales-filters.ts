@@ -83,6 +83,20 @@ const all = parseSalesFilters(
 );
 assert.equal(all.comparison, null);
 
+for (const query of ['50', '00050', '#00050']) {
+  const byDisplayedNumber = parseSalesFilters(
+    new URL(
+      `https://example.test/api/sales?period=all&q=${encodeURIComponent(query)}`,
+    ),
+    storeId,
+    now,
+  );
+  assert.ok(
+    byDisplayedNumber.where.some((clause) => clause.includes('s.number = ?')),
+  );
+  assert.equal(byDisplayedNumber.bindings[2], 50);
+}
+
 const directSale = parseSalesFilters(
   new URL(
     'https://example.test/api/sales?period=today&saleId=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',

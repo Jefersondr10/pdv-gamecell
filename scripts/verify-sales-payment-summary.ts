@@ -182,7 +182,7 @@ for (const level of ['simple', 'detailed', 'complete'] as const) {
     'Pix · Banco MT',
     'Pix · Conta principal',
     'Dinheiro',
-    'Total recebido informado',
+    'Total recebido',
     'Falta receber',
     'Recebido a mais',
   ])

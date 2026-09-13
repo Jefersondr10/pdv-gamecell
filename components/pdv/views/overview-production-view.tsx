@@ -41,6 +41,7 @@ import {
   type OverviewSale,
 } from '@/lib/overview';
 import type { SalesPeriod } from '@/lib/server/sales-filters';
+import { receiptTargetLabel } from '@/lib/receipt-reconciliation';
 import { cn } from '@/lib/utils';
 
 const money = (cents: number) =>
@@ -85,7 +86,13 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
         </div>
         <div>
           <p className="text-[11px] font-semibold text-muted-foreground">
-            Comprovantes + dinheiro
+            {sale.receiptCents > 0 && sale.cashCents > 0
+              ? 'Comprovantes + dinheiro'
+              : sale.receiptCents > 0
+                ? 'Comprovantes'
+                : sale.cashCents > 0
+                  ? 'Dinheiro recebido'
+                  : 'Total recebido'}
           </p>
           <p className="mt-0.5 break-words text-base font-bold tabular-nums">
             {money(sale.receivedCents)}
@@ -155,8 +162,8 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
                     Comprovantes{' '}
                     <strong>
                       {money(Math.abs(paymentDifference))}{' '}
-                      {paymentDifference < 0 ? 'abaixo' : 'acima'} do saldo
-                      esperado da venda após dinheiro.
+                      {paymentDifference < 0 ? 'abaixo' : 'acima'} do{' '}
+                      {receiptTargetLabel(sale.cashCents)}.
                     </strong>
                   </span>
                 )}
@@ -164,7 +171,11 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
             )}
           </>
         ) : state === 'matched' ? (
-          'Comprovantes + dinheiro conferem com a venda'
+          sale.cashCents > 0 ? (
+            'Comprovantes + dinheiro conferem com a venda'
+          ) : (
+            'Comprovantes conferem com a venda'
+          )
         ) : state === 'not_required' ? (
           'Venda coberta por dinheiro — comprovante não exigido. Dinheiro informado manualmente.'
         ) : state === 'missing' ? (
@@ -502,7 +513,11 @@ export function OverviewProductionView({
                 )}
                 <p className="mt-1 text-xs">
                   {comparison === 'matched'
-                    ? 'Comprovantes mais dinheiro conferem com o preço de cada venda. Dinheiro é informado manualmente. O status também considera as fotos dos aparelhos.'
+                    ? totals.cashCents > 0 && totals.receiptCents > 0
+                      ? 'Comprovantes e dinheiro conferem com o preço de cada venda. O dinheiro é informado manualmente. O status também considera as fotos dos aparelhos.'
+                      : totals.receiptCents > 0
+                        ? 'Os comprovantes conferem com o preço de cada venda. O status também considera as fotos dos aparelhos.'
+                        : 'O dinheiro informado confere com o preço de cada venda. O status também considera as fotos dos aparelhos.'
                     : comparison === 'pending'
                       ? 'Há documentos ausentes ou ainda sem valor identificado.'
                       : 'Confira as vendas sinalizadas abaixo. Diferenças entre vendas não se compensam.'}
@@ -580,7 +595,11 @@ export function OverviewProductionView({
                       <ArrowRight className="size-3.5" />
                     </Button>
                   </div>
-                  <SaleDisplayStatusBadge status={sale.displayStatus} />
+                  <SaleDisplayStatusBadge
+                    status={sale.displayStatus}
+                    pixCents={sale.receiptCents}
+                    cashCents={sale.cashCents}
+                  />
                   <SaleIssuesNotice issueKeys={sale.issueKeys} />
                   <SaleComparison sale={sale} />
                   {sale.cashCents > 0 && (

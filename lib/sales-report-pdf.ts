@@ -420,10 +420,10 @@ function saleDetails(
 ) {
   const detailed = level !== 'simple';
   const showFinancial = singleSale || sale.status === 'completed';
+  const income = saleReceiptIncome(sale);
   layout.context = `Venda ${number(sale)} · ${sale.customerName}`;
   layout.ensure(205);
-  const difference =
-    saleReceiptIncome(sale).receivedTotalCents - sale.productsTotalCents;
+  const difference = income.receivedTotalCents - sale.productsTotalCents;
   const tone =
     sale.status === 'cancelled'
       ? reportTones.neutral
@@ -522,7 +522,15 @@ function saleDetails(
     layout.y += height + 6;
   }
   if (showFinancial) {
-    layout.title('Comprovantes e dinheiro');
+    layout.title(
+      income.pixCents > 0 && income.cashCents > 0
+        ? 'Comprovantes e dinheiro'
+        : income.pixCents > 0
+          ? 'Comprovantes'
+          : income.cashCents > 0
+            ? 'Dinheiro'
+            : 'Pagamentos recebidos',
+    );
     for (const payment of receiptDrivenPayments(sale))
       layout.row(
         payment.method === 'cash'
@@ -587,16 +595,11 @@ function saleDetails(
     fill: PALE,
   });
   if ((detailed || singleSale) && showFinancial) {
-    layout.row(
-      'Total recebido',
-      money(saleReceiptIncome(sale).receivedTotalCents),
-      {
-        fill: PALE,
-      },
-    );
+    layout.row('Total recebido', money(income.receivedTotalCents), {
+      fill: PALE,
+    });
     if (sale.status !== 'cancelled') {
-      const diff =
-        saleReceiptIncome(sale).receivedTotalCents - sale.productsTotalCents;
+      const diff = income.receivedTotalCents - sale.productsTotalCents;
       const label =
         sale.productsTotalCents <= 0
           ? 'Valor da venda ainda não definido'
@@ -604,7 +607,11 @@ function saleDetails(
             ? `Falta receber ${money(-diff)}`
             : diff > 0
               ? `Pagamento acima da venda em ${money(diff)}`
-              : 'Comprovantes + dinheiro iguais ao valor da venda';
+              : income.cashCents > 0
+                ? income.pixCents > 0
+                  ? 'Comprovantes + dinheiro iguais ao valor da venda'
+                  : 'Dinheiro igual ao valor da venda'
+                : 'Comprovantes iguais ao valor da venda';
       layout.paragraph(label, { bold: true, size: 9 });
       const financial = saleFinancialSummary(sale);
       if (financial.receiptText)
@@ -614,8 +621,12 @@ function saleDetails(
         });
     }
   }
-  if ((level === 'complete' || singleSale) && showFinancial) {
-    const { cashCents } = saleReceiptIncome(sale);
+  if (
+    (level === 'complete' || singleSale) &&
+    showFinancial &&
+    sale.reconciliation.status !== 'not_required'
+  ) {
+    const { cashCents } = income;
     layout.title('Conferência dos comprovantes');
     layout.paragraph(
       cashCents > 0
@@ -630,21 +641,17 @@ function saleDetails(
     const pending = sale.reconciliation.pendingReceiptCount;
     const diff = sale.reconciliation.differenceCents;
     layout.paragraph(
-      sale.reconciliation.status === 'not_required'
-        ? cashCents > 0
-          ? 'Sem Pix — comprovante não exigido; dinheiro informado manualmente.'
-          : 'Não há saldo a receber por Pix.'
-        : !sale.receipts.length
-          ? 'Sem comprovante anexado.'
-          : pending || sale.reconciliation.status === 'pending'
-            ? pending
-              ? `Leitura/conferência pendente: ${pending} comprovante(s).`
-              : 'Conferência dos comprovantes pendente.'
-            : diff === 0
-              ? `Comprovantes conferem com o ${receiptTargetLabel(cashCents)}.`
-              : diff === null
-                ? 'Conferência pendente.'
-                : `Comprovantes ${diff < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(cashCents)}: diferença de ${money(Math.abs(diff))}.`,
+      !sale.receipts.length
+        ? 'Sem comprovante anexado.'
+        : pending || sale.reconciliation.status === 'pending'
+          ? pending
+            ? `Leitura/conferência pendente: ${pending} comprovante(s).`
+            : 'Conferência dos comprovantes pendente.'
+          : diff === 0
+            ? `Comprovantes conferem com o ${receiptTargetLabel(cashCents)}.`
+            : diff === null
+              ? 'Conferência pendente.'
+              : `Comprovantes ${diff < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(cashCents)}: diferença de ${money(Math.abs(diff))}.`,
       { size: 9, bold: true },
     );
   }
@@ -729,10 +736,18 @@ export async function buildSalesReportPdf(
     );
     if (!singleSale || sales[0].status === 'completed') {
       const summary = summarizeSalesPayments(sales);
+      const hasCash = summary.groups.some((group) => group.key === 'cash');
+      const hasPix = summary.groups.some((group) => group.key !== 'cash');
       layout.context = 'Onde foi recebido';
       layout.title('Onde foi recebido');
       layout.paragraph(
-        'Comprovantes e dinheiro das vendas deste relatório. Não confirma crédito no banco.',
+        hasCash && hasPix
+          ? 'Comprovantes e dinheiro das vendas deste relatório. Não confirma crédito no banco.'
+          : hasPix
+            ? 'Comprovantes das vendas deste relatório. Não confirma crédito no banco.'
+            : hasCash
+              ? 'Dinheiro recebido nas vendas deste relatório.'
+              : 'Nenhum recebimento foi identificado neste relatório.',
         { size: 9, muted: true },
       );
       layout.y += 5;
@@ -750,7 +765,7 @@ export async function buildSalesReportPdf(
           );
       }
       layout.rule();
-      layout.row('Total recebido informado', money(summary.receivedCents), {
+      layout.row('Total recebido', money(summary.receivedCents), {
         bold: true,
         fill: PALE,
       });

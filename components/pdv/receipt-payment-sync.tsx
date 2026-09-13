@@ -29,16 +29,29 @@ export function ReceiptPaymentSync({
   }, [disabled, state]);
   if (!state || state.saleStatus !== 'completed') return null;
   const { cashCents } = paymentMethodTotals(state.payments);
+  const hasPix = state.receiptTotalCents > 0;
+  const hasCash = cashCents > 0;
   const received = state.receiptTotalCents + cashCents;
   const difference = received - productsTotalCents;
   return (
     <div className="mt-3 rounded-xl border bg-muted/30 p-3 text-sm">
       <p className="font-semibold">
-        Pix pelo comprovante · sem digitar valor ou banco
+        {hasPix
+          ? 'Pix pelo comprovante · sem digitar valor ou banco'
+          : hasCash
+            ? 'Recebimento em dinheiro'
+            : 'Pix será identificado pelo comprovante'}
       </p>
       <p className="mt-1 text-muted-foreground">
-        Anexe o comprovante. O valor lido é somado ao dinheiro recebido e
-        comparado com o preço da venda.
+        {hasPix && hasCash
+          ? 'O valor lido é somado ao dinheiro recebido e comparado com o preço da venda.'
+          : hasPix
+            ? 'O valor lido é comparado com o preço da venda.'
+            : hasCash
+              ? difference < 0
+                ? 'O dinheiro recebido está registrado. Se o restante for Pix, anexe o comprovante.'
+                : 'O dinheiro recebido é comparado com o preço da venda.'
+              : 'Anexe o comprovante para identificar o Pix automaticamente.'}
       </p>
       <div className="mt-2 space-y-1">
         {received > 0 && (
@@ -63,8 +76,7 @@ export function ReceiptPaymentSync({
               Total recebido: <strong>{formatMoney(received)}</strong> ·{' '}
             </>
           )}
-          Venda:{' '}
-          <strong>{formatMoney(productsTotalCents)}</strong>
+          Venda: <strong>{formatMoney(productsTotalCents)}</strong>
         </p>
       </div>
       <p
@@ -76,11 +88,22 @@ export function ReceiptPaymentSync({
             ? `Falta receber ${formatMoney(-difference)}`
             : difference > 0
               ? `Recebido acima da venda: ${formatMoney(difference)}`
-              : 'Comprovantes + dinheiro conferem com a venda.'}
+              : hasPix && hasCash
+                ? 'Comprovantes + dinheiro conferem com a venda.'
+                : hasPix
+                  ? 'Comprovantes conferem com a venda.'
+                  : hasCash
+                    ? 'Dinheiro recebido igual ao valor da venda.'
+                    : 'Nenhum recebimento identificado.'}
       </p>
       <p className="mt-2 text-xs text-muted-foreground">
-        Pode concluir sem comprovante e anexar depois em Vendas. A conferência
-        não confirma crédito no banco.
+        {hasPix
+          ? 'Pode concluir sem comprovante e anexar depois em Vendas. A conferência não confirma crédito no banco.'
+          : hasCash
+            ? difference === 0
+              ? 'Venda coberta pelo dinheiro informado.'
+              : 'O dinheiro recebido foi registrado. O valor restante continua pendente.'
+            : 'Pode concluir sem comprovante e anexar depois em Vendas.'}
       </p>
     </div>
   );

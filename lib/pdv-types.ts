@@ -236,6 +236,8 @@ export type ClientHistoryPage = Omit<SalesPage, 'items'> & {
     automaticStatus: import('./sale-display-status').SystemSaleStatusKey | null;
     displayStatus: import('./sale-display-status').SaleDisplayStatus;
     issueKeys: import('./sale-display-status').SaleIssueKey[];
+    pixCents: number;
+    cashCents: number;
     items: Pick<
       SaleItemRecord,
       'id' | 'productName' | 'productDetail' | 'serial' | 'soldPriceCents'

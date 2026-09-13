@@ -60,6 +60,11 @@ export function SaleDetailsDialog({
   closeLabel?: string;
 }) {
   const financial = sale ? saleFinancialSummary(sale) : null;
+  const showReceiptConference = Boolean(
+    sale &&
+      (sale.receipts.length > 0 ||
+        sale.reconciliation.status !== 'not_required'),
+  );
   const [pricesBusy, setPricesBusy] = useState(false);
   const [pricesEditing, setPricesEditing] = useState(false);
   const [notice, setNotice] = useState('');
@@ -228,25 +233,29 @@ export function SaleDetailsDialog({
                     </p>
                   )}
                 </div>
-                <ReceiptPaymentDetails receipts={sale.receipts} />
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Valor identificado nos comprovantes:{' '}
-                  <strong>
-                    {money(sale.reconciliation.confirmedTotalCents)}
-                  </strong>
-                  .{' '}
-                  {sale.reconciliation.pendingReceiptCount > 0
-                    ? 'Há valores pendentes de leitura ou conferência.'
-                    : sale.reconciliation.status === 'divergent'
-                      ? `Comprovantes ${money(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(financial?.cashCents ?? 0)}.`
-                      : ''}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {(financial?.cashCents ?? 0) > 0
-                    ? 'Comprovantes e dinheiro são somados e comparados ao preço da venda. Dinheiro é conferido manualmente.'
-                    : 'Os comprovantes são comparados ao preço da venda.'}{' '}
-                  Não confirma crédito na conta bancária.
-                </p>
+                {showReceiptConference && (
+                  <>
+                    <ReceiptPaymentDetails receipts={sale.receipts} />
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Valor identificado nos comprovantes:{' '}
+                      <strong>
+                        {money(sale.reconciliation.confirmedTotalCents)}
+                      </strong>
+                      .{' '}
+                      {sale.reconciliation.pendingReceiptCount > 0
+                        ? 'Há valores pendentes de leitura ou conferência.'
+                        : sale.reconciliation.status === 'divergent'
+                          ? `Comprovantes ${money(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(financial?.cashCents ?? 0)}.`
+                          : ''}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {(financial?.cashCents ?? 0) > 0
+                        ? 'Comprovantes e dinheiro são somados e comparados ao preço da venda. Dinheiro é conferido manualmente.'
+                        : 'Os comprovantes são comparados ao preço da venda.'}{' '}
+                      Não confirma crédito na conta bancária.
+                    </p>
+                  </>
+                )}
               </section>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-background p-3">

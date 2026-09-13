@@ -8,17 +8,29 @@ import {
   SALE_ISSUES,
 } from '@/lib/sale-display-status';
 import { cn } from '@/lib/utils';
+import { saleReceiptIncome } from '@/lib/receipt-income';
 import { OrderStatusBadge } from './order-status-badge';
 
 export function SaleStatusBadge({ sale }: { sale: SaleRecord }) {
   const status = saleDisplayStatus(sale);
-  return <SaleDisplayStatusBadge status={status} />;
+  const { pixCents, cashCents } = saleReceiptIncome(sale);
+  return (
+    <SaleDisplayStatusBadge
+      status={status}
+      pixCents={pixCents}
+      cashCents={cashCents}
+    />
+  );
 }
 
 export function SaleDisplayStatusBadge({
   status,
+  pixCents = 0,
+  cashCents = 0,
 }: {
   status: SaleDisplayStatus;
+  pixCents?: number;
+  cashCents?: number;
 }) {
   if (status.key === 'manual' && status.color)
     return (
@@ -31,7 +43,11 @@ export function SaleDisplayStatusBadge({
       </span>
     );
   return (
-    <SystemSaleStatusBadge statusKey={status.key as SystemSaleStatusKey} />
+    <SystemSaleStatusBadge
+      statusKey={status.key as SystemSaleStatusKey}
+      pixCents={pixCents}
+      cashCents={cashCents}
+    />
   );
 }
 
@@ -56,8 +72,12 @@ export function SaleIssuesNotice({
 
 export function SystemSaleStatusBadge({
   statusKey,
+  pixCents = 0,
+  cashCents = 0,
 }: {
   statusKey: SystemSaleStatusKey;
+  pixCents?: number;
+  cashCents?: number;
 }) {
   const status = SYSTEM_SALE_STATUSES.find((item) => item.key === statusKey);
   if (!status) return null;
@@ -71,7 +91,13 @@ export function SystemSaleStatusBadge({
       )}
       title={
         status.key === 'reconciled'
-          ? 'Pix + dinheiro conferem com a venda; comprovantes conferem com o Pix; fotos anexadas. Dinheiro informado manualmente. Não confirma crédito bancário.'
+          ? pixCents > 0 && cashCents > 0
+            ? 'Pix e dinheiro conferem com a venda; comprovantes conferem com o Pix; fotos anexadas. Dinheiro informado manualmente. Não confirma crédito bancário.'
+            : pixCents > 0
+              ? 'Pix confere com a venda; comprovantes conferem com o Pix; fotos anexadas. Não confirma crédito bancário.'
+              : cashCents > 0
+                ? 'Dinheiro confere com a venda; fotos anexadas. Dinheiro informado manualmente.'
+                : 'Venda conciliada; preços e fotos preenchidos.'
           : status.label
       }
     >
