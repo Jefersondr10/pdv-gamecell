@@ -211,6 +211,13 @@ assert.equal(
   corruptedIdLabel.details.transactionId,
   'E0000000000000000000000000000001',
 );
+const lowResolutionC6 = extractReceiptDocument(
+  receipt('Pixem Pix\nandamento realizado!')
+    .replace('ID da Transação', 'ID ca Transação')
+    .replace('Banco C6 S.A.', 'Banco Có SA.'),
+);
+assert.equal(lowResolutionC6.details.automaticEligible, true);
+assert.equal(lowResolutionC6.details.payerBank, '336 - Banco Có SA.');
 assert.equal(
   parseReceiptDocument({ ...completed.details, recipientBank: 'és' })
     ?.recipientBank,

@@ -78,7 +78,9 @@ export function extractReceiptDocument(text: string) {
   );
   const c6 =
     originAccount >= 0 &&
-    /\bbanco\s+c6\b/i.test(lines.slice(originAccount).join(' '));
+    /\bbanco\s+c(?:6|[óô0])\s+s\.?a\b/i.test(
+      lines.slice(originAccount).join(' '),
+    );
   const recipientBankLine = c6
     ? lines.findIndex(
         (line, i) => i < originAccount && /^banco\s*:/i.test(line),
