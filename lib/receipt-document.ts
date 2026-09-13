@@ -45,13 +45,50 @@ export function extractReceiptDocument(text: string) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
+  const originAccount = lines.findIndex((line) =>
+    /^conta\s+de\s+origem$/i.test(line),
+  );
+  const c6 =
+    originAccount >= 0 &&
+    /\bbanco\s+c6\b/i.test(lines.slice(originAccount).join(' '));
+  const recipientBankLine = c6
+    ? lines.findIndex(
+        (line, i) => i < originAccount && /^banco\s*:/i.test(line),
+      )
+    : -1;
+  const c6Heading =
+    recipientBankLine >= 0
+      ? lines.slice(0, recipientBankLine).join('\n').toLowerCase()
+      : '';
+  const timelineDates = c6Heading.match(/\b\d{2}\/\d{2}\/\d{4}\b/g) ?? [];
+  const timelineTimes = c6Heading.match(/\b\d{2}:\d{2}(?::\d{2})?\b/g) ?? [];
+  // C6 shows a historical step next to the final step. OCR reads across the
+  // columns: "Pix em Pix / andamento realizado!". Both steps must be dated;
+  // an undated future step is not evidence that the transfer completed.
+  const c6Timeline = c6 && /andamento/.test(c6Heading);
+  const sequentialTimeline =
+    /\bpix\s*em\s+andamento\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?\s+pix\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?\b/;
+  const c6Completed =
+    c6Timeline &&
+    timelineDates.length === 2 &&
+    timelineTimes.length === 2 &&
+    (/\b(?:pix|ix)\s*em\s+(?:pix|px)\s+andamento\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?\s+\d{2}:\d{2}(?::\d{2})?\b/.test(
+      c6Heading,
+    ) ||
+      sequentialTimeline.test(c6Heading));
+  const currentStateText =
+    c6Completed && sequentialTimeline.test(c6Heading)
+      ? normalized.replace(sequentialTimeline, (timeline) =>
+          timeline.replace(/^pix\s*em\s+andamento\b/, ''),
+        )
+      : normalized;
   const rejected =
     /\b(cancelad[oa]|estornad[oa]|recusad[oa]|negad[oa])\b|\bnao\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|autorizad[oa]|aprovad[oa])\b/.test(
       normalized,
     );
   const pending =
-    /em processamento|em analise|\bpendente\b|\bfalha\b|aguardando|nao foi possivel|erro na/.test(
-      normalized,
+    /em\s+andamento|pixem\s+andamento|em processamento|em analise|\bpendente\b|\bfalha\b|aguardando|nao foi possivel|erro na/.test(
+      currentStateText,
     );
   const state: ReceiptDocument['state'] =
     /\b(agendad[oa]|agendamento|programad[oa])\b/.test(normalized)
@@ -60,11 +97,15 @@ export function extractReceiptDocument(text: string) {
         ? 'cancelled'
         : pending
           ? 'unknown'
-          : /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
-                normalized,
-              )
+          : c6Completed
             ? 'completed'
-            : 'unknown';
+            : c6Timeline
+              ? 'unknown'
+              : /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
+                    normalized,
+                  )
+                ? 'completed'
+                : 'unknown';
   const participant = (block: string[]) => {
     const name =
       block
@@ -129,6 +170,36 @@ export function extractReceiptDocument(text: string) {
   };
   if (from >= 0) payer = participant(stop(lines.slice(from + 1, from + 12)));
   if (to >= 0) recipient = participant(stop(lines.slice(to + 1, to + 12)));
+  if (c6 && recipientBankLine > 0) {
+    const bankAt = lines.findIndex(
+      (line, i) => i > originAccount && /^banco\s*:/i.test(line),
+    );
+    const receiverBlock = lines
+      .slice(recipientBankLine + 1, originAccount)
+      .join('\n');
+    const documents =
+      receiverBlock.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/g) ?? [];
+    const nameBeforeBank = (index: number) => {
+      const value = index > 0 ? cleanParticipantName(lines[index - 1]) : null;
+      return value &&
+        value.length >= 3 &&
+        !/^(pix|banco|ag[eê]ncia|conta|cpf|cnpj|data|valor|\d)/i.test(value)
+        ? value
+        : null;
+    };
+    recipient = {
+      name: nameBeforeBank(recipientBankLine),
+      bank:
+        lines[recipientBankLine].replace(/^banco\s*:\s*/i, '').trim() || null,
+      document: documents.length === 1 ? documents[0].replace(/\D/g, '') : null,
+    };
+    if (bankAt > originAccount)
+      payer = {
+        name: nameBeforeBank(bankAt),
+        bank: lines[bankAt].replace(/^banco\s*:\s*/i, '').trim() || null,
+        document: null,
+      };
+  }
   // Mercado Pago prints two consecutive participant blocks ending at CPF/CNPJ.
   const paired = lines.findIndex((line) => key(line) === 'origemedestino');
   if (paired >= 0 && to < 0) {
