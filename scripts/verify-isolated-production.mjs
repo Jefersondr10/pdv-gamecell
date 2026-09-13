@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import assert from 'node:assert/strict';
 const directory = await mkdtemp(join(tmpdir(), 'pdv-isolated-validation-'));
 const database = new DatabaseSync(join(directory, 'pdv.sqlite'));
@@ -22,7 +23,21 @@ database
   )
   .run('system:production-ready-v1', Date.now());
 database.close();
-const port = 32419;
+const port = await new Promise((resolve, reject) => {
+  const probe = createServer();
+  probe.once('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const address = probe.address();
+    if (!address || typeof address === 'string') {
+      probe.close();
+      reject(new Error('Could not reserve an isolated validation port.'));
+      return;
+    }
+    probe.close((error) =>
+      error ? reject(error) : resolve(address.port),
+    );
+  });
+});
 const origin = `http://127.0.0.1:${port}`;
 const env = {
   ...process.env,
@@ -138,5 +153,13 @@ try {
     'PASS: standalone integration used a fresh synthetic database; existing stores were not touched.',
   );
 } finally {
-  server.kill();
+  if (server.exitCode === null) {
+    const stopped = new Promise((resolve) => server.once('exit', resolve));
+    server.kill();
+    await Promise.race([
+      stopped,
+      new Promise((resolve) => setTimeout(resolve, 5000)),
+    ]);
+    if (server.exitCode === null) server.kill('SIGKILL');
+  }
 }

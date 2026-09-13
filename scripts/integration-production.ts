@@ -667,12 +667,32 @@ const salePayload = {
     { serial: 'HC9P06R095', priceCents: 450_000 },
     { serial: 'HC9P06R096', priceCents: 450_000 },
   ],
-  payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 850_000 }],
+  payments: [],
+  receiptValues: [{ amountCents: 850_000, source: 'manual' }],
 };
+const rejectedManualPixSale = new FormData();
+rejectedManualPixSale.set(
+  'payload',
+  JSON.stringify({
+    ...salePayload,
+    operationId: crypto.randomUUID(),
+    payments: [{ method: 'pix', pixAccountId: pixId, amountCents: 850_000 }],
+    receiptValues: [],
+  }),
+);
+const rejectedManualPixCreate = await call('/api/sales', {
+  method: 'POST',
+  cookie: ownerCookie,
+  expected: 400,
+  headers: { 'x-csrf-token': ownerCsrf },
+  body: rejectedManualPixSale,
+});
+assert.equal(rejectedManualPixCreate.body.code, 'PIX_FROM_RECEIPT');
 const saleForm = new FormData();
 saleForm.set('payload', JSON.stringify(salePayload));
 saleForm.append('itemPhotos:0', tinyPhoto(), 'aparelho-1.png');
 saleForm.append('itemPhotos:1', tinyPhoto(), 'aparelho-2.png');
+saleForm.append('receipts', tinyPdf(), 'comprovante-inicial.pdf');
 const sale = await call('/api/sales', {
   method: 'POST',
   cookie: ownerCookie,
@@ -681,8 +701,40 @@ const sale = await call('/api/sales', {
   body: saleForm,
 });
 assert.equal(sale.body.number, 1);
-assert.deepEqual(sale.body.receipts, []);
+assert.equal((sale.body.receipts as unknown[]).length, 1);
 const saleId = String(sale.body.id);
+const saleReceipt = (
+  sale.body.receipts as Array<{
+    id: string;
+    mimeType: string;
+    name: string;
+    sizeBytes: number;
+    url: string;
+  }>
+)[0];
+const initialReceiptState = (
+  await call(`/api/sales/${saleId}/receipt-payment`, { cookie: ownerCookie })
+).body;
+const initialReceiptPayment = await call(
+  `/api/sales/${saleId}/receipt-payment`,
+  {
+    method: 'POST',
+    cookie: ownerCookie,
+    headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      pixAccountId: pixId,
+      expectedPayments: initialReceiptState.expectedPayments,
+      expectedReceipts: initialReceiptState.expectedReceipts,
+      expectedRequestId: initialReceiptState.requestId,
+    }),
+  },
+);
+assert.equal(initialReceiptPayment.body.receivedTotalCents, 850_000);
+assert.equal(
+  (initialReceiptPayment.body.payments as Array<{ method: string }>)[0].method,
+  'pix',
+);
 // Existing SNs of an inactive product can still be sold; reactivation changes no records.
 const historyBeforeReactivation = await call(
   '/api/sales?period=all&group=sale',
@@ -721,7 +773,7 @@ const replayedSale = await call('/api/sales', {
 assert.equal(replayedSale.body.id, saleId);
 assert.equal(replayedSale.body.number, 1);
 assert.equal(replayedSale.body.replayed, true);
-assert.deepEqual(replayedSale.body.receipts, []);
+assert.equal((replayedSale.body.receipts as unknown[]).length, 1);
 const conflictingSaleForm = new FormData();
 conflictingSaleForm.set(
   'payload',
@@ -878,7 +930,7 @@ assert.equal(excessivePayment.body.code, 'PAYMENT_EXCEEDS_BALANCE');
 const invalidPixPayment = await call(`/api/sales/${saleId}/payments`, {
   method: 'POST',
   cookie: ownerCookie,
-  expected: 409,
+  expected: 400,
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
   body: JSON.stringify({
     operationId: crypto.randomUUID(),
@@ -887,44 +939,42 @@ const invalidPixPayment = await call(`/api/sales/${saleId}/payments`, {
     amountCents: 1,
   }),
 });
-assert.equal(invalidPixPayment.body.code, 'PIX_ACCOUNT_INVALID');
+assert.equal(invalidPixPayment.body.code, 'PIX_FROM_RECEIPT');
 
 const concurrentPaymentOperationId = crypto.randomUUID();
-const [concurrentCash, concurrentPix] = await Promise.all([
+const concurrentCashPayload = JSON.stringify({
+  operationId: concurrentPaymentOperationId,
+  method: 'cash',
+  pixAccountId: null,
+  amountCents: 25_000,
+});
+const [concurrentCash, replayedConcurrentCash] = await Promise.all([
   call(`/api/sales/${saleId}/payments`, {
     method: 'POST',
     cookie: ownerCookie,
-    expected: [201, 409],
+    expected: [200, 201],
     headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      operationId: concurrentPaymentOperationId,
-      method: 'cash',
-      pixAccountId: null,
-      amountCents: 25_000,
-    }),
+    body: concurrentCashPayload,
   }),
   call(`/api/sales/${saleId}/payments`, {
     method: 'POST',
     cookie: ownerCookie,
-    expected: [201, 409],
+    expected: [200, 201],
     headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      operationId: concurrentPaymentOperationId,
-      method: 'pix',
-      pixAccountId: pixId,
-      amountCents: 25_000,
-    }),
+    body: concurrentCashPayload,
   }),
 ]);
 assert.deepEqual(
-  [concurrentCash.response.status, concurrentPix.response.status].sort(
+  [concurrentCash.response.status, replayedConcurrentCash.response.status].sort(
     (left, right) => left - right,
   ),
-  [201, 409],
+  [200, 201],
 );
-const concurrentConflict =
-  concurrentCash.response.status === 409 ? concurrentCash : concurrentPix;
-assert.equal(concurrentConflict.body.code, 'OPERATION_ALREADY_USED');
+assert.ok(
+  [concurrentCash, replayedConcurrentCash].some(
+    (response) => response.body.replayed === true,
+  ),
+);
 const paidSales = await call('/api/sales?group=sale&limit=50&period=all', {
   cookie: ownerCookie,
 });
@@ -940,7 +990,7 @@ assert.equal(paidSale.receivedDifferenceCents, 0);
 assert.equal(paidSale.payments.length, 3);
 assert.equal(
   (paidSales.body.aggregates as { alertCount: number }).alertCount,
-  1,
+  0,
 );
 const alreadyPaid = await call(`/api/sales/${saleId}/payments`, {
   method: 'POST',
@@ -970,15 +1020,16 @@ const originalPayments = (paidSale.payments as EditablePayment[]).map(
     amountCents,
   }),
 );
+const editableCashPayment = originalPayments.find(
+  (payment) => payment.method === 'cash',
+)!;
 const correctionPayload = {
   operationId: crypto.randomUUID(),
   expectedPayments: originalPayments,
-  payments: originalPayments.map((payment, index) =>
-    index === 0
+  payments: originalPayments.map((payment) =>
+    payment.id === editableCashPayment.id
       ? {
           ...payment,
-          method: 'cash',
-          pixAccountId: null,
           amountCents: payment.amountCents - 10_000,
         }
       : payment,
@@ -1019,31 +1070,34 @@ await correctPayment(
   {
     operationId: crypto.randomUUID(),
     expectedPayments: correctionPayload.payments,
-    payments: correctionPayload.payments.map((p, i) =>
-      i ? p : { ...p, amountCents: 0 },
+    payments: correctionPayload.payments.map((payment) =>
+      payment.id === editableCashPayment.id
+        ? { ...payment, amountCents: 0 }
+        : payment,
     ),
   },
   400,
 );
-await correctPayment(
+const forbiddenPixCorrection = await correctPayment(
   {
     operationId: crypto.randomUUID(),
     expectedPayments: correctionPayload.payments,
-    payments: correctionPayload.payments.map((p, i) =>
-      i ? p : { ...p, method: 'pix', pixAccountId: crypto.randomUUID() },
+    payments: correctionPayload.payments.map((payment) =>
+      payment.id === editableCashPayment.id
+        ? { ...payment, method: 'pix', pixAccountId: crypto.randomUUID() }
+        : payment,
     ),
   },
-  409,
+  400,
 );
-const overpaidPayments = correctionPayload.payments.map((p, i) =>
-  i
-    ? p
-    : {
-        ...p,
-        method: 'pix',
-        pixAccountId: pixId,
-        amountCents: p.amountCents + 20_000,
-      },
+assert.equal(forbiddenPixCorrection.body.code, 'PIX_FROM_RECEIPT');
+const overpaidPayments = correctionPayload.payments.map((payment) =>
+  payment.id === editableCashPayment.id
+    ? {
+        ...payment,
+        amountCents: payment.amountCents + 20_000,
+      }
+    : payment,
 );
 const overpaidCorrection = await correctPayment({
   operationId: crypto.randomUUID(),
@@ -1085,9 +1139,20 @@ const replayAfterPayment = await call('/api/sales', {
 });
 assert.equal(replayAfterPayment.body.id, saleId);
 assert.equal(replayAfterPayment.body.replayed, true);
-assert.equal(replayAfterPayment.body.receivedTotalCents, 850_000);
-assert.equal(replayAfterPayment.body.receivedDifferenceCents, -50_000);
+assert.equal(replayAfterPayment.body.receivedTotalCents, 0);
+assert.equal(replayAfterPayment.body.receivedDifferenceCents, -900_000);
 
+await call(`/api/sales/${saleId}/receipt-values`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    receipts: [
+      { id: saleReceipt.id, amountCents: 840_000, source: 'manual' },
+    ],
+  }),
+});
 await call(`/api/sales/${saleId}/order-status`, {
   method: 'PATCH',
   cookie: ownerCookie,
@@ -1130,7 +1195,6 @@ assert.equal(rejectedDisguisedAttachment.body.code, 'INVALID_FILE_SIGNATURE');
 const appendedAttachments = new FormData();
 const appendedAttachmentOperationId = crypto.randomUUID();
 appendedAttachments.set('operationId', appendedAttachmentOperationId);
-appendedAttachments.append('receipts', tinyPdf(), 'comprovante-depois.pdf');
 appendedAttachments.append(
   `itemPhotos:${listedSale.items[0].id}`,
   tinyPhoto(),
@@ -1142,18 +1206,10 @@ const appended = await call(`/api/sales/${saleId}/attachments`, {
   headers: { 'x-csrf-token': ownerCsrf },
   body: appendedAttachments,
 });
-assert.equal(appended.body.receiptsAdded, 1);
+assert.equal(appended.body.receiptsAdded, 0);
 assert.equal(appended.body.itemPhotosAdded, 1);
-const appendedReceipt = (
-  appended.body.receipts as Array<{
-    id: string;
-    mimeType: string;
-    name: string;
-    sizeBytes: number;
-    url: string;
-  }>
-)[0];
-assert.equal(appendedReceipt.name, 'comprovante-depois.pdf');
+const appendedReceipt = saleReceipt;
+assert.equal(appendedReceipt.name, 'comprovante-inicial.pdf');
 assert.equal(appendedReceipt.mimeType, 'application/pdf');
 assert.ok(appendedReceipt.sizeBytes > 0);
 assert.equal(appendedReceipt.url, `/api/files/${appendedReceipt.id}`);
@@ -1165,11 +1221,8 @@ const replayedAttachments = await call(`/api/sales/${saleId}/attachments`, {
   body: appendedAttachments,
 });
 assert.equal(replayedAttachments.body.replayed, true);
-assert.equal(replayedAttachments.body.addedCount, 2);
-assert.equal(
-  (replayedAttachments.body.receipts as Array<{ id: string }>)[0].id,
-  appendedReceipt.id,
-);
+assert.equal(replayedAttachments.body.addedCount, 1);
+assert.deepEqual(replayedAttachments.body.receipts, []);
 
 const conflictingAttachments = new FormData();
 conflictingAttachments.set('operationId', appendedAttachmentOperationId);
@@ -2071,7 +2124,9 @@ const isolatedLookup = await call(
 assert.equal(isolatedLookup.body.found, false);
 const isolatedOcr = await call(`/api/sales/${activeSaleId}/receipt-ocr`, {
   cookie: secondShopCookie,
+  expected: 404,
 });
+assert.equal(isolatedOcr.body.code, 'SALE_NOT_FOUND');
 const foreignSnSearch = await call(
   '/api/inventory?view=serial-search&q=HC9P06R095',
   { cookie: secondShopCookie },
@@ -2094,7 +2149,7 @@ await call(overviewItems[0].receipts[0].url, {
   cookie: secondShopCookie,
   expected: 404,
 });
-// Cash-only receipts never change cash, and cannot be explicitly applied to cash.
+// Receipt values become Pix income while the existing cash remains untouched.
 await call(`/api/sales/${activeSaleId}/receipt-values`, {
   method: 'PATCH',
   cookie: ownerCookie,
@@ -2118,10 +2173,17 @@ const cashSync = (
     cookie: ownerCookie,
   })
 ).body;
-assert.equal(cashSync.receivedTotalCents, 500000);
-const cashPayment = (cashSync.payments as EditablePayment[])[0];
+assert.equal(cashSync.receivedTotalCents, 910000);
+const cashSyncPayments = cashSync.payments as EditablePayment[];
+const cashPayment = cashSyncPayments.find(
+  (payment) => payment.method === 'cash',
+)!;
+const receiptPixPayment = cashSyncPayments.find(
+  (payment) => payment.method === 'pix',
+)!;
 assert.equal(cashPayment.method, 'cash');
 assert.equal(cashPayment.amountCents, 500000);
+assert.equal(receiptPixPayment.amountCents, 410000);
 await call(`/api/sales/${activeSaleId}/receipt-payment`, {
   method: 'POST',
   cookie: ownerCookie,
@@ -2138,8 +2200,7 @@ await call(`/api/sales/${activeSaleId}/receipt-payment`, {
     expectedRequestId: cashSync.requestId,
   }),
 });
-// The following existing receipt-sync scenarios explicitly use Pix.
-const cashSnapshot = (cashSync.payments as EditablePayment[]).map(
+const cashSnapshot = cashSyncPayments.map(
   ({ id, method, pixAccountId, amountCents }) => ({
     id,
     method,
@@ -2154,17 +2215,51 @@ await call(`/api/sales/${activeSaleId}/payments`, {
     'content-type': 'application/json',
     'x-csrf-token': String(finalSession.body.csrfToken),
   },
+  expected: 400,
   body: JSON.stringify({
     operationId: crypto.randomUUID(),
     expectedPayments: cashSnapshot,
-    payments: cashSnapshot.map((p) => ({
-      ...p,
-      method: 'pix',
-      pixAccountId: pixId,
-    })),
+    payments: cashSnapshot.map((payment) =>
+      payment.id === cashPayment.id
+        ? { ...payment, method: 'pix', pixAccountId: pixId }
+        : payment,
+    ),
   }),
 });
-for (const amountCents of [500_000, 499_999]) {
+const mixedCashCorrection = await call(
+  `/api/sales/${activeSaleId}/payments`,
+  {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    headers: {
+      'content-type': 'application/json',
+      'x-csrf-token': String(finalSession.body.csrfToken),
+    },
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      expectedPayments: cashSnapshot,
+      payments: cashSnapshot.map((payment) =>
+        payment.id === cashPayment.id
+          ? { ...payment, amountCents: 100_000 }
+          : payment,
+      ),
+    }),
+  },
+);
+const mixedPaymentSnapshot = (
+  mixedCashCorrection.body.payments as EditablePayment[]
+).map(({ id, method, pixAccountId, amountCents }) => ({
+  id,
+  method,
+  pixAccountId,
+  amountCents,
+}));
+assert.equal(
+  mixedPaymentSnapshot.find((payment) => payment.method === 'cash')
+    ?.amountCents,
+  100_000,
+);
+for (const amountCents of [400_000, 399_999]) {
   await call(`/api/sales/${activeSaleId}/receipt-values`, {
     method: 'PATCH',
     cookie: ownerCookie,
@@ -2189,10 +2284,10 @@ for (const amountCents of [500_000, 499_999]) {
     divergentCount: number;
   };
   assert.equal(refreshedTotals.receiptCents, amountCents);
-  assert.equal(refreshedTotals.receivedCents, amountCents);
+  assert.equal(refreshedTotals.receivedCents, amountCents + 100_000);
   assert.equal(refreshedTotals.pendingCount, 0);
   // Document/payment agreement cannot conceal a difference against the sale.
-  assert.equal(refreshedTotals.divergentCount, amountCents === 500_000 ? 0 : 1);
+  assert.equal(refreshedTotals.divergentCount, amountCents === 400_000 ? 0 : 1);
   const reconciledFilter = await call(
     '/api/sales?group=sale&period=all&saleStatus=reconciled',
     { cookie: ownerCookie },
@@ -2201,7 +2296,7 @@ for (const amountCents of [500_000, 499_999]) {
     (reconciledFilter.body.items as { id: string }[]).some(
       (item) => item.id === activeSaleId,
     ),
-    amountCents === 500_000,
+    amountCents === 400_000,
   );
   const pendingFilter = await call(
     '/api/sales?group=sale&period=all&saleStatus=pending',
@@ -2211,7 +2306,7 @@ for (const amountCents of [500_000, 499_999]) {
     (pendingFilter.body.items as { id: string }[]).some(
       (item) => item.id === activeSaleId,
     ),
-    amountCents !== 500_000,
+    amountCents !== 400_000,
   );
 }
 const cancelledFilter = await call(
@@ -2226,8 +2321,6 @@ assert.ok(
 console.log(
   'Overview refresh: receipt edits immediately update totals and one-cent differences; tenant files remain protected.',
 );
-assert.deepEqual(isolatedOcr.body.receipts, []);
-
 // Optional real-engine proof, ONLY on synthetic integration data. No browser OCR.
 if (process.env.PDV_TEST_RECEIPT_FIXTURE_PATH) {
   const { readFile } = await import('node:fs/promises');
@@ -3655,19 +3748,21 @@ await call(`/api/sales/${attributionId}/receipt-values`, {
     })),
   }),
 });
-assert.equal(
-  ((await saleForCorrection()) as unknown as SaleRecord).reconciliation.status,
-  'pending',
-);
-// Amount alone cannot create the first Pix without an identified receiving account.
+const saleAfterReceiptValues = (
+  await saleForCorrection()
+) as unknown as SaleRecord;
+assert.equal(saleAfterReceiptValues.reconciliation.status, 'reconciled');
+assert.equal(saleAfterReceiptValues.receivedTotalCents, 128400);
+assert.equal(saleAfterReceiptValues.payments.length, 2);
 assert.ok(
-  ((await saleForCorrection()) as unknown as SaleRecord).receipts.every(
-    (receipt) => receipt.receiptReviewReason,
-  ),
+  saleAfterReceiptValues.payments.every((payment) => payment.method === 'pix'),
 );
 assert.equal(
-  ((await saleForCorrection()) as unknown as SaleRecord).receivedTotalCents,
-  0,
+  saleAfterReceiptValues.payments.reduce(
+    (sum, payment) => sum + payment.amountCents,
+    0,
+  ),
+  128400,
 );
 const deletePath = `/api/sales/${attributionId}/receipts/${newReceipts[0].id}`;
 const deleteBody = JSON.stringify({ operationId: crypto.randomUUID() });
@@ -3737,12 +3832,14 @@ assert.equal(
 const saleAfterDelete = (await saleForCorrection()) as unknown as SaleRecord;
 assert.equal(saleAfterDelete.receipts.length, 1);
 assert.equal(saleAfterDelete.receipts[0].id, newReceipts[1].id);
-assert.equal(saleAfterDelete.reconciliation.status, 'pending');
-assert.ok(saleAfterDelete.receipts[0].receiptReviewReason);
-assert.deepEqual(saleAfterDelete.payments, saleBeforePriceCorrection.payments);
+assert.equal(saleAfterDelete.reconciliation.status, 'divergent');
+assert.equal(saleAfterDelete.receivedTotalCents, 5000);
+assert.equal(saleAfterDelete.payments.length, 1);
+assert.equal(saleAfterDelete.payments[0].method, 'pix');
+assert.equal(saleAfterDelete.payments[0].amountCents, 5000);
 assert.equal(saleAfterDelete.productsTotalCents, 128400);
 console.log(
-  'Post-sale prices and manual receipt deletion: authenticated HTTP, CSRF/permission enforcement, current and historical original-sale replay, preserved payments, file 200→404 and immediate reconciliation queries passed.',
+  'Post-sale prices and manual receipt deletion: authenticated HTTP, CSRF/permission enforcement, original-sale replay, linked Pix cleanup, preserved unrelated payments, file 200→404 and immediate reconciliation queries passed.',
 );
 // Explicit use of already saved receipts, manual precedence, replay and CSRF.
 const syncPath = `/api/sales/${activeSaleId}/receipt-payment`;
@@ -3759,7 +3856,7 @@ const paidFields = (value: Record<string, unknown>) =>
       amountCents,
     }),
   );
-const manualSet = async (amountCents: number) => {
+const manualSetCash = async (amountCents: number) => {
   const current = await syncState();
   const expectedPayments = paidFields(current);
   await call(`/api/sales/${activeSaleId}/payments`, {
@@ -3768,16 +3865,21 @@ const manualSet = async (amountCents: number) => {
     body: JSON.stringify({
       operationId: crypto.randomUUID(),
       expectedPayments,
-      payments: expectedPayments.map((p, i) => (i ? p : { ...p, amountCents })),
+      payments: expectedPayments.map((payment) =>
+        payment.method === 'cash' ? { ...payment, amountCents } : payment,
+      ),
     }),
   });
 };
-await manualSet(510000);
+await manualSetCash(110000);
 beforeSync = await syncState();
-assert.equal(beforeSync.status, 'manual');
+assert.equal(beforeSync.status, 'applied');
+const syncPixPayment = (beforeSync.payments as EditablePayment[]).find(
+  (payment) => payment.method === 'pix',
+)!;
 const syncPayload = {
   operationId: crypto.randomUUID(),
-  targetPaymentId: (beforeSync.payments as EditablePayment[])[0].id,
+  targetPaymentId: syncPixPayment.id,
   expectedPayments: beforeSync.expectedPayments,
   expectedReceipts: beforeSync.expectedReceipts,
   expectedRequestId: beforeSync.requestId,
@@ -3794,16 +3896,19 @@ const synced = await call(syncPath, {
   method: 'POST',
   body: JSON.stringify(syncPayload),
 });
-assert.equal(synced.body.receivedTotalCents, synced.body.receiptTotalCents);
+assert.equal(
+  synced.body.receivedTotalCents,
+  Number(synced.body.receiptTotalCents) + 110000,
+);
 assert.equal(synced.body.status, 'applied');
-await manualSet(520000);
+await manualSetCash(120000);
 const replaySync = await call(syncPath, {
   ...editingHeaders,
   method: 'POST',
   body: JSON.stringify(syncPayload),
 });
 assert.equal(replaySync.body.replayed, true);
-assert.equal(replaySync.body.receivedTotalCents, 520000);
+assert.equal(replaySync.body.receivedTotalCents, 519999);
 await call(syncPath, {
   ...editingHeaders,
   method: 'POST',
@@ -3827,13 +3932,13 @@ await call(correctionPath, {
   method: 'PATCH',
   body: JSON.stringify(receiptCorrection),
 });
-assert.equal((await syncState()).receivedTotalCents, 520000);
+assert.equal((await syncState()).receivedTotalCents, 610000);
 await call(correctionPath, {
   ...editingHeaders,
   method: 'PATCH',
   body: JSON.stringify(receiptCorrection),
 });
-assert.equal((await syncState()).receivedTotalCents, 520000);
+assert.equal((await syncState()).receivedTotalCents, 610000);
 await call(correctionPath, {
   ...editingHeaders,
   method: 'PATCH',
@@ -3844,7 +3949,7 @@ await call(correctionPath, {
     receipts: [{ ...receiptCorrection.receipts[0], amountCents: 480000 }],
   }),
 });
-assert.equal((await syncState()).receivedTotalCents, 480000);
+assert.equal((await syncState()).receivedTotalCents, 600000);
 const syncVersion = await call('/api/receipt-ocr/status', {
   cookie: ownerCookie,
 });
@@ -3870,17 +3975,15 @@ await call(mixedPricesPath, {
     })),
   }),
 });
-await manualSet(410000);
-await call(`/api/sales/${activeSaleId}/payments`, {
+await call(correctionPath, {
   ...editingHeaders,
-  method: 'POST',
-  expected: 201,
+  method: 'PATCH',
   body: JSON.stringify({
     operationId: crypto.randomUUID(),
-    method: 'cash',
-    amountCents: 300000,
+    receipts: [{ ...receiptCorrection.receipts[0], amountCents: 410000 }],
   }),
 });
+await manualSetCash(300000);
 for (const amountCents of [410000, 400000]) {
   await call(correctionPath, {
     ...editingHeaders,
@@ -3903,8 +4006,14 @@ for (const amountCents of [410000, 400000]) {
     await call('/api/sales?period=all', { cookie: ownerCookie })
   ).body.items as SaleRecord[];
   const mixedSale = mixedSales.find((sale) => sale.id === activeSaleId)!;
-  assert.equal(mixedSale.reconciliation.status, 'reconciled');
-  assert.equal(mixedSale.reconciliation.differenceCents, 0);
+  assert.equal(
+    mixedSale.reconciliation.status,
+    amountCents === 410000 ? 'reconciled' : 'divergent',
+  );
+  assert.equal(
+    mixedSale.reconciliation.differenceCents,
+    amountCents - 410000,
+  );
   assert.equal(mixedSale.receivedDifferenceCents, amountCents - 410000);
   assert.equal(
     automaticSaleStatus(mixedSale)?.key ?? null,
@@ -3914,7 +4023,7 @@ for (const amountCents of [410000, 400000]) {
 console.log(
   'Mixed-payment HTTP: receipts compare only Pix; cash preserved after correction; sale balance and status recalculated.',
 );
-// A receipt attached after an unpaid sale can register its FIRST Pix, in an explicitly selected account.
+// A receipt attached after an unpaid sale registers its first Pix automatically.
 const firstPixPath = `/api/sales/${attributionId}/receipt-payment`;
 await call(`/api/sales/${attributionId}/receipt-values`, {
   ...editingHeaders,
@@ -3927,63 +4036,44 @@ await call(`/api/sales/${attributionId}/receipt-values`, {
   }),
 });
 const firstPixBefore = (await call(firstPixPath, { cookie: ownerCookie })).body;
-assert.deepEqual(firstPixBefore.payments, []);
 assert.equal(firstPixBefore.receiptTotalCents, 128400);
-const firstPixPayload = {
-  operationId: crypto.randomUUID(),
-  pixAccountId: pixId,
-  expectedPayments: firstPixBefore.expectedPayments,
-  expectedReceipts: firstPixBefore.expectedReceipts,
-  expectedRequestId: firstPixBefore.requestId,
-};
-await call(firstPixPath, {
-  ...editingHeaders,
-  headers: { 'content-type': 'application/json', 'x-csrf-token': 'wrong' },
-  method: 'POST',
-  body: JSON.stringify(firstPixPayload),
-  expected: 403,
-});
+assert.equal(firstPixBefore.receivedTotalCents, 128400);
+assert.equal(firstPixBefore.cashCents, 0);
+assert.equal(firstPixBefore.pixCents, 128400);
 await call(firstPixPath, { cookie: secondShopCookie, expected: 404 });
-await call(firstPixPath, {
-  ...editingHeaders,
-  method: 'POST',
-  body: JSON.stringify({
-    ...firstPixPayload,
-    pixAccountId: crypto.randomUUID(),
-  }),
-  expected: 409,
-});
-const firstPixResponses = await Promise.all(
-  [0, 1].map(() =>
-    call(firstPixPath, {
-      ...editingHeaders,
-      method: 'POST',
-      body: JSON.stringify(firstPixPayload),
-    }),
-  ),
-);
-for (const response of firstPixResponses) {
-  assert.equal(response.body.status, 'applied');
-  assert.equal(response.body.receivedTotalCents, 128400);
-  assert.equal((response.body.payments as EditablePayment[]).length, 1);
-}
-assert.ok(
-  firstPixResponses.some((response) => response.body.replayed === true),
-);
-const firstPixAfter = (await call(firstPixPath, { cookie: ownerCookie })).body;
-const registeredPix = (firstPixAfter.payments as EditablePayment[])[0];
+const firstPixPayments = firstPixBefore.payments as EditablePayment[];
+assert.equal(firstPixPayments.length, 1);
+const registeredPix = firstPixPayments[0];
 assert.equal(registeredPix.method, 'pix');
-assert.equal(registeredPix.pixAccountId, pixId);
 assert.equal(registeredPix.amountCents, 128400);
-await call(firstPixPath, {
-  ...editingHeaders,
-  method: 'POST',
-  body: JSON.stringify({
-    ...firstPixPayload,
-    operationId: crypto.randomUUID(),
-  }),
-  expected: 409,
-});
+const forbiddenReceiptPixEdit = await call(
+  `/api/sales/${attributionId}/payments`,
+  {
+    ...editingHeaders,
+    method: 'PATCH',
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      expectedPayments: [
+        {
+          id: registeredPix.id,
+          method: registeredPix.method,
+          pixAccountId: registeredPix.pixAccountId,
+          amountCents: registeredPix.amountCents,
+        },
+      ],
+      payments: [
+        {
+          id: registeredPix.id,
+          method: registeredPix.method,
+          pixAccountId: registeredPix.pixAccountId,
+          amountCents: 128000,
+        },
+      ],
+    }),
+    expected: 400,
+  },
+);
+assert.equal(forbiddenReceiptPixEdit.body.code, 'PIX_FROM_RECEIPT');
 const replayAfterFirstPix = await call('/api/sales', {
   method: 'POST',
   cookie: ownerCookie,
@@ -3995,39 +4085,30 @@ assert.equal(
   (await call(firstPixPath, { cookie: ownerCookie })).body.receivedTotalCents,
   128400,
 );
-await call(`/api/sales/${attributionId}/payments`, {
+await call(`/api/sales/${attributionId}/receipt-values`, {
   ...editingHeaders,
   method: 'PATCH',
   body: JSON.stringify({
     operationId: crypto.randomUUID(),
-    expectedPayments: [
+    receipts: [
       {
-        id: registeredPix.id,
-        method: registeredPix.method,
-        pixAccountId: registeredPix.pixAccountId,
-        amountCents: registeredPix.amountCents,
-      },
-    ],
-    payments: [
-      {
-        id: registeredPix.id,
-        method: registeredPix.method,
-        pixAccountId: registeredPix.pixAccountId,
+        id: newReceipts[1].id,
         amountCents: 128000,
+        source: 'manual',
       },
     ],
   }),
 });
-const firstPixReplay = await call(firstPixPath, {
-  ...editingHeaders,
-  method: 'POST',
-  body: JSON.stringify(firstPixPayload),
-});
-assert.equal(firstPixReplay.body.replayed, true);
-assert.equal(firstPixReplay.body.receivedTotalCents, 128000);
-assert.equal((firstPixReplay.body.payments as EditablePayment[]).length, 1);
+const firstPixAfterCorrection = (
+  await call(firstPixPath, { cookie: ownerCookie })
+).body;
+assert.equal(firstPixAfterCorrection.receivedTotalCents, 128000);
+assert.equal(
+  (firstPixAfterCorrection.payments as EditablePayment[])[0].amountCents,
+  128000,
+);
 console.log(
-  'First receipt Pix HTTP: chosen account, authenticated permissions, concurrent replay, original sale replay and later manual edits preserved.',
+  'First receipt Pix HTTP: automatic creation, tenant isolation, original sale replay, protected Pix editing and receipt-driven correction passed.',
 );
 if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
   assert.ok(
