@@ -90,10 +90,12 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
           <p className="mt-0.5 break-words text-base font-bold tabular-nums">
             {money(sale.receivedCents)}
           </p>
-          <p className="text-xs text-muted-foreground">
-            Pix recebido {money(sale.receiptCents)} · dinheiro (manual){' '}
-            {money(sale.cashCents)}
-          </p>
+          {(sale.receiptCents > 0 || sale.cashCents > 0) && (
+            <p className="text-xs text-muted-foreground">
+              Pix recebido {money(sale.receiptCents)} · dinheiro (manual){' '}
+              {money(sale.cashCents)}
+            </p>
+          )}
         </div>
         <div>
           <p className="text-[11px] font-semibold text-muted-foreground">

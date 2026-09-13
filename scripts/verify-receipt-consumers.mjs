@@ -256,6 +256,22 @@ const markup = renderToStaticMarkup(
 assert.match(markup, /Pix recebido BRL 4100/);
 assert.doesNotMatch(markup, /Pix recebido BRL 7100|Pix informado/);
 assert.match(markup, /BRL 3000.*abaixo.*saldo.*esperado/s);
+const zeroReceivedMarkup = renderToStaticMarkup(
+  jsx(SaleComparison, {
+    sale: {
+      ...partial,
+      saleInvalid: 0,
+      receivedCents: 0,
+      receiptCents: 0,
+      cashCents: 0,
+    },
+  }),
+);
+assert.doesNotMatch(
+  zeroReceivedMarkup,
+  /Pix recebido|dinheiro \(manual\)/,
+  'a zero-value sale keeps its summary card without displaying a redundant received-value breakdown',
+);
 db.close();
 console.log(
   'PASS: actual sales hydration, overview aggregate/attachment warnings, atomic deletion cleanup, masked details, fail-closed reconciliation, and rendered Pix received versus expected balance.',

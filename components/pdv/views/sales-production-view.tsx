@@ -1826,8 +1826,9 @@ function EditSaleDialog({
                     issueKeys={saleIssues(sale).map((issue) => issue.key)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Conciliação compara os valores cadastrados; não confirma o
-                    crédito no banco.
+                    A conciliação compara os valores lidos nos comprovantes,
+                    somados ao dinheiro recebido, com o preço da venda. Isso não
+                    confirma o crédito na conta bancária.
                   </p>
                   <label
                     className="block text-sm font-semibold"
