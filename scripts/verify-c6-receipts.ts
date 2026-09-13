@@ -214,7 +214,8 @@ assert.equal(
 const lowResolutionC6 = extractReceiptDocument(
   receipt('Pixem Pix\nandamento realizado!')
     .replace('ID da Transação', 'ID ca Transação')
-    .replace('Banco C6 S.A.', 'Banco Có SA.'),
+    .replace('Banco C6 S.A.', 'Banco Có SA.')
+    .replace(timestamp, '12/09/2026 12/09/2026\n15:55, 15:55'),
 );
 assert.equal(lowResolutionC6.details.automaticEligible, true);
 assert.equal(lowResolutionC6.details.payerBank, '336 - Banco Có SA.');

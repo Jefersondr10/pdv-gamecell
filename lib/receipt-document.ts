@@ -102,7 +102,7 @@ export function extractReceiptDocument(text: string) {
     c6Timeline &&
     timelineDates.length === 2 &&
     timelineTimes.length === 2 &&
-    (/\b(?:pix|ix)\s*em\s+(?:pix|px)\s+andamento\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?\s+\d{2}:\d{2}(?::\d{2})?\b/.test(
+    (/\b(?:pix|ix)\s*em\s+(?:pix|px)\s+andamento\s+realizado[!.]?\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?[\s,;|]+\d{2}:\d{2}(?::\d{2})?\b/.test(
       c6Heading,
     ) ||
       sequentialTimeline.test(c6Heading));
