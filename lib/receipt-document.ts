@@ -4,7 +4,7 @@ import {
 } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 7;
+export const RECEIPT_READER_REVISION = 8;
 
 export type ReceiptDocument = {
   version: 1;
@@ -79,11 +79,8 @@ export function receiptDataWarnings(
   document: ReceiptDocument | null | undefined,
 ): ReceiptDataWarning[] {
   const warnings: ReceiptDataWarning[] = [];
-  const add = (
-    key: ReceiptDataWarningKey,
-    label: string,
-    message: string,
-  ) => warnings.push({ key, label, message });
+  const add = (key: ReceiptDataWarningKey, label: string, message: string) =>
+    warnings.push({ key, label, message });
   if (!document || (document.state === 'unknown' && !document.blocked))
     add(
       'completion_status',
@@ -186,6 +183,11 @@ export function extractReceiptDocument(text: string) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
+  // Some text-based bank PDFs embed an incomplete ArialUnicode map. Poppler
+  // then returns U+FFFD in place of accented glyphs (for example
+  // "Transa��o" and "Institui��o"). Keep the regular normalized text for
+  // existing readers and a second, narrowly used form for those labels.
+  const normalizedLoose = normalized.replace(/\uFFFD+/g, '');
   const transferDates = [
     ...text.matchAll(
       /^\s*transferid[oa]\s+em\s+(\d{1,2}\/\d{1,2}\/\d{4}\s+(?:[aà]s\s+)?\d{1,2}:\d{2}(?::\d{2})?)\b/gim,
@@ -241,6 +243,12 @@ export function extractReceiptDocument(text: string) {
     (line) =>
       /(?:id|identificador)(?:\s*\/\s*|\s+)(?:de\s+|da\s*)?transa[cç](?:[aã]o|\.{2,}|…)(?:\s+pix)?|c[oó]digo\s+da\s+transa[cç][aã]o\s+pix|^[il1]d[f/]\s*transa[cç][aã]o|identifica[cç][aã]o\s*:|end\s*to\s*end|e2e/i.test(
         line,
+      ) ||
+      /\bidentifica(?:cao|o)\s*:|\b(?:id|identificador)\s+(?:de\s+|da\s*)?transa(?:cao|o)(?:\s+pix)?|\bend\s*to\s*end\b|\be2e\b/i.test(
+        line
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f\uFFFD]/g, '')
+          .toLowerCase(),
       ) ||
       // Low-resolution C6 images often turn "ID da Transação" into
       // "ID ca Transação". Restrict this tolerance to the already identified
@@ -305,6 +313,7 @@ export function extractReceiptDocument(text: string) {
   const singleTransaction =
     uniqueIds.length === 1 || Boolean(alternateTransactionId);
   const receiptHeading = normalized.slice(0, 700);
+  const looseReceiptHeading = normalizedLoose.slice(0, 700);
   // Some banks call a completed transfer "pagamento", "transação" or
   // "operação" instead of "Pix realizado". Accept those layouts only when
   // the document also contains one labelled Pix/E2E identifier; the heading
@@ -343,6 +352,30 @@ export function extractReceiptDocument(text: string) {
     /\bdados\s+da\s+transferencia\b/.test(normalized) &&
     /\bdebitado\s+da\b/.test(normalized) &&
     /\binstituicao\s+origem\b[\s\S]{0,80}\bbradesco\b/.test(normalized);
+  // Bradesco Net Empresa uses a stable footer saying that the transaction
+  // "foi realizada" while also warning, as standard boilerplate, that it is
+  // subject to analysis and that the credit will occur shortly. That footer
+  // appears even on the generated Pix receipt and must not by itself turn the
+  // document into a pending payment. Scope the exception to this exact layout
+  // and require one canonical E2E identifier; other pending wording continues
+  // to block reconciliation.
+  const bradescoNetEmpresaCompleted =
+    uniqueIds.length === 1 &&
+    /\bcomprovante\s+de\s+transa(?:cao|o)\s+banc(?:aria|ria)\b/.test(
+      looseReceiptHeading,
+    ) &&
+    /\bpix\b/.test(looseReceiptHeading) &&
+    /\bdata\s+da\s+opera(?:cao|o)\b/.test(normalizedLoose) &&
+    /\bn(?:o|º)?\s+de\s+controle\b/.test(normalizedLoose) &&
+    /\bconta\s+de\s+d(?:e)?bito\b/.test(normalizedLoose) &&
+    /\bnome\s+do\s+favorecido\b/.test(normalizedLoose) &&
+    /\binstitui(?:cao|o)\s+destino\b/.test(normalizedLoose) &&
+    /\binstitui(?:cao|o)\s+origem\b[\s\S]{0,80}\bbradesco\b/.test(
+      normalizedLoose,
+    ) &&
+    /\ba\s+transa(?:cao|o)\s+acima\s+foi\s+realizada\s+por\s+meio\s+do\s+bradesco\s+net\s+empresa\b/.test(
+      normalizedLoose,
+    );
   const labelledEffectiveStatus =
     singleTransaction &&
     /\bsituacao\s*:?[\s\S]{0,30}\b(?:efetivad[oa]|concluid[oa]|realizad[oa])\b/.test(
@@ -352,9 +385,17 @@ export function extractReceiptDocument(text: string) {
     /\b(cancelad[oa]|estornad[oa]|recusad[oa]|negad[oa])\b|\bnao\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetivad[oa]|efetuad[oa]|enviad[oa]|transferid[oa]|autorizad[oa]|aprovad[oa])\b/.test(
       normalized,
     );
+  const pendingStateText = bradescoNetEmpresaCompleted
+    ? currentStateText
+        .replace(/\uFFFD+/g, '')
+        .replace(
+          /\ba\s+transa(?:cao|o)\s+acima\s+foi\s+realizada\s+por\s+meio\s+do\s+bradesco\s+net\s+empresa\s+e\s+(?:esta|est)\s+sujeit[oa]\s+a\s+(?:analise|anlise)\.?\s+o\s+cr(?:e)?dito\s+ser(?:a)?\s+efetuado\s+em\s+instantes\.?/g,
+          '',
+        )
+    : currentStateText.replace(/\uFFFD+/g, '');
   const pending =
-    /em\s+andamento|pixem\s+andamento|em processamento|em analise|sujeit[oa]\s+a\s+analise|credito\s+sera\s+efetuado\s+em\s+instantes|\bpendente\b|\bfalha\b|aguardando|nao foi possivel|erro na/.test(
-      currentStateText,
+    /em\s+andamento|pixem\s+andamento|em processamento|em (?:analise|anlise)|sujeit[oa]\s+a\s+(?:analise|anlise)|cr(?:e)?dito\s+ser(?:a)?\s+efetuado\s+em\s+instantes|\bpendente\b|\bfalha\b|aguardando|nao foi possivel|erro na/.test(
+      pendingStateText,
     );
   const state: ReceiptDocument['state'] =
     /\b(agendad[oa]|agendamento|programad[oa])\b/.test(normalized)
@@ -371,21 +412,23 @@ export function extractReceiptDocument(text: string) {
                 ? 'completed'
                 : bradescoDebitedCompleted
                   ? 'completed'
-                  : labelledEffectiveStatus
+                  : bradescoNetEmpresaCompleted
                     ? 'completed'
-                    : c6Timeline
-                      ? 'unknown'
-                      : pixDispatchReceipt ||
-                          labelledCompletedReceipt ||
-                          (/comprovante\s+(?:de|da)\s+transferencia\b/.test(
-                            normalized.slice(0, 500),
-                          ) &&
-                            /\bpix\b/.test(normalized)) ||
-                          /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
-                            normalized,
-                          )
-                        ? 'completed'
-                        : 'unknown';
+                    : labelledEffectiveStatus
+                      ? 'completed'
+                      : c6Timeline
+                        ? 'unknown'
+                        : pixDispatchReceipt ||
+                            labelledCompletedReceipt ||
+                            (/comprovante\s+(?:de|da)\s+transferencia\b/.test(
+                              normalized.slice(0, 500),
+                            ) &&
+                              /\bpix\b/.test(normalized)) ||
+                            /comprovante\s+(?:(?:de|do)\s+)?pix|pix\s+(?:foi\s+)?(?:enviado|realizado|concluido|efetuado)|(?:pagamento|transferencia)\s+(?:foi\s+)?(?:realizad[oa]|concluid[oa]|efetuad[oa])/.test(
+                              normalized,
+                            )
+                          ? 'completed'
+                          : 'unknown';
   const participant = (block: string[]) => {
     const fieldLabel =
       /^(?:nome|cpf(?:\s*\/\s*cnpj)?|cnpj|banco|institui[cç][aã]o(?:\s+(?:financeira|destino|origem))?|ag[eê]ncia|conta|chave|tipo|valor|data|hora|id|identificador|autentica[cç][aã]o)(?:\s*:|\s*$)/i;
@@ -516,9 +559,59 @@ export function extractReceiptDocument(text: string) {
       recipient = participant(block.slice(ends[0] + 1, ends[1] + 1));
     }
   }
+  let bradescoOperationDate: string | null = null;
+  if (bradescoNetEmpresaCompleted) {
+    const corruptedAccent = '(?:[cç][aã]o|\\uFFFD+o|o)';
+    const labelledValue = (label: RegExp) => {
+      const index = lines.findIndex((line) => label.test(line));
+      if (index < 0) return null;
+      const inline = lines[index].replace(label, '').trim();
+      if (inline) return inline;
+      return lines[index + 1]?.trim() || null;
+    };
+    const company = labelledValue(/^empresa\s*:\s*/i)?.split(
+      /\s*\|\s*(?:cpf|cnpj)\s*:/i,
+    )[0];
+    const recipientDocumentValue = labelledValue(/^cnpj\s*\/\s*cpf\s*:\s*/i);
+    let recipientDocument = recipientDocumentValue?.replace(/\D/g, '') ?? '';
+    // This corporate Bradesco layout pads a CNPJ with one leading zero.
+    if (recipientDocument.length === 15 && recipientDocument.startsWith('0'))
+      recipientDocument = recipientDocument.slice(1);
+    const operationLabel = new RegExp(
+      `^data\\s+da\\s+opera${corruptedAccent}\\s*:\\s*`,
+      'i',
+    );
+    bradescoOperationDate =
+      labelledValue(operationLabel)?.match(
+        /\b\d{1,2}\/\d{1,2}\/\d{4}\s*-\s*\d{1,2}h\d{2}(?::\d{2})?\b/i,
+      )?.[0] ?? null;
+    payer = {
+      name: cleanParticipantName(company),
+      bank: cleanParticipantBank(
+        labelledValue(
+          new RegExp(`^institui${corruptedAccent}\\s+origem\\s*:\\s*`, 'i'),
+        ),
+      ),
+      document: null,
+    };
+    recipient = {
+      name: cleanParticipantName(
+        labelledValue(/^nome\s+do\s+favorecido\s*:\s*/i),
+      ),
+      bank: cleanParticipantBank(
+        labelledValue(
+          new RegExp(`^institui${corruptedAccent}\\s+destino\\s*:\\s*`, 'i'),
+        ),
+      ),
+      document: [11, 14].includes(recipientDocument.length)
+        ? recipientDocument
+        : null,
+    };
+  }
   const dates = transferDates.length
     ? transferDates
     : [
+        ...(bradescoOperationDate ? [bradescoOperationDate] : []),
         ...(text.match(
           /\b\d{1,2}[/-](?:\d{1,2}|[a-zç]+)[/-]\d{4}\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
         ) ?? []),
@@ -561,7 +654,7 @@ export function extractReceiptDocument(text: string) {
     .map((line) => extractReceiptAmount(line))
     .filter(Boolean);
   const strongLayoutCurrencyAmounts =
-    c6 || bradescoDebitedCompleted
+    c6 || bradescoDebitedCompleted || bradescoNetEmpresaCompleted
       ? amountLines
           .filter((line) => /R\s*[$S]/i.test(line))
           .map((line) => extractReceiptAmount(line))
@@ -611,7 +704,7 @@ export function extractReceiptDocument(text: string) {
         receiptSectionAmounts[0]!.amountCents === suggestion.amountCents) ||
       (uniqueDocumentCurrencyAmounts.size === 1 &&
         documentCurrencyAmounts[0]!.amountCents === suggestion.amountCents) ||
-      ((c6 || bradescoDebitedCompleted) &&
+      ((c6 || bradescoDebitedCompleted || bradescoNetEmpresaCompleted) &&
         (labelledAmount?.amountCents === suggestion.amountCents ||
           (uniqueStrongLayoutCurrencyAmounts.size === 1 &&
             strongLayoutCurrencyAmounts[0]!.amountCents ===

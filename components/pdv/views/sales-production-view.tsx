@@ -1601,6 +1601,7 @@ function EditSaleDialog({
   const [preparing, setPreparing] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const uploadInFlightRef = useRef(false);
+  const [cashEditorOpen, setCashEditorOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const paymentMethod = paymentAmount.trim() ? 'cash' : '';
   const paymentOperationIdRef = useRef(createOperationId());
@@ -1714,6 +1715,9 @@ function EditSaleDialog({
     (total, payment) => total + payment.amountCents,
     0,
   );
+  const hasSavedCashPayment = visiblePayments.some(
+    (payment) => payment.method === 'cash',
+  );
   const remainingPaymentCents = Math.max(
     0,
     pendingPaymentCents - queuedPaymentCents,
@@ -1752,6 +1756,8 @@ function EditSaleDialog({
               amountCents: receipt.receiptAmountCents,
               source: receipt.receiptAmountSource,
             }),
+            receiptDetails: receipt.receiptDetails,
+            receiptPaymentId: receipt.receiptPaymentId,
             receiptReviewReason:
               receipt.receiptReviewReason ||
               (receipt.receiptDetails &&
@@ -1786,6 +1792,26 @@ function EditSaleDialog({
     setQueuedPayments((current) => [...current, draft]);
     setPaymentAmount('');
     paymentOperationIdRef.current = createOperationId();
+  };
+
+  const openCashEditor = () => {
+    setCashEditorOpen(true);
+    if (!hasSavedCashPayment) return;
+    paymentCorrectionIdRef.current = createOperationId();
+    setPaymentEdits(
+      Object.fromEntries(
+        visiblePayments
+          .filter((payment) => payment.method === 'cash')
+          .map((payment) => [
+            payment.id,
+            {
+              method: payment.method,
+              pixAccountId: null,
+              amount: formatMoneyInput(payment.amountCents),
+            },
+          ]),
+      ),
+    );
   };
 
   const prepareReceipts = async (incoming: File[]) => {
@@ -1999,228 +2025,282 @@ function EditSaleDialog({
                     </div>
                   </div>
 
-                  {(visiblePayments.length > 0 ||
-                    queuedPayments.length > 0) && (
-                    <div className="mt-3 space-y-1 rounded-xl bg-background/80 p-3 text-xs">
-                      {visiblePayments
-                        .filter((payment) => payment.method === 'cash')
-                        .map((payment, index) => {
-                          const edit = paymentEdits[payment.id];
-                          const update = (
-                            changes: Partial<NonNullable<typeof edit>>,
-                          ) => {
+                  {!cashEditorOpen ? (
+                    <Button
+                      aria-controls={`sale-${sale.id}-cash-editor`}
+                      aria-expanded={false}
+                      className="mt-3 w-full sm:w-auto"
+                      disabled={uploadBusy}
+                      onClick={openCashEditor}
+                      type="button"
+                      variant="outline"
+                    >
+                      {hasSavedCashPayment ? <Pencil /> : <Plus />}
+                      {hasSavedCashPayment
+                        ? 'Alterar dinheiro'
+                        : 'Adicionar dinheiro'}
+                    </Button>
+                  ) : (
+                    <div className="mt-3" id={`sale-${sale.id}-cash-editor`}>
+                      <div className="flex justify-end">
+                        <Button
+                          disabled={uploadBusy}
+                          onClick={() => {
+                            setPaymentAmount('');
+                            setQueuedPayments([]);
+                            setPaymentEdits({});
+                            paymentOperationIdRef.current = createOperationId();
                             paymentCorrectionIdRef.current =
                               createOperationId();
-                            setPaymentEdits((current) => ({
-                              ...current,
-                              [payment.id]: {
-                                ...(current[payment.id] ?? {
-                                  method: payment.method,
-                                  pixAccountId: payment.pixAccountId,
-                                  amount: formatMoneyInput(payment.amountCents),
-                                }),
-                                ...changes,
-                              },
-                            }));
-                          };
-                          return (
-                            <div
-                              className="rounded-xl border p-3"
-                              key={payment.id}
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="min-w-0 text-sm text-muted-foreground">
-                                  {payment.method === 'pix'
-                                    ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                                    : 'Dinheiro'}
-                                </span>
-                                <strong className="ml-auto whitespace-nowrap text-sm">
-                                  {formatMoney(payment.amountCents)}
-                                </strong>
-                                <Button
-                                  disabled={uploadBusy}
-                                  size="sm"
-                                  variant="ghost"
-                                  type="button"
-                                  onClick={() => {
-                                    if (edit) {
-                                      paymentCorrectionIdRef.current =
-                                        createOperationId();
-                                      setPaymentEdits((current) => {
-                                        const next = { ...current };
-                                        delete next[payment.id];
-                                        return next;
-                                      });
-                                    } else update({});
-                                  }}
-                                >
-                                  {edit ? (
-                                    'Desfazer'
-                                  ) : (
-                                    <>
-                                      <Pencil className="size-4" /> Alterar
-                                    </>
-                                  )}
-                                </Button>
-                              </div>
-                              {edit && (
-                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                                  <label className="text-sm font-semibold">
-                                    Valor do pagamento
-                                    <Input
-                                      aria-label={`Valor do pagamento ${index + 1}`}
-                                      className="mt-1 h-11 text-right font-bold"
-                                      disabled={uploadBusy}
-                                      inputMode="decimal"
-                                      value={edit.amount}
-                                      onChange={(event) =>
-                                        update({ amount: event.target.value })
-                                      }
-                                    />
-                                  </label>
-                                  <p className="text-xs text-muted-foreground sm:col-span-2">
-                                    A correção será aplicada ao salvar as
-                                    alterações.
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      {queuedPayments.map((payment) => (
-                        <div
-                          className="flex items-center justify-between gap-3 rounded-lg bg-primary/5 px-2 py-1.5"
-                          key={payment.operationId}
+                            setCashEditorOpen(false);
+                          }}
+                          size="sm"
+                          type="button"
+                          variant="ghost"
                         >
-                          <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                            {payment.method === 'pix'
-                              ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
-                              : 'Dinheiro'}{' '}
-                            · novo
-                          </span>
-                          <strong>{formatMoney(payment.amountCents)}</strong>
-                          <Button
-                            aria-label="Remover recebimento em dinheiro"
-                            className="size-7"
-                            onClick={() => {
-                              setQueuedPayments((current) =>
-                                current.filter(
-                                  (candidate) =>
-                                    candidate.operationId !==
-                                    payment.operationId,
-                                ),
+                          Cancelar
+                        </Button>
+                      </div>
+
+                      {(visiblePayments.length > 0 ||
+                        queuedPayments.length > 0) && (
+                        <div className="mt-3 space-y-1 rounded-xl bg-background/80 p-3 text-xs">
+                          {visiblePayments
+                            .filter((payment) => payment.method === 'cash')
+                            .map((payment, index) => {
+                              const edit = paymentEdits[payment.id];
+                              const update = (
+                                changes: Partial<NonNullable<typeof edit>>,
+                              ) => {
+                                paymentCorrectionIdRef.current =
+                                  createOperationId();
+                                setPaymentEdits((current) => ({
+                                  ...current,
+                                  [payment.id]: {
+                                    ...(current[payment.id] ?? {
+                                      method: payment.method,
+                                      pixAccountId: payment.pixAccountId,
+                                      amount: formatMoneyInput(
+                                        payment.amountCents,
+                                      ),
+                                    }),
+                                    ...changes,
+                                  },
+                                }));
+                              };
+                              return (
+                                <div
+                                  className="rounded-xl border p-3"
+                                  key={payment.id}
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="min-w-0 text-sm text-muted-foreground">
+                                      {payment.method === 'pix'
+                                        ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                        : 'Dinheiro'}
+                                    </span>
+                                    <strong className="ml-auto whitespace-nowrap text-sm">
+                                      {formatMoney(payment.amountCents)}
+                                    </strong>
+                                    <Button
+                                      disabled={uploadBusy}
+                                      size="sm"
+                                      variant="ghost"
+                                      type="button"
+                                      onClick={() => {
+                                        if (edit) {
+                                          paymentCorrectionIdRef.current =
+                                            createOperationId();
+                                          setPaymentEdits((current) => {
+                                            const next = { ...current };
+                                            delete next[payment.id];
+                                            return next;
+                                          });
+                                        } else update({});
+                                      }}
+                                    >
+                                      {edit ? (
+                                        'Desfazer'
+                                      ) : (
+                                        <>
+                                          <Pencil className="size-4" /> Alterar
+                                        </>
+                                      )}
+                                    </Button>
+                                  </div>
+                                  {edit && (
+                                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                      <label className="text-sm font-semibold">
+                                        Valor do pagamento
+                                        <Input
+                                          aria-label={`Valor do pagamento ${index + 1}`}
+                                          className="mt-1 h-11 text-right font-bold"
+                                          disabled={uploadBusy}
+                                          inputMode="decimal"
+                                          value={edit.amount}
+                                          onChange={(event) =>
+                                            update({
+                                              amount: event.target.value,
+                                            })
+                                          }
+                                        />
+                                      </label>
+                                      <p className="text-xs text-muted-foreground sm:col-span-2">
+                                        A correção será aplicada ao salvar as
+                                        alterações.
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
                               );
-                            }}
-                            size="icon"
-                            type="button"
-                            variant="ghost"
+                            })}
+                          {queuedPayments.map((payment) => (
+                            <div
+                              className="flex items-center justify-between gap-3 rounded-lg bg-primary/5 px-2 py-1.5"
+                              key={payment.operationId}
+                            >
+                              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                                {payment.method === 'pix'
+                                  ? `Pix${payment.accountName ? ` · ${payment.accountName}` : ''}`
+                                  : 'Dinheiro'}{' '}
+                                · novo
+                              </span>
+                              <strong>
+                                {formatMoney(payment.amountCents)}
+                              </strong>
+                              <Button
+                                aria-label="Remover recebimento em dinheiro"
+                                className="size-7"
+                                onClick={() => {
+                                  setQueuedPayments((current) =>
+                                    current.filter(
+                                      (candidate) =>
+                                        candidate.operationId !==
+                                        payment.operationId,
+                                    ),
+                                  );
+                                }}
+                                size="icon"
+                                type="button"
+                                variant="ghost"
+                              >
+                                <XCircle />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div
+                        className="mt-3 flex flex-wrap justify-between gap-2 text-sm font-semibold"
+                        aria-live="polite"
+                      >
+                        <span>
+                          Valor da venda: {formatMoney(sale.productsTotalCents)}
+                        </span>
+                        <span>
+                          Total pago:{' '}
+                          {formatMoney(
+                            correctedReceivedCents +
+                              queuedPaymentCents +
+                              (paymentReady ? additionalPaymentCents : 0),
+                          )}
+                        </span>
+                      </div>
+                      {invalidPaymentCorrection && (
+                        <p
+                          role="alert"
+                          className="mt-2 text-sm text-destructive"
+                        >
+                          Informe um valor em dinheiro maior que zero.
+                        </p>
+                      )}
+                      {queuedPaymentCents > pendingPaymentCents && (
+                        <p
+                          role="alert"
+                          className="mt-2 text-sm text-destructive"
+                        >
+                          O dinheiro acrescentado excede o saldo após a
+                          correção. Revise os recebimentos antes de salvar.
+                        </p>
+                      )}
+                      {correctedReceivedCents > sale.productsTotalCents && (
+                        <p className="mt-2 text-sm text-amber-800">
+                          Pagamento acima da venda em{' '}
+                          {formatMoney(
+                            correctedReceivedCents - sale.productsTotalCents,
+                          )}
+                          .
+                        </p>
+                      )}
+
+                      {remainingPaymentCents > 0 && (
+                        <div className="mt-3">
+                          <div>
+                            <label
+                              className="text-sm font-semibold"
+                              htmlFor={`sale-${sale.id}-payment-amount`}
+                            >
+                              Adicionar recebimento em dinheiro
+                            </label>
+                            <Input
+                              aria-describedby={
+                                paymentMethod && !paymentReady
+                                  ? `sale-${sale.id}-payment-error`
+                                  : undefined
+                              }
+                              aria-invalid={Boolean(
+                                paymentMethod && !paymentReady,
+                              )}
+                              className="mt-1 h-11 text-right font-bold"
+                              id={`sale-${sale.id}-payment-amount`}
+                              inputMode="decimal"
+                              placeholder="Valor recebido em dinheiro"
+                              onChange={(event) =>
+                                setPaymentAmount(event.target.value)
+                              }
+                              value={paymentAmount}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {remainingPaymentCents > 0 &&
+                        paymentMethod &&
+                        !paymentReady && (
+                          <p
+                            aria-live="polite"
+                            className="mt-2 text-xs font-semibold text-destructive"
+                            id={`sale-${sale.id}-payment-error`}
                           >
-                            <XCircle />
+                            Informe um valor entre R$ 0,01 e{' '}
+                            {formatMoney(remainingPaymentCents)}.
+                          </p>
+                        )}
+                      {remainingPaymentCents > 0 && (
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-muted-foreground">
+                            Falta receber {formatMoney(remainingPaymentCents)}.
+                          </p>
+                          <Button
+                            disabled={!paymentReady}
+                            onClick={queueCurrentPayment}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                          >
+                            <Plus /> Adicionar dinheiro
                           </Button>
                         </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div
-                    className="mt-3 flex flex-wrap justify-between gap-2 text-sm font-semibold"
-                    aria-live="polite"
-                  >
-                    <span>
-                      Valor da venda: {formatMoney(sale.productsTotalCents)}
-                    </span>
-                    <span>
-                      Total pago:{' '}
-                      {formatMoney(
-                        correctedReceivedCents +
-                          queuedPaymentCents +
-                          (paymentReady ? additionalPaymentCents : 0),
                       )}
-                    </span>
-                  </div>
-                  {invalidPaymentCorrection && (
-                    <p role="alert" className="mt-2 text-sm text-destructive">
-                      Informe um valor em dinheiro maior que zero.
-                    </p>
-                  )}
-                  {queuedPaymentCents > pendingPaymentCents && (
-                    <p role="alert" className="mt-2 text-sm text-destructive">
-                      O dinheiro acrescentado excede o saldo após a correção.
-                      Revise os recebimentos antes de salvar.
-                    </p>
-                  )}
-                  {correctedReceivedCents > sale.productsTotalCents && (
-                    <p className="mt-2 text-sm text-amber-800">
-                      Pagamento acima da venda em{' '}
-                      {formatMoney(
-                        correctedReceivedCents - sale.productsTotalCents,
-                      )}
-                      .
-                    </p>
-                  )}
-
-                  {remainingPaymentCents > 0 && (
-                    <div className="mt-3">
-                      <div>
-                        <label
-                          className="text-sm font-semibold"
-                          htmlFor={`sale-${sale.id}-payment-amount`}
-                        >
-                          Adicionar recebimento em dinheiro
-                        </label>
-                        <Input
-                          aria-describedby={
-                            paymentMethod && !paymentReady
-                              ? `sale-${sale.id}-payment-error`
-                              : undefined
-                          }
-                          aria-invalid={Boolean(paymentMethod && !paymentReady)}
-                          className="mt-1 h-11 text-right font-bold"
-                          id={`sale-${sale.id}-payment-amount`}
-                          inputMode="decimal"
-                          placeholder="Valor recebido em dinheiro"
-                          onChange={(event) =>
-                            setPaymentAmount(event.target.value)
-                          }
-                          value={paymentAmount}
-                        />
-                      </div>
+                      {queuedPayments.length > 0 &&
+                        remainingPaymentCents === 0 && (
+                          <p className="mt-3 rounded-xl bg-success/10 px-3 py-2 text-xs font-semibold text-success">
+                            Recebimento em dinheiro adicionado. Salve as
+                            alterações para confirmar.
+                          </p>
+                        )}
                     </div>
-                  )}
-
-                  {remainingPaymentCents > 0 &&
-                    paymentMethod &&
-                    !paymentReady && (
-                      <p
-                        aria-live="polite"
-                        className="mt-2 text-xs font-semibold text-destructive"
-                        id={`sale-${sale.id}-payment-error`}
-                      >
-                        Informe um valor entre R$ 0,01 e{' '}
-                        {formatMoney(remainingPaymentCents)}.
-                      </p>
-                    )}
-                  {remainingPaymentCents > 0 && (
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs font-semibold text-muted-foreground">
-                        Falta receber {formatMoney(remainingPaymentCents)}.
-                      </p>
-                      <Button
-                        disabled={!paymentReady}
-                        onClick={queueCurrentPayment}
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                      >
-                        <Plus /> Adicionar dinheiro
-                      </Button>
-                    </div>
-                  )}
-                  {queuedPayments.length > 0 && remainingPaymentCents === 0 && (
-                    <p className="mt-3 rounded-xl bg-success/10 px-3 py-2 text-xs font-semibold text-success">
-                      Recebimento em dinheiro adicionado. Salve as alterações
-                      para confirmar.
-                    </p>
                   )}
                 </section>
               )}
@@ -2691,6 +2771,7 @@ function EditSaleDialog({
                         attachmentsSaved = true;
                       }
                       await onChanged();
+                      if (paymentSaved) setCashEditorOpen(false);
                       if (
                         canPayments &&
                         canReceipts &&

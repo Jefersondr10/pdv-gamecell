@@ -340,6 +340,76 @@ assert.equal(
   false,
 );
 
+const bradescoNetEmpresaText = `
+Comprovante de Transação Bancária
+Pix
+Data da operação: 13/09/2026 - 15h10
+Nº de controle: 196232357301499837 | Documento: 1510383
+Conta de débito: Agência: 2219 | Conta: 0074432-8 | Tipo: Conta-Corrente
+Empresa: GUBIO IMPORT COMERCIO E SERVICOS LTDA | CNPJ: 040.208.817/0001-74
+Nome do favorecido: DIAS IMOVEIS E CONSTRUCOE
+CNPJ/CPF: 061.120.555/0001-61
+Instituição Destino: MT IP S.A.
+Agência e Conta: 0001 | 0307920 | Conta-Poupança
+Chave: 344d13ee-583f-4883-be93-a0373b68abbf
+Valor: R$ 14.940,00
+Tarifa: R$ 0,00
+Mídia: BRADESCO CELULAR - P.JURIDICA
+Identificação: E60746948202609131810C2219IUu8dA
+TXID: -
+Debitado da: Conta-Corrente
+Instituição Origem: Banco Bradesco S.A.
+A transação acima foi realizada por meio do Bradesco Net Empresa e está sujeita a análise. O crédito será efetuado em instantes.
+`;
+const assertBradescoNetEmpresa = (input: string) => {
+  const reading = extractReceiptDocument(input);
+  assert.equal(reading.amountCents, 1_494_000);
+  assert.equal(
+    reading.details.transactionId,
+    'E60746948202609131810C2219IUU8DA',
+  );
+  assert.equal(reading.details.state, 'completed');
+  assert.equal(reading.details.blocked, false);
+  assert.equal(reading.details.automaticEligible, true);
+  assert.equal(
+    reading.details.payerName,
+    'GUBIO IMPORT COMERCIO E SERVICOS LTDA',
+  );
+  assert.equal(reading.details.payerBank, 'Banco Bradesco S.A.');
+  assert.equal(reading.details.recipientName, 'DIAS IMOVEIS E CONSTRUCOE');
+  assert.equal(reading.details.recipientBank, 'MT IP S.A.');
+  assert.equal(reading.details.recipientDocument, '61120555000161');
+  assert.equal(reading.details.paidAtText, '13/09/2026 - 15h10');
+};
+assertBradescoNetEmpresa(bradescoNetEmpresaText);
+// Exact missing-glyph pattern produced while extracting the supplied
+// text-based PDF (file.pdf), whose embedded ArialUnicode map is incomplete.
+const bradescoNetEmpresaPdfExtraction = bradescoNetEmpresaText
+  .replace('Transação', 'Transa��o')
+  .replace('Bancária', 'Banc�ria')
+  .replaceAll('operação', 'opera��o')
+  .replace('Nº', 'N�')
+  .replaceAll('débito', 'd�bito')
+  .replaceAll('Agência', 'Ag�ncia')
+  .replaceAll('Instituição', 'Institui��o')
+  .replace('Poupança', 'Poupan�a')
+  .replace('Mídia', 'M�dia')
+  .replace('Identificação', 'Identifica��o')
+  .replace('transação', 'transa��o')
+  .replace('está', 'est�')
+  .replace('análise', 'an�lise')
+  .replace('crédito', 'cr�dito')
+  .replace('será', 'ser�');
+assert.match(bradescoNetEmpresaPdfExtraction, /\uFFFD/);
+assertBradescoNetEmpresa(bradescoNetEmpresaPdfExtraction);
+
+const bradescoStillPending = extractReceiptDocument(
+  `${bradescoNetEmpresaText}\nPagamento em processamento`,
+);
+assert.equal(bradescoStillPending.details.state, 'unknown');
+assert.equal(bradescoStillPending.details.blocked, true);
+assert.equal(bradescoStillPending.details.automaticEligible, false);
+
 const observedId = `E${'B'.repeat(32)}`;
 const interWithStableLongId = () =>
   extractReceiptDocument(`
