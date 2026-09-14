@@ -45,6 +45,8 @@ globalThis.fetch = async () => {
     details: extractReceiptDocument(
       mode === 'unknown'
         ? 'Valor R$ 2.840,00'
+        : mode === 'blocked'
+          ? 'Comprovante de transferência\nPix\nValor R$ 2.840,00\nEm processamento'
         : mode === 'ineligible'
           ? 'Comprovante de transferência\nPix\nValor R$ 2.840,00'
           : 'Comprovante de transferência\nPix\nValor R$ 2.840,00\nIdentificador da transação\nE0000000000000000000000000000001',
@@ -99,8 +101,8 @@ assert.equal(
   false,
 );
 
-// A completed old reading without a safe transaction identity is also
-// incomplete. A newer reader must retry it once instead of leaving stale
+// A completed old reading with sparse metadata is also enriched by a newer
+// reader once instead of leaving stale
 // recipient/bank metadata permanently attached to the sale.
 seed();
 mode = 'ok';
@@ -204,13 +206,9 @@ assert.equal(amount().amount, null);
 seed();
 mode = 'ineligible';
 await processReceiptJob(db, files, 'http://isolated.test', clock);
-assert.equal(job().status, 'needs_review');
+assert.equal(job().status, 'done');
 assert.equal(amount().amount, 284000);
-assert.match(
-  db.database.prepare('SELECT receipt_review_reason AS reason FROM attachments').get()
-    .reason,
-  /identificação suficiente/,
-);
+assert.equal(amount().review, null);
 seed();
 mode = 'ok';
 await processReceiptJob(
@@ -243,11 +241,12 @@ assert.equal(
   'pending',
 );
 
-// A prior unsuccessful reader is recovered once; the current revision does not loop.
+// An accepted sparse reading is enriched once by a newer reader revision; the
+// current revision does not loop.
 seed();
 mode = 'unknown';
 await processReceiptJob(db, files, 'http://isolated.test', clock);
-assert.equal(job().status, 'needs_review');
+assert.equal(job().status, 'done');
 const firstGeneration = job().generation;
 assert.equal(
   await processReceiptJob(db, files, 'http://isolated.test', clock),
@@ -269,6 +268,24 @@ assert.equal(
   await processReceiptJob(db, files, 'http://isolated.test', clock),
   false,
 );
+
+// Old blocked results are also audited once by the current parser; otherwise
+// historical false positives/negatives stay frozen. The runtime query uses
+// COALESCE for pre-migration databases that may still expose NULL revisions.
+seed();
+mode = 'blocked';
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(job().status, 'needs_review');
+const blockedGeneration = job().generation;
+db.database.exec(
+  "UPDATE receipt_ocr_jobs SET reader_revision=0,status='needs_review'",
+);
+mode = 'ok';
+await processReceiptJob(db, files, 'http://isolated.test', clock);
+assert.equal(job().generation, blockedGeneration + 1);
+assert.equal(job().reader_revision, RECEIPT_READER_REVISION);
+assert.equal(job().status, 'done');
+assert.equal(amount().review, null);
 
 seed();
 mode = 'ok';
@@ -297,7 +314,7 @@ assert.equal(
 // An unsafe reread retains the manually entered value as history, but the
 // current document metadata makes all financial consumers fail closed.
 seed();
-mode = 'ineligible';
+mode = 'blocked';
 db.database.exec(
   "UPDATE attachments SET receipt_amount_cents=12345,receipt_amount_source='manual',receipt_amount_confirmed_by='legacy-user',receipt_amount_confirmed_at=77; INSERT INTO sale_receipt_payment_sync VALUES('sale','store','manual:legacy','actor',NULL,'manual',1)",
 );
@@ -307,7 +324,7 @@ assert.equal(amount().source, 'manual');
 assert.equal(amount().confirmedBy, 'legacy-user');
 assert.equal(amount().confirmedAt, 77);
 assert.ok(amount().details);
-assert.match(amount().review, /identificação suficiente/);
+assert.match(amount().review, /não confirmado|ambígua/);
 assert.equal(job().status, 'needs_review');
 assert.equal(job().reader_revision, RECEIPT_READER_REVISION);
 assert.equal(
@@ -394,14 +411,17 @@ assert.equal(amount().source, 'manual');
 assert.equal(job(), undefined);
 
 seed();
+mode = 'ok';
 db.database
   .prepare('UPDATE attachments SET receipt_details_json=?')
   .run(JSON.stringify(extractReceiptDocument('Pix agendado').details));
 assert.equal(
   await processReceiptJob(db, files, 'http://isolated.test', clock),
-  false,
-  'blocked old document without job stays blocked',
+  true,
+  'a blocked historical document without a job is audited by the current reader',
 );
+assert.equal(job().status, 'done');
+assert.equal(amount().review, null);
 seed();
 db.database.exec(
   "INSERT INTO sale_receipt_payment_sync VALUES('sale','store','manual:operation','actor',NULL,'manual',1)",

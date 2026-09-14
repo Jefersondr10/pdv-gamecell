@@ -50,7 +50,7 @@ export function deriveReceiptReconciliation(
       receipt.receiptDetails &&
       (receipt.receiptDetails.blocked ||
         receipt.receiptDetails.ambiguous ||
-        receipt.receiptDetails.state !== 'completed' ||
+        ['scheduled', 'cancelled'].includes(receipt.receiptDetails.state) ||
         (!receipt.receiptDetails.automaticEligible &&
           !receipt.receiptPaymentId)),
     );

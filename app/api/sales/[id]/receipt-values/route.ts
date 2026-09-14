@@ -104,6 +104,12 @@ export async function PATCH(
       );
     operationId = operationIdField(body.operationId);
     const receipts = parseReceiptUpdates(body.receipts);
+    if (!onlyIfPending && receipts.some((receipt) => receipt.source === 'ocr'))
+      throw new HttpError(
+        400,
+        'A leitura automática precisa ser validada pelo servidor.',
+        'UNTRUSTED_CLIENT_OCR',
+      );
     requestedCount = receipts.length;
     const normalized = [...receipts].sort((left, right) =>
       left.id.localeCompare(right.id),
@@ -168,11 +174,12 @@ export async function PATCH(
     const currentById = new Map(
       current.map((receipt) => [receipt.id, receipt]),
     );
-    const receiptsToUpdate = onlyIfPending
-      ? receipts.filter(
-          (receipt) => currentById.get(receipt.id)!.receiptAmountCents === null,
-        )
-      : receipts;
+    // `onlyIfPending` is the legacy browser OCR fallback. It submits only an
+    // amount, so it cannot prove that the document is completed, unambiguous
+    // or not a duplicate. Keep the idempotent acknowledgement, but never let
+    // that untrusted suggestion mutate the financial source of truth. The
+    // server OCR job persists the amount together with validated evidence.
+    const receiptsToUpdate = onlyIfPending ? [] : receipts;
     const now = Date.now();
     await consumeStoreWriteBudget(db, now, storeId, 3 + receipts.length);
 
@@ -227,14 +234,12 @@ export async function PATCH(
         ...(receiptsToUpdate.length
           ? preservePayments
             ? [stopReceiptPaymentSync(db, storeId, saleId, now)]
-            : !onlyIfPending
-              ? requestReceiptPaymentSync(
-                  db,
-                  { storeId, saleId, actorId: session.id, subject: session },
-                  operationId,
-                  now,
-                )
-              : []
+            : requestReceiptPaymentSync(
+                db,
+                { storeId, saleId, actorId: session.id, subject: session },
+                operationId,
+                now,
+              )
           : []),
         ...receiptsToUpdate.map((receipt) =>
           db
@@ -292,7 +297,8 @@ export async function PATCH(
       if (Number(auditResult?.meta?.changes ?? 0) !== 1) {
         throw saleChangedError();
       }
-      await settleReceiptPaymentSync(db, storeId, saleId).catch(() => {});
+      if (!onlyIfPending)
+        await settleReceiptPaymentSync(db, storeId, saleId).catch(() => {});
     } catch (error) {
       const saved = await findOperation(db, operationId);
       if (saved) {

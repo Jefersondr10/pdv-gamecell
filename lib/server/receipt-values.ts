@@ -7,11 +7,11 @@ import type {
 
 export function prepareReceiptUploadValues(
   values: ReceiptValueInput[],
-  serverOcrEnabled: boolean,
+  _serverOcrEnabled: boolean,
 ) {
   // Browser OCR is a preview, not a completed server document analysis.
   return values.map((value) =>
-    serverOcrEnabled && value.source === 'ocr'
+    value.source === 'ocr'
       ? { amountCents: null, source: null }
       : value,
   );

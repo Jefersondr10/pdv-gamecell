@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   Camera,
   ChevronRight,
+  Copy,
   Download,
   FileText,
   LoaderCircle,
@@ -752,6 +753,9 @@ function StockProductDetails({
     null,
   );
   const [unitLoadingId, setUnitLoadingId] = useState('');
+  const [copiedSerial, setCopiedSerial] = useState('');
+  const [copyError, setCopyError] = useState('');
+  const [manualCopySerial, setManualCopySerial] = useState('');
   const requestIdRef = useRef(0);
   const unitRequestIdRef = useRef(0);
   const loadedCountRef = useRef(0);
@@ -899,6 +903,24 @@ function StockProductDetails({
     }
   };
 
+  const copySerial = async (serial: string) => {
+    setCopyError('');
+    setManualCopySerial('');
+    try {
+      await navigator.clipboard.writeText(serial);
+      setCopiedSerial(serial);
+      window.setTimeout(
+        () => setCopiedSerial((current) => (current === serial ? '' : current)),
+        1_800,
+      );
+    } catch {
+      setCopyError(
+        'O navegador não permitiu a cópia automática. O SN ficou selecionável abaixo.',
+      );
+      setManualCopySerial(serial);
+    }
+  };
+
   const goBack = () => {
     if (selectedPhoto) {
       setSelectedPhoto(null);
@@ -981,9 +1003,20 @@ function StockProductDetails({
                     <p className="text-xs font-bold uppercase text-muted-foreground">
                       Número de série
                     </p>
-                    <p className="mt-1 break-all font-mono text-lg font-extrabold">
+                    <button
+                      aria-label={`Copiar SN ${selectedUnit.serial}`}
+                      className="group/serial mt-1 inline-flex items-center gap-2 break-all rounded-md font-mono text-lg font-extrabold outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => void copySerial(selectedUnit.serial)}
+                      title="Copiar SN"
+                      type="button"
+                    >
                       {selectedUnit.serial}
-                    </p>
+                      {copiedSerial === selectedUnit.serial ? (
+                        <Check className="size-4 shrink-0 text-success" />
+                      ) : (
+                        <Copy className="size-4 shrink-0 text-muted-foreground opacity-70 transition-opacity group-hover/serial:opacity-100" />
+                      )}
+                    </button>
                   </div>
                   <Badge
                     className={
@@ -1105,13 +1138,16 @@ function StockProductDetails({
               </div>
               <div className="divide-y overflow-hidden rounded-2xl border">
                 {items.map((item) => (
-                  <button
-                    className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 bg-card px-3 py-3 text-left transition-colors hover:bg-muted/45"
+                  <div
+                    className="group grid w-full grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 bg-card px-3 py-2.5 transition-colors hover:bg-muted/45"
                     key={item.id}
-                    onClick={() => void openUnit(item)}
-                    type="button"
                   >
-                    <div className="min-w-0">
+                    <button
+                      aria-label={`Abrir SN ${item.serial}`}
+                      className="min-w-0 rounded-md py-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => void openUnit(item)}
+                      type="button"
+                    >
                       <p className="truncate font-mono text-sm font-bold">
                         {item.serial}
                       </p>
@@ -1120,7 +1156,22 @@ function StockProductDetails({
                           ? `Venda #${String(item.saleNumber).padStart(5, '0')} · toque para abrir`
                           : `Entrada ${formatDateTime(item.createdAt)} · toque para ver a foto`}
                       </p>
-                    </div>
+                    </button>
+                    <Button
+                      aria-label={`Copiar SN ${item.serial}`}
+                      className="size-8 rounded-lg opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                      onClick={() => void copySerial(item.serial)}
+                      size="icon"
+                      title="Copiar SN"
+                      type="button"
+                      variant="ghost"
+                    >
+                      {copiedSerial === item.serial ? (
+                        <Check className="text-success" />
+                      ) : (
+                        <Copy />
+                      )}
+                    </Button>
                     <Badge
                       className={
                         item.status === 'available'
@@ -1133,12 +1184,19 @@ function StockProductDetails({
                     >
                       {item.status === 'available' ? 'Disponível' : 'Vendido'}
                     </Badge>
-                    {unitLoadingId === item.id ? (
-                      <LoaderCircle className="size-4 animate-spin text-primary" />
-                    ) : (
-                      <ChevronRight className="size-4 text-muted-foreground" />
-                    )}
-                  </button>
+                    <button
+                      aria-label={`Abrir detalhes do SN ${item.serial}`}
+                      className="grid size-8 place-items-center rounded-lg outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => void openUnit(item)}
+                      type="button"
+                    >
+                      {unitLoadingId === item.id ? (
+                        <LoaderCircle className="size-4 animate-spin text-primary" />
+                      ) : (
+                        <ChevronRight className="size-4 text-muted-foreground" />
+                      )}
+                    </button>
+                  </div>
                 ))}
                 {items.length === 0 && (
                   <p className="p-6 text-center text-sm text-muted-foreground">
@@ -1166,6 +1224,24 @@ function StockProductDetails({
                 </Button>
               )}
             </>
+          )}
+          <p aria-live="polite" className="sr-only">
+            {copiedSerial ? `SN ${copiedSerial} copiado.` : ''}
+          </p>
+          {copyError && (
+            <div
+              className="mt-3 rounded-xl bg-destructive/10 p-3 text-sm text-destructive"
+              role="alert"
+            >
+              <p>{copyError}</p>
+              <Input
+                aria-label="SN para copiar manualmente"
+                className="mt-2 bg-background font-mono text-foreground"
+                onFocus={(event) => event.currentTarget.select()}
+                readOnly
+                value={manualCopySerial}
+              />
+            </div>
           )}
         </div>
         <div className="shrink-0 border-t bg-background p-3 text-right">

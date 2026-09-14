@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { SqliteDatabase } from '../lib/server/node/sqlite.mjs';
 import { readOverview } from '../lib/server/overview.ts';
-import { overviewComparison, overviewSaleComparison } from '../lib/overview.ts';
+import {
+  overviewComparison,
+  overviewReceiptFinanciallyReconciled,
+  overviewSaleComparison,
+} from '../lib/overview.ts';
 
 const db = new SqliteDatabase(':memory:');
 db.database.exec(`
@@ -110,6 +114,7 @@ try {
     saleDifferenceCount: 0,
   });
   assert.equal(overviewComparison(page.totals), 'matched');
+  assert.equal(overviewReceiptFinanciallyReconciled(page.items[0]), true);
   assert.equal(page.items[0].receipts.length, 2);
   assert.equal(page.items[0].receipts[1].receiptAmountSource, 'manual');
   assert.equal(page.items[0].receipts[1].processingStatus, 'cancelled');
@@ -131,6 +136,20 @@ try {
   sale('offset-pending', 1000, 'offset');
   receipt('offset-pending-r', 'offset-pending', null, 'offset');
   assert.equal(overviewComparison((await read('offset')).totals), 'review');
+
+  assert.equal(
+    overviewReceiptFinanciallyReconciled({
+      receiptCount: 2,
+      pendingCount: 0,
+      receiptReviewCount: 1,
+      receiptCents: 10000,
+      pixCents: 10000,
+      receivedCents: 10000,
+      saleCents: 10000,
+    }),
+    false,
+    'an extra blocked or duplicated receipt must prevent a green reconciled notice',
+  );
 
   receipt('pending', 'one', null);
   db.database.exec(

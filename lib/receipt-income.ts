@@ -1,6 +1,5 @@
 import {
   receiptEvidenceAliases,
-  receiptEvidenceKey,
   type ReceiptDocument,
 } from './receipt-document.ts';
 import { hasEffectiveReceiptReviewReason } from './receipt-review-reasons.ts';
@@ -28,9 +27,8 @@ export function receiptIncomeCents(receipt: Receipt) {
     (!doc ||
       (!doc.blocked &&
         !doc.ambiguous &&
-        doc.state === 'completed' &&
-        ((doc.automaticEligible && Boolean(receiptEvidenceKey(doc))) ||
-          Boolean(receipt.receiptPaymentId)))),
+        !['scheduled', 'cancelled'].includes(doc.state) &&
+        (doc.automaticEligible || Boolean(receipt.receiptPaymentId)))),
   );
   if (
     !acceptedEvidence ||

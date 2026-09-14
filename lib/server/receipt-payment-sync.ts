@@ -42,8 +42,9 @@ type RequestRow = {
   updatedAt: number;
 };
 
-// Called IN the transaction that saves a new receipt or an explicit correction.
-// Browser OCR completion must never create a new intent after a manual payment.
+// Called in the transaction that saves a new receipt or a recognized value.
+// Every accepted reading reopens reconciliation; an explicit preserve/manual
+// action uses stopReceiptPaymentSync instead.
 export function requestReceiptPaymentSync(
   db: D1Database,
   scope: {

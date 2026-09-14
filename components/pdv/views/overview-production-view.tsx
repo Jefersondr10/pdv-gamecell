@@ -11,6 +11,7 @@ import {
   ArrowRight,
   Check,
   FileText,
+  Info,
   LoaderCircle,
   RefreshCw,
   TriangleAlert,
@@ -35,6 +36,7 @@ import { messageOf, requestJson } from '@/lib/client-api';
 import {
   overviewComparison,
   overviewFilters,
+  overviewReceiptFinanciallyReconciled,
   overviewSaleComparison,
   type OverviewFilter,
   type OverviewPage,
@@ -42,6 +44,8 @@ import {
 } from '@/lib/overview';
 import type { SalesPeriod } from '@/lib/server/sales-filters';
 import { receiptTargetLabel } from '@/lib/receipt-reconciliation';
+import { splitReceiptReadingNotices } from '@/lib/receipt-reading-notices';
+import { ReceiptReadingNotices } from '@/components/pdv/receipt-reading-notices';
 import { cn } from '@/lib/utils';
 
 const money = (cents: number) =>
@@ -64,6 +68,15 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
   const paymentDifference = sale.receiptCents - sale.pixCents;
   const saleDifference = sale.receivedCents - sale.saleCents;
   const reconciled = sale.automaticStatus === 'reconciled';
+  const informationalCount = sale.receipts.reduce(
+    (total, receipt) =>
+      total +
+      splitReceiptReadingNotices({
+        ...receipt,
+        receiptOcrStatus: receipt.processingStatus,
+      }).informational.length,
+    0,
+  );
   return (
     <div
       className={cn(
@@ -184,13 +197,28 @@ function SaleComparison({ sale }: { sale: OverviewSale }) {
           `Verificar comprovante · ${sale.pendingCount} arquivo(s) sem valor válido ou em leitura`
         )}
       </p>
+      {informationalCount > 0 && (
+        <p className="mt-1.5 flex items-center gap-1.5 text-xs font-semibold text-sky-800 dark:text-sky-200">
+          <Info className="size-4 shrink-0" />
+          Dados do comprovante: {informationalCount}{' '}
+          {informationalCount === 1
+            ? 'informação não identificada'
+            : 'informações não identificadas'}
+        </p>
+      )}
     </div>
   );
 }
 
 type Receipt = OverviewSale['receipts'][number];
 function receiptState(receipt: Receipt) {
-  if (receipt.receiptReviewReason) return receipt.receiptReviewReason;
+  const { blocking, progress } = splitReceiptReadingNotices({
+    ...receipt,
+    receiptOcrStatus: receipt.processingStatus,
+  });
+  if (progress.length) return progress[0].label;
+  if (blocking.length)
+    return `${blocking[0].label}${blocking.length > 1 ? ` · +${blocking.length - 1} aviso(s)` : ''}`;
   if (receipt.receiptAmountCents !== null && receipt.receiptAmountCents <= 0)
     return 'Valor inválido · conferir na venda';
   if (receipt.receiptAmountCents !== null)
@@ -714,6 +742,15 @@ export function OverviewProductionView({
                   Abrir arquivo<span className="sr-only"> em nova guia</span>
                 </a>
               </div>
+              <ReceiptReadingNotices
+                financiallyReconciled={overviewReceiptFinanciallyReconciled(
+                  current.sale,
+                )}
+                receipt={{
+                  ...current.receipt,
+                  receiptOcrStatus: current.receipt.processingStatus,
+                }}
+              />
               <ReceiptPreview
                 key={current.receipt.id}
                 receipt={current.receipt}

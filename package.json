@@ -17,7 +17,7 @@
     "test:money": "node --experimental-strip-types scripts/verify-money.ts",
     "test:sales-pdf": "node --experimental-transform-types scripts/verify-sales-pdf.ts",
     "test:sale-participants": "node --experimental-transform-types scripts/verify-sale-participants.ts",
-    "test:permissions": "node --experimental-strip-types scripts/verify-permissions.ts",
+    "test:permissions": "node --experimental-transform-types scripts/verify-permissions.ts",
     "test:operations": "node --experimental-transform-types scripts/verify-operation-recovery.mjs",
     "test:uploads": "node --experimental-transform-types scripts/verify-client-upload.mjs",
     "test:receipt-jobs": "node scripts/verify-receipt-jobs.mjs",

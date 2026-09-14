@@ -1,5 +1,5 @@
 import type { Permission } from './permissions';
-export const GUIDE_VERSION = '2026.09.08-edicao-vendas-v25';
+export const GUIDE_VERSION = '2026.09.13-comprovantes-historico-sn-v26';
 
 export type AppRole = 'owner' | 'admin' | 'operator';
 

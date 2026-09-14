@@ -30,10 +30,42 @@ const NEGATIVE_LABELS = [
 const IDENTIFIER_LINE =
   /\b(?:cpf|cnpj|documento|identificador|id|autenticacao|controle|e2e|chave|telefone|celular|agencia|conta|data|hora|protocolo|codigo|nsu|linha digitavel|numero|n[º°.]|end.to.end)\b/;
 
+// Banking apps commonly append offers and Pix examples below the actual
+// receipt. Those values are not transaction evidence and, when larger than
+// the transfer, could otherwise become the selected amount. Keep this list
+// intentionally limited to strong advertising/billing language; balance,
+// fee, limit and discount labels are handled by NEGATIVE_LABELS below.
+const NON_TRANSACTION_AMOUNT_CONTEXT =
+  /\b(?:cashback|economize|seguro|oferta|promocao|bonus|bonificacao|emprestimo|fatura|anuidade|parcele|parcelamento|compra protegida|valor maximo)\b|\b(?:faca|pague|envie)\b.{0,100}\bpix\b|\bpix\b.{0,100}\b(?:ganhe|cashback|bonus)\b/;
+
+function isNonTransactionAmountLine(lines: string[], index: number) {
+  const line = normalizeText(lines[index] ?? '');
+  if (NON_TRANSACTION_AMOUNT_CONTEXT.test(line)) return true;
+
+  // OCR can split a CTA in two lines, for example "Faça um Pix" followed by
+  // "R$ 50 para Ana". Only inherit promotional context for a continuation
+  // line that starts with the currency, so normal labelled values stay safe.
+  if (!/^r\s*[$s]/i.test(line)) return false;
+  const preceding = normalizeText(
+    lines.slice(Math.max(0, index - 2), index).join(' '),
+  );
+  return NON_TRANSACTION_AMOUNT_CONTEXT.test(preceding);
+}
+
+export function receiptAmountRelevantText(sourceText: string) {
+  const lines = sourceText
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  return lines
+    .filter((_line, index) => !isNonTransactionAmountLine(lines, index))
+    .join('\n');
+}
+
 export function extractReceiptAmount(
   sourceText: string,
 ): ReceiptAmountSuggestion | null {
-  const lines = sourceText
+  const lines = receiptAmountRelevantText(sourceText)
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);

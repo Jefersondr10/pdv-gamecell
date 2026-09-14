@@ -81,8 +81,8 @@ export function invalidReceiptDocumentSql(alias: string) {
   const optionalCanonicalId = `(json_type(${doc},'$.transactionId')='null' OR (json_type(${doc},'$.transactionId')='text' AND length(${canonicalId})=32 AND substr(${canonicalId},1,1)='E' AND ${alphaNumeric(`substr(${canonicalId},2)`)}))`;
   const optionalAlternateId = `(COALESCE(json_type(${doc},'$.alternateTransactionId'),'null')='null' OR (json_type(${doc},'$.alternateTransactionId')='text' AND ((length(${alternateId})=25 AND ${alternateId} GLOB 'mercado-pago:[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]') OR (length(${alternateId})=47 AND substr(${alternateId},1,15)='ocr-consensus:E' AND ${alphaNumeric(`substr(${alternateId},16)`)}))))`;
   const optionalObservedId = `(COALESCE(json_type(${doc},'$.observedTransactionId'),'null')='null' OR (json_type(${doc},'$.observedTransactionId')='text' AND length(${observedId})=33 AND substr(${observedId},1,1)='E' AND ${alphaNumeric(`substr(${observedId},2)`)}))`;
-  const eligibleHasIdentity = `(json_type(${doc},'$.automaticEligible') IS NOT 'true' OR ${canonicalId} IS NOT NULL OR ${alternateId} IS NOT NULL)`;
-  return `(${alias}.receipt_details_json IS NOT NULL AND NOT COALESCE((json_type(${doc})='object' AND json_extract(${doc},'$.version')=1 AND json_type(${doc},'$.version') IN ('integer','real') AND json_extract(${doc},'$.state')='completed' AND COALESCE(json_type(${doc},'$.blocked'),'null')<>'true' AND COALESCE(json_type(${doc},'$.ambiguous'),'null')<>'true' AND ${metadata} AND ${optionalCanonicalId} AND ${optionalAlternateId} AND ${optionalObservedId} AND ${eligibleHasIdentity}),0))`;
+  const validState = `json_extract(${doc},'$.state') IN ('completed','unknown')`;
+  return `(${alias}.receipt_details_json IS NOT NULL AND NOT COALESCE((json_type(${doc})='object' AND json_extract(${doc},'$.version')=1 AND json_type(${doc},'$.version') IN ('integer','real') AND ${validState} AND COALESCE(json_type(${doc},'$.blocked'),'null')<>'true' AND COALESCE(json_type(${doc},'$.ambiguous'),'null')<>'true' AND ${metadata} AND ${optionalCanonicalId} AND ${optionalAlternateId} AND ${optionalObservedId}),0))`;
 }
 
 export function untrustedReceiptDocumentSql(alias: string) {
@@ -95,14 +95,37 @@ function receiptEvidenceAcceptedSql(alias: 'a' | 'ar') {
 }
 
 export function effectiveReceiptReviewReasonSql(alias: 'a' | 'ar') {
-  const reasons = DERIVED_RECEIPT_REVIEW_REASONS.map(
-    (reason) => `'${reason.replaceAll("'", "''")}'`,
-  ).join(',');
+  const reasons = derivedReceiptReviewReasonsSql();
   return `(CASE WHEN ${alias}.receipt_review_reason IN (${reasons}) AND ${receiptEvidenceAcceptedSql(alias)} THEN NULL ELSE NULLIF(${alias}.receipt_review_reason,'') END)`;
 }
 
 export function acceptedReceiptSql(alias: 'a' | 'ar') {
-  return `(${receiptEvidenceAcceptedSql(alias)} AND ${effectiveReceiptReviewReasonSql(alias)} IS NULL)`;
+  // effectiveReceiptReviewReasonSql is NULL for a clean row, and also for an
+  // obsolete reader-derived warning once the evidence itself is accepted.
+  // Because receiptEvidenceAcceptedSql is already required here, expanding
+  // the complete CASE would duplicate every evidence subquery without
+  // changing the result. Keep the equivalent predicate compact: an accepted
+  // row may have no warning, an empty warning, or only a known derived one.
+  return `(${receiptEvidenceAcceptedSql(alias)} AND (NULLIF(${alias}.receipt_review_reason,'') IS NULL OR ${alias}.receipt_review_reason IN (${derivedReceiptReviewReasonsSql()})))`;
+}
+
+function derivedReceiptReviewReasonsSql() {
+  return DERIVED_RECEIPT_REVIEW_REASONS.map(
+    (reason) => `'${reason.replaceAll("'", "''")}'`,
+  ).join(',');
+}
+
+function receiptRequiresReviewSql(alias: 'a' | 'ar') {
+  const amount = `${alias}.receipt_amount_cents`;
+  const reason = `NULLIF(${alias}.receipt_review_reason,'')`;
+  const derivedReasons = derivedReceiptReviewReasonsSql();
+  const activeJob = `EXISTS (SELECT 1 FROM receipt_ocr_jobs j WHERE j.attachment_id = ${alias}.id AND j.status IN ('pending', 'processing', 'retry'))`;
+  // This is the boolean reduction of the former combination of duplicate,
+  // effective-review, non-accepted-amount and failed-reading predicates. It
+  // deliberately spells each expensive evidence check only once so callers
+  // do not exceed D1's statement-size limit when period comparisons duplicate
+  // the aggregate query.
+  return `(${duplicateReceiptSql(alias)} OR ${invalidReceiptDocumentSql(alias)} OR ${untrustedReceiptDocumentSql(alias)} OR (${amount} IS NOT NULL AND NOT ${validReceiptAmountSql(alias)}) OR (${amount} IS NULL AND NOT ${activeJob}) OR (${reason} IS NOT NULL AND (${amount} IS NULL OR ${reason} NOT IN (${derivedReasons}))))`;
 }
 export const SALE_RECEIPT_TOTAL_SQL = `COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id=s.store_id AND ar.sale_id=s.id AND ar.kind='receipt' AND ${acceptedReceiptSql('ar')}),0)`;
 export const SALE_RECEIVED_TOTAL_SQL = `(${SALE_CASH_TOTAL_SQL} + ${SALE_RECEIPT_TOTAL_SQL})`;
@@ -110,7 +133,7 @@ export const SALE_RECEIPT_TARGET_SQL = `MAX(0,s.products_total_cents - ${SALE_CA
 export const SALE_ISSUE_SQL: Record<SaleIssueKey, string> = {
   missing_price: `(s.products_total_cents <= 0 OR NOT EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.store_id = s.store_id) OR EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.store_id = s.store_id AND si.sold_price_cents <= 0))`,
   missing_receipt: `(${SALE_RECEIPT_TARGET_SQL} > 0 AND NOT EXISTS (${receipts}))`,
-  review: `(EXISTS (${receipts} AND (${duplicateReceiptSql('ar')} OR ${effectiveReceiptReviewReasonSql('ar')} IS NOT NULL OR (ar.receipt_amount_cents IS NOT NULL AND NOT ${acceptedReceiptSql('ar')}))) OR ${failed} OR (${complete} AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) <> ${SALE_RECEIPT_TARGET_SQL}))`,
+  review: `(EXISTS (${receipts} AND ${receiptRequiresReviewSql('ar')}) OR (${complete} AND COALESCE((SELECT SUM(ar.receipt_amount_cents) FROM attachments ar WHERE ar.store_id = s.store_id AND ar.sale_id = s.id AND ar.kind = 'receipt'), 0) <> ${SALE_RECEIPT_TARGET_SQL}))`,
   reading: `(NOT ${failed} AND EXISTS (${receipts} AND ar.receipt_amount_cents IS NULL))`,
   pending_payment: `${SALE_RECEIVED_TOTAL_SQL} < s.products_total_cents`,
   overpaid: `${SALE_RECEIVED_TOTAL_SQL} > s.products_total_cents`,

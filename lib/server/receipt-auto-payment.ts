@@ -226,14 +226,13 @@ export async function settleAutomaticReceiptPayments(
     .filter(
       (receipt, index) =>
         receipt.details !== null &&
-        (!documents[index]?.automaticEligible ||
-          !receiptEvidenceKey(documents[index])) &&
+        !documents[index]?.automaticEligible &&
         !historicallyLinkedIds.has(receipt.id),
     )
     .map((receipt) => receipt.id);
   if (unsafeAutomaticIds.length)
     return review(
-      'A leitura não contém identificação suficiente para conciliação automática. Releia o comprovante.',
+      'Não foi possível confirmar um único valor para conciliação automática. Releia o comprovante.',
       unsafeAutomaticIds,
     );
   // The established explicit/manual allocation path remains available for old sales.
@@ -333,7 +332,12 @@ export async function settleAutomaticReceiptPayments(
     const receipt = receipts[i];
     const doc = documents[i];
     const link = links.find((l) => l.attachmentId === receipt.id);
-    if (doc && (doc.blocked || doc.ambiguous || doc.state !== 'completed'))
+    if (
+      doc &&
+      (doc.blocked ||
+        doc.ambiguous ||
+        ['scheduled', 'cancelled'].includes(doc.state))
+    )
       return review(
         'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
         [receipt.id],

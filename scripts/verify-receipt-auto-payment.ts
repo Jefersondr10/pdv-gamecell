@@ -5,6 +5,7 @@ import {
   extractReceiptDocument,
   parseReceiptDocument,
   preferReceiptReading,
+  receiptDataWarnings,
   receiptEvidenceKey,
   shortReceiptDate,
 } from '../lib/receipt-document.ts';
@@ -39,6 +40,24 @@ assert.equal(document.details.payerBank, 'Mercado Pago');
 assert.equal(document.details.recipientDocument, '12345678000199');
 assert.equal(document.details.automaticEligible, true);
 
+const valueOnly = extractReceiptDocument('Valor R$ 4.400,00');
+assert.equal(valueOnly.amountCents, 440000);
+assert.equal(valueOnly.details.state, 'unknown');
+assert.equal(valueOnly.details.automaticEligible, true);
+assert.deepEqual(
+  new Set(receiptDataWarnings(valueOnly.details).map((warning) => warning.key)),
+  new Set([
+    'completion_status',
+    'transaction_id',
+    'paid_at',
+    'payer_name',
+    'payer_bank',
+    'recipient_name',
+    'recipient_bank',
+    'recipient_document',
+  ]),
+);
+
 const mercadoPagoWithoutCanonicalE2e = extractReceiptDocument(`
 Mercado Pago
 Comprovante de Pix
@@ -68,6 +87,48 @@ assert.equal(
   'Empresa recebedora LTDA',
 );
 assert.equal(mercadoPagoWithoutCanonicalE2e.details.automaticEligible, true);
+
+const mercadoPagoWithPromotionalPixExample = extractReceiptDocument(`
+Comprovante de Pix
+R$ 15.000
+Pagamento fornec
+Origem e destino
+LUMORAIMPORT LTDA
+Mercado Pago
+Dias Imoveis e Construcoes Ltd
+MT INSTITUICAO DE PAGAMENTO SA
+ID de transacao Pix
+E10573521202609082051A4DAXPDZCCD
+Faça um Pix de R$ 50 para Ana
+`);
+assert.equal(mercadoPagoWithPromotionalPixExample.amountCents, 1_500_000);
+assert.equal(mercadoPagoWithPromotionalPixExample.details.ambiguous, false);
+assert.equal(
+  mercadoPagoWithPromotionalPixExample.details.automaticEligible,
+  true,
+  'a promotional Mercado Pago Pix example must not downgrade a valid receipt',
+);
+
+for (const promotionalFooter of [
+  'Cashback de R$ 10,00',
+  'Economize R$ 50,00',
+  'Seguro por R$ 5,00',
+  'Pague com Pix e ganhe R$ 20,00',
+  'Compra protegida até R$ 1.500,00',
+  'Valor máximo por Pix: R$ 20.000,00',
+  'Total da sua fatura R$ 2.000,00',
+]) {
+  const withPromotion = extractReceiptDocument(
+    `Comprovante de Pix\nValor da transação\nR$ 1.000,00\nPix realizado\n${promotionalFooter}`,
+  );
+  assert.equal(withPromotion.amountCents, 100_000, promotionalFooter);
+  assert.equal(withPromotion.details.ambiguous, false, promotionalFooter);
+  assert.equal(
+    withPromotion.details.automaticEligible,
+    true,
+    promotionalFooter,
+  );
+}
 
 const itauSisPagText = `
 08 set. 2026, 12:08:24, via SISPAG no app Itaú
@@ -288,7 +349,7 @@ Valor R$ 4.900,00
 ID da transação
 ${observedId}
 `);
-assert.equal(interWithStableLongId().details.automaticEligible, false);
+assert.equal(interWithStableLongId().details.automaticEligible, true);
 const consensusInter = preferReceiptReading([
   interWithStableLongId(),
   interWithStableLongId(),
@@ -516,6 +577,39 @@ await check(0, 0);
 addReceipt();
 await sync();
 await check(410000, 1);
+
+// A value-only receipt gets a stable attachment fallback. Rereading the same
+// attachment updates the existing Pix instead of creating a second payment.
+seed(0, 440000);
+adapter.database
+  .prepare(
+    `INSERT INTO attachments(id,store_id,kind,sale_id,r2_key,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at,receipt_details_json,created_by,created_at) VALUES('value-only','shop','receipt','sale','value-only','value-only.png','image/png',4,440000,'ocr',1,?,'owner',1)`,
+  )
+  .run(JSON.stringify(valueOnly.details));
+await sync();
+let valueOnlyState = await check(440000, 1);
+const valueOnlyPaymentId = valueOnlyState.payments[0].id;
+assert.equal(
+  adapter.database
+    .prepare(
+      "SELECT transaction_id AS transactionId FROM receipt_payment_links WHERE attachment_id='value-only'",
+    )
+    .get()!.transactionId,
+  'receipt:value-only',
+);
+adapter.database
+  .prepare(
+    "UPDATE attachments SET receipt_details_json=?,receipt_amount_confirmed_at=2 WHERE id='value-only'",
+  )
+  .run(
+    JSON.stringify(
+      extractReceiptDocument('Comprovante de Pix\nR$ 4.400,00').details,
+    ),
+  );
+await sync();
+valueOnlyState = await check(440000, 1);
+assert.equal(valueOnlyState.payments[0].id, valueOnlyPaymentId);
+
 seed();
 await check(300000, 1);
 addReceipt();
@@ -858,7 +952,7 @@ adapter.database.exec("DELETE FROM attachments WHERE id='mp-canonical-copy'");
 const idlessReread = extractReceiptDocument(
   'Comprovante de Pix\nPix realizado\nR$ 4.400,00',
 );
-assert.equal(idlessReread.details.automaticEligible, false);
+assert.equal(idlessReread.details.automaticEligible, true);
 adapter.database
   .prepare("UPDATE attachments SET receipt_details_json=? WHERE id='mp'")
   .run(JSON.stringify(idlessReread.details));

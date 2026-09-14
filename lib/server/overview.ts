@@ -24,6 +24,7 @@ import type {
   OverviewSale,
   OverviewTotals,
 } from '../overview.ts';
+import { parseReceiptDocument } from '../receipt-document.ts';
 
 const pageSize = 20;
 
@@ -125,7 +126,8 @@ export async function readOverview(
     a.id AS attachmentId, a.file_name AS fileName,
     a.mime_type AS mimeType, a.size_bytes AS sizeBytes, a.receipt_amount_cents AS amountCents,
     a.receipt_amount_source AS amountSource, a.receipt_amount_confirmed_at AS confirmedAt,
-    j.status AS processingStatus, CASE WHEN ${duplicateReceiptSql('a')} THEN 'Transação repetida em outro comprovante. Confira os anexos.' ELSE COALESCE(${effectiveReceiptReviewReasonSql('a')}, CASE WHEN ${invalidReceiptDocumentSql('a')} THEN 'Confira o documento: pagamento não confirmado ou leitura ambígua.' WHEN ${untrustedReceiptDocumentSql('a')} THEN 'A leitura não contém identificação suficiente para conciliação automática. Releia o comprovante.' END) END AS receiptReviewReason
+    a.receipt_details_json AS receiptDetailsJson,
+    j.status AS processingStatus, CASE WHEN ${duplicateReceiptSql('a')} THEN 'Transação repetida em outro comprovante. Confira os anexos.' ELSE COALESCE(${effectiveReceiptReviewReasonSql('a')}, CASE WHEN ${invalidReceiptDocumentSql('a')} THEN 'Confira o documento: pagamento não confirmado ou leitura ambígua.' WHEN ${untrustedReceiptDocumentSql('a')} THEN 'Não foi possível confirmar um único valor para conciliação automática. Releia o comprovante.' END) END AS receiptReviewReason
   FROM summary LEFT JOIN page ON 1 = 1
   LEFT JOIN attachments a ON a.sale_id = page.id AND a.store_id = page.storeId AND a.kind = 'receipt'
   LEFT JOIN receipt_ocr_jobs j ON j.attachment_id = a.id
@@ -163,6 +165,7 @@ export async function readOverview(
     amountCents: number | null;
     amountSource: 'ocr' | 'manual' | null;
     confirmedAt: number | null;
+    receiptDetailsJson: string | null;
     processingStatus: string | null;
   };
   const rows = (result.results ?? []) as Row[];
@@ -226,6 +229,9 @@ export async function readOverview(
         receiptAmountCents: row.amountCents,
         receiptAmountSource: row.amountSource,
         receiptAmountConfirmedAt: row.confirmedAt,
+        receiptDetails: maskReceiptDocument(
+          parseReceiptDocument(row.receiptDetailsJson),
+        ),
         processingStatus: row.processingStatus,
         receiptReviewReason: row.receiptReviewReason,
       });
@@ -240,5 +246,17 @@ export async function readOverview(
       sales.size > pageSize && last
         ? JSON.stringify([last.createdAt, last.id])
         : null,
+  };
+}
+
+function maskReceiptDocument(
+  document: ReturnType<typeof parseReceiptDocument>,
+) {
+  if (!document) return null;
+  return {
+    ...document,
+    recipientDocument: document.recipientDocument
+      ? `***${document.recipientDocument.slice(-4)}`
+      : null,
   };
 }

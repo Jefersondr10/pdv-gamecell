@@ -55,6 +55,8 @@ import {
   saleIssues,
 } from '@/lib/sale-display-status';
 import { SaleDetailsDialog } from '@/components/pdv/sale-details-dialog';
+import { SerialHistoryDialog } from '@/components/pdv/serial-history-dialog';
+import { serialMatchingQuery } from '@/lib/serial-history';
 import { DeleteReceiptButton } from '@/components/pdv/delete-receipt-button';
 import { ReceiptPaymentSync } from '@/components/pdv/receipt-payment-sync';
 import {
@@ -110,10 +112,6 @@ import {
   prepareMediaSelection,
 } from '@/lib/client-media';
 import { createOperationId } from '@/lib/client-operation-id';
-import {
-  enqueueReceiptOcrJobs,
-  type ReceiptOcrAttachment,
-} from '@/lib/client-receipt-background';
 import { parseMoneyInput } from '@/lib/money';
 import {
   deriveReceiptReconciliation,
@@ -123,6 +121,7 @@ import {
 } from '@/lib/receipt-reconciliation';
 import { cn } from '@/lib/utils';
 import type {
+  AttachmentRecord,
   BootstrapData,
   SalePaymentRecord,
   SaleRecord,
@@ -272,6 +271,7 @@ export function SalesProductionView({
   );
   const [reportSale, setReportSale] = useState<SaleRecord | null>(null);
   const [detailSale, setDetailSale] = useState<SaleRecord | null>(null);
+  const [historySerial, setHistorySerial] = useState<string | null>(null);
   const [editSale, setEditSale] = useState<SaleRecord | null>(null);
   const [cancelSale, setCancelSale] = useState<SaleRecord | null>(null);
   useEffect(() => {
@@ -317,6 +317,50 @@ export function SalesProductionView({
   const [listError, setListError] = useState('');
   const [analyticsError, setAnalyticsError] = useState('');
   const [targetNotice, setTargetNotice] = useState('');
+  const historySaleRequestRef = useRef(0);
+  const openSaleDetails = useCallback((sale: SaleRecord) => {
+    historySaleRequestRef.current += 1;
+    setTargetNotice('');
+    setDetailSale(sale);
+  }, []);
+  const openSerialHistory = useCallback((serial: string) => {
+    historySaleRequestRef.current += 1;
+    setTargetNotice('');
+    setHistorySerial(serial);
+  }, []);
+  const openSaleFromHistory = useCallback(
+    async (saleId: string) => {
+      const requestId = ++historySaleRequestRef.current;
+      setTargetNotice('');
+      if (detailSale?.id === saleId) return;
+      const loaded = page.items.find((sale) => sale.id === saleId);
+      if (loaded) {
+        setDetailSale(loaded);
+        return;
+      }
+      try {
+        const result = await requestJson<SalesPage>(
+          `/api/sales?period=all&saleId=${encodeURIComponent(saleId)}`,
+        );
+        if (historySaleRequestRef.current !== requestId) return false;
+        const sale = result.items.find((item) => item.id === saleId);
+        if (sale) {
+          setDetailSale(sale);
+          return;
+        }
+        const notice =
+          'A venda desta movimentação não foi encontrada no histórico.';
+        setTargetNotice(notice);
+        return notice;
+      } catch (error) {
+        if (historySaleRequestRef.current !== requestId) return false;
+        const notice = `Não foi possível abrir a venda desta movimentação. ${messageOf(error)}`;
+        setTargetNotice(notice);
+        return notice;
+      }
+    },
+    [detailSale?.id, page.items],
+  );
   const listRequestIdRef = useRef(0);
   const analyticsRequestIdRef = useRef(0);
   const listDataKeyRef = useRef('');
@@ -519,6 +563,7 @@ export function SalesProductionView({
       const target = page.items.find((sale) => sale.id === openSaleId);
       if (target) {
         openedTargetRef.current = openSaleId;
+        historySaleRequestRef.current += 1;
         setTargetNotice('');
         setDetailSale(target);
       } else {
@@ -1032,7 +1077,12 @@ export function SalesProductionView({
             />
           ) : grouping === 'sale' ? (
             <>
-              <SaleList onDetails={setDetailSale} sales={page.items} />
+              <SaleList
+                onDetails={openSaleDetails}
+                onOpenSerial={openSerialHistory}
+                query={query}
+                sales={page.items}
+              />
               {listError && (
                 <div
                   className="border-t bg-destructive/5 p-3 text-center"
@@ -1090,6 +1140,7 @@ export function SalesProductionView({
         csrfToken={data.csrfToken}
         onPricesChanged={handlePricesChanged}
         onClose={(reason) => {
+          historySaleRequestRef.current += 1;
           setDetailSale(null);
           if (returnToPeriodReport && reason !== 'action') {
             setReturnToPeriodReport(false);
@@ -1102,6 +1153,17 @@ export function SalesProductionView({
         onCancel={setCancelSale}
         canEdit={canEdit}
         canCancel={canCancel}
+        onOpenSerial={openSerialHistory}
+      />
+      <SerialHistoryDialog
+        serial={historySerial}
+        onOpenChange={(open) => {
+          if (!open) {
+            historySaleRequestRef.current += 1;
+            setHistorySerial(null);
+          }
+        }}
+        onOpenSale={openSaleFromHistory}
       />
       <SaleReport
         onOpenChange={(open) => {
@@ -1128,7 +1190,7 @@ export function SalesProductionView({
         onOpenSale={(sale) => {
           setPeriodReportOpen(false);
           setReturnToPeriodReport(true);
-          setDetailSale(sale);
+          openSaleDetails(sale);
         }}
       />
       <EditSaleDialog
@@ -1220,20 +1282,34 @@ export function SalesProductionView({
 function SaleList({
   sales,
   onDetails,
+  onOpenSerial,
+  query,
 }: {
   sales: SaleRecord[];
   onDetails: (sale: SaleRecord) => void;
+  onOpenSerial: (serial: string) => void;
+  query: string;
 }) {
   return (
     <div className="grid gap-1.5 bg-muted/20 p-1.5 sm:gap-2 sm:p-2">
       {sales.map((sale) => {
         const financial = saleFinancialSummary(sale);
+        const matchedSerial = serialMatchingQuery(
+          sale.items.map((item) => item.serial),
+          query,
+        );
         return (
           <button
             key={sale.id}
             type="button"
-            aria-label={`Abrir detalhes da venda ${sale.number}, ${sale.customerName}`}
-            onClick={() => onDetails(sale)}
+            aria-label={
+              matchedSerial
+                ? `Abrir movimentações do SN ${matchedSerial}`
+                : `Abrir detalhes da venda ${sale.number}, ${sale.customerName}`
+            }
+            onClick={() =>
+              matchedSerial ? onOpenSerial(matchedSerial) : onDetails(sale)
+            }
             className={cn(
               'w-full rounded-xl border bg-card px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
               sale.status === 'cancelled' &&
@@ -1274,6 +1350,11 @@ function SaleList({
                     : ''}
                   {sale.items.length > 1 ? ` +${sale.items.length - 1}` : ''}
                 </p>
+                {matchedSerial && (
+                  <p className="mt-1 font-mono text-xs font-bold text-primary">
+                    SN {matchedSerial} · toque para ver as movimentações
+                  </p>
+                )}
               </div>
               <div className="shrink-0 text-right">
                 <p
@@ -1676,7 +1757,9 @@ function EditSaleDialog({
               (receipt.receiptDetails &&
               (receipt.receiptDetails.blocked ||
                 receipt.receiptDetails.ambiguous ||
-                receipt.receiptDetails.state !== 'completed')
+                ['scheduled', 'cancelled'].includes(
+                  receipt.receiptDetails.state,
+                ))
                 ? 'Confira a leitura do documento.'
                 : null),
           })),
@@ -2231,38 +2314,6 @@ function EditSaleDialog({
                         }
                         disabled={!canReceipts || preparing || uploadBusy}
                         key={receipt.id}
-                        onAutoValueFound={async (value) => {
-                          if (
-                            !canReceipts ||
-                            deletedReceiptIds.current.has(receipt.id)
-                          )
-                            return;
-                          await requestJson(
-                            `/api/sales/${sale.id}/receipt-values`,
-                            {
-                              method: 'PATCH',
-                              headers: {
-                                'content-type': 'application/json',
-                                'x-csrf-token': data.csrfToken,
-                              },
-                              body: JSON.stringify({
-                                onlyIfPending: true,
-                                operationId: createOperationId(),
-                                receipts: [{ id: receipt.id, ...value }],
-                              }),
-                            },
-                          );
-                          await onChanged();
-                        }}
-                        onValueChange={(value) => {
-                          if (deletedReceiptIds.current.has(receipt.id)) return;
-                          dirtyReceiptIds.current.add(receipt.id);
-                          setDirtyReceipts(new Set(dirtyReceiptIds.current));
-                          setSavedReceiptValues((current) => ({
-                            ...current,
-                            [receipt.id]: value,
-                          }));
-                        }}
                         receipt={receipt}
                         value={
                           savedReceiptValues[receipt.id] ?? {
@@ -2288,18 +2339,6 @@ function EditSaleDialog({
                       className="mt-3"
                       disabled={preparing || uploadBusy}
                       files={receiptFiles}
-                      onValueChange={(index, value) =>
-                        setReceiptValues((current) =>
-                          receiptFiles.map((_, candidateIndex) =>
-                            candidateIndex === index
-                              ? value
-                              : (current[candidateIndex] ?? {
-                                  amountCents: null,
-                                  source: null,
-                                }),
-                          ),
-                        )
-                      }
                       showSummary={false}
                       targetCents={draftPixCents}
                       values={receiptValues}
@@ -2640,8 +2679,8 @@ function EditSaleDialog({
                             form.append(`itemPhotos:${itemId}`, file),
                           );
                         });
-                        const attachmentResult = await requestJson<{
-                          receipts: ReceiptOcrAttachment[];
+                        await requestJson<{
+                          receipts: AttachmentRecord[];
                           replayed?: boolean;
                         }>(`/api/sales/${sale.id}/attachments`, {
                           method: 'POST',
@@ -2649,19 +2688,6 @@ function EditSaleDialog({
                           body: form,
                         });
                         window.dispatchEvent(new Event('pdv:receipts-saved'));
-                        if (!data.serverReceiptOcr)
-                          void enqueueReceiptOcrJobs({
-                            userId: data.user.id,
-                            attachments: attachmentResult.receipts ?? [],
-                            files: attachmentResult.replayed
-                              ? undefined
-                              : receiptFiles,
-                            receiptValues: attachmentResult.replayed
-                              ? undefined
-                              : receiptValues,
-                            saleId: sale.id,
-                            storeId: data.store.id,
-                          }).catch(() => {});
                         attachmentsSaved = true;
                       }
                       await onChanged();
@@ -3020,6 +3046,10 @@ function SaleReport({
                   </section>
                 }
                 <ReceiptPaymentDetails
+                  financiallyReconciled={
+                    sale.reconciliation.status === 'reconciled' &&
+                    sale.receivedDifferenceCents === 0
+                  }
                   receipts={sale.receipts}
                   required={sale.reconciliation.status !== 'not_required'}
                 />
@@ -3745,6 +3775,11 @@ function SalesPeriodReport({
                                       )
                                     )}
                                     <ReceiptPaymentDetails
+                                      financiallyReconciled={
+                                        sale.reconciliation.status ===
+                                          'reconciled' &&
+                                        sale.receivedDifferenceCents === 0
+                                      }
                                       receipts={sale.receipts}
                                       required={
                                         sale.reconciliation.status !==
@@ -3777,11 +3812,11 @@ function SalesPeriodReport({
                                       <p className="font-extrabold">
                                         {sale.reconciliation.status ===
                                         'reconciled'
-                                            ? 'Comprovantes conferem com o Pix'
-                                            : sale.reconciliation.status ===
-                                                'divergent'
-                                              ? 'Comprovantes não conferem'
-                                              : 'Conciliação pendente'}
+                                          ? 'Comprovantes conferem com o Pix'
+                                          : sale.reconciliation.status ===
+                                              'divergent'
+                                            ? 'Comprovantes não conferem'
+                                            : 'Conciliação pendente'}
                                       </p>
                                       <p>
                                         Comprovantes:{' '}

@@ -419,10 +419,12 @@ adapter.database
     'Confira o documento: pagamento não confirmado ou leitura ambígua.',
   );
 await db.batch([cleanupResolvedReceiptReviews(db, 'shop', 'sale')]);
-assert.ok(
+assert.equal(
   adapter.database
     .prepare('SELECT receipt_review_reason AS reason FROM attachments')
     .get()!.reason,
+  null,
+  'A falta de frase de conclusão é apenas informativa quando o valor é elegível',
 );
 
 // Revision changes when a row changes beneath unchanged COUNT/MAX aggregates,

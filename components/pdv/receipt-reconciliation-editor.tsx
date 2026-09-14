@@ -28,8 +28,10 @@ import {
   useReceiptRuntime,
   type ServerReceiptJob,
 } from '@/components/pdv/server-receipt-runtime';
+import { ReceiptReadingNotices } from '@/components/pdv/receipt-reading-notices';
 
 type AnalysisState = {
+  amountCents?: number;
   message: string;
   progress: number;
   status: 'reading' | 'found' | 'missing' | 'error';
@@ -40,7 +42,6 @@ export function ReceiptReconciliationEditor({
   className,
   disabled = false,
   files,
-  onValueChange,
   showSummary = true,
   targetCents,
   values,
@@ -49,7 +50,6 @@ export function ReceiptReconciliationEditor({
   className?: string;
   disabled?: boolean;
   files: File[];
-  onValueChange: (index: number, value: ReceiptValueInput) => void;
   showSummary?: boolean;
   targetCents: number;
   values: ReceiptValueInput[];
@@ -58,14 +58,10 @@ export function ReceiptReconciliationEditor({
   const [analysis, setAnalysis] = useState<Record<string, AnalysisState>>({});
   const processedRef = useRef(new Set<string>());
   const filesRef = useRef(files);
-  const onValueChangeRef = useRef(onValueChange);
-  const valuesRef = useRef(values);
 
   useEffect(() => {
     filesRef.current = files;
-    onValueChangeRef.current = onValueChange;
-    valuesRef.current = values;
-  }, [files, onValueChange, values]);
+  }, [files]);
 
   useEffect(() => {
     if (serverReading) return;
@@ -109,17 +105,13 @@ export function ReceiptReconciliationEditor({
         .then((suggestion) => {
           const currentFile = filesRef.current[index];
           if (!currentFile || fileKey(currentFile) !== key) return;
-          if (suggestion && !valuesRef.current[index]?.amountCents) {
-            onValueChangeRef.current(index, {
-              amountCents: suggestion.amountCents,
-              source: 'ocr',
-            });
-          }
           setAnalysis((current) => ({
             ...current,
             [key]: suggestion
               ? {
-                  message: 'Valor encontrado. Confira antes de continuar.',
+                  amountCents: suggestion.amountCents,
+                  message:
+                    'Valor sugerido neste aparelho. Ele ainda não foi contabilizado como pagamento.',
                   progress: 1,
                   status: 'found',
                 }
@@ -171,7 +163,7 @@ export function ReceiptReconciliationEditor({
           <p className="text-xs text-muted-foreground">
             {serverReading
               ? 'Salve a venda normalmente. A leitura será feita no servidor após o envio, mesmo com o aplicativo fechado. Se necessário, você poderá solicitar uma nova leitura.'
-              : 'A leitura acontece neste aparelho e o valor encontrado é salvo automaticamente.'}
+              : 'A leitura neste aparelho gera apenas uma sugestão. O pagamento continua pendente até uma leitura segura no servidor.'}
           </p>
         </div>
       </div>
@@ -184,8 +176,9 @@ export function ReceiptReconciliationEditor({
               ? {
                   message:
                     values[index]?.source === 'ocr'
-                      ? 'Valor lido. Confira antes de continuar.'
+                      ? 'Valor lido e aguardando validação segura.'
                       : 'Valor anterior registrado.',
+                  amountCents: values[index]?.amountCents ?? undefined,
                   progress: 1,
                   status: 'found' as const,
                 }
@@ -221,9 +214,23 @@ export function ReceiptReconciliationEditor({
                     ? 'Pronto para enviar. Leitura automática após salvar.'
                     : 'Aguardando leitura…')}
               </p>
-              {(values[index]?.amountCents ?? null) !== null && (
-                <output className="mt-2 block text-right text-sm font-extrabold text-emerald-700 dark:text-emerald-300">
-                  Valor identificado: {formatMoney(values[index]!.amountCents!)}
+              {(state?.amountCents ?? values[index]?.amountCents ?? null) !==
+                null && (
+                <output
+                  className={cn(
+                    'mt-2 block text-right text-sm font-extrabold',
+                    state?.amountCents && !values[index]?.amountCents
+                      ? 'text-amber-700 dark:text-amber-300'
+                      : 'text-emerald-700 dark:text-emerald-300',
+                  )}
+                >
+                  {state?.amountCents && !values[index]?.amountCents
+                    ? 'Valor sugerido'
+                    : 'Valor identificado'}
+                  :{' '}
+                  {formatMoney(
+                    state?.amountCents ?? values[index]!.amountCents!,
+                  )}
                 </output>
               )}
             </div>
@@ -298,8 +305,6 @@ export function ReconciliationSummary({
 
 export function SavedReceiptValueEditor({
   disabled = false,
-  onAutoValueFound,
-  onValueChange,
   receipt,
   value,
   serverJob,
@@ -307,8 +312,6 @@ export function SavedReceiptValueEditor({
   receiptAction,
 }: {
   disabled?: boolean;
-  onAutoValueFound?: (value: ReceiptValueInput) => Promise<void>;
-  onValueChange: (value: ReceiptValueInput) => void;
   receipt: ReceiptAttachmentRecord;
   value: ReceiptValueInput;
   serverJob?: ServerReceiptJob;
@@ -317,13 +320,13 @@ export function SavedReceiptValueEditor({
 }) {
   const { enabled: serverReading } = useReceiptRuntime();
   const [state, setState] = useState<AnalysisState | null>(null);
+  const [localSuggestionCents, setLocalSuggestionCents] = useState<
+    number | null
+  >(null);
   const mountedRef = useRef(false);
-  const onAutoValueFoundRef = useRef(onAutoValueFound);
-  const onValueChangeRef = useRef(onValueChange);
   const readingReceiptRef = useRef<string | null>(null);
   const receiptIdentity = `${receipt.id}:${receipt.url}`;
   const receiptIdentityRef = useRef(receiptIdentity);
-  const valueRef = useRef(value);
   const reading = state?.status === 'reading';
   const [confirmReread, setConfirmReread] = useState(false);
   const [requestingReread, setRequestingReread] = useState(false);
@@ -336,11 +339,8 @@ export function SavedReceiptValueEditor({
   }, []);
 
   useEffect(() => {
-    onAutoValueFoundRef.current = onAutoValueFound;
-    onValueChangeRef.current = onValueChange;
     receiptIdentityRef.current = receiptIdentity;
-    valueRef.current = value;
-  }, [onAutoValueFound, onValueChange, receiptIdentity, value]);
+  }, [receiptIdentity]);
 
   const readSavedReceipt = useCallback(async () => {
     if (readingReceiptRef.current === receiptIdentity) return;
@@ -394,31 +394,7 @@ export function SavedReceiptValueEditor({
         return;
       }
 
-      const nextValue: ReceiptValueInput = {
-        amountCents: suggestion.amountCents,
-        source: 'ocr',
-      };
-      valueRef.current = nextValue;
-      onValueChangeRef.current(nextValue);
-
-      const persistAutomatically = onAutoValueFoundRef.current;
-      if (persistAutomatically) {
-        try {
-          await persistAutomatically(nextValue);
-        } catch {
-          if (
-            mountedRef.current &&
-            receiptIdentityRef.current === receiptIdentity
-          ) {
-            setState({
-              message: 'Valor encontrado. Salve as alterações para confirmar.',
-              progress: 1,
-              status: 'found',
-            });
-          }
-          return;
-        }
-      }
+      setLocalSuggestionCents(suggestion.amountCents);
 
       if (
         !mountedRef.current ||
@@ -427,9 +403,9 @@ export function SavedReceiptValueEditor({
         return;
       }
       setState({
-        message: persistAutomatically
-          ? 'Valor encontrado e salvo.'
-          : 'Valor encontrado. Confira antes de salvar.',
+        amountCents: suggestion.amountCents,
+        message:
+          'Valor sugerido neste aparelho. Ele não foi contabilizado como pagamento.',
         progress: 1,
         status: 'found',
       });
@@ -515,11 +491,13 @@ export function SavedReceiptValueEditor({
             </div>
           </div>
         )}
-        {receipt.receiptReviewReason && (
-          <p role="alert" className="mt-2 text-sm text-amber-800">
-            {receipt.receiptReviewReason}
-          </p>
-        )}
+        <ReceiptReadingNotices
+          receipt={{
+            ...receipt,
+            receiptAmountCents: value.amountCents,
+            receiptOcrStatus: serverJob?.status ?? receipt.receiptOcrStatus,
+          }}
+        />
         <output className="mt-1 block text-xs text-muted-foreground">
           {value.amountCents !== null
             ? value.source === 'manual'
@@ -581,9 +559,20 @@ export function SavedReceiptValueEditor({
           {state.message}
         </p>
       )}
-      {value.amountCents !== null && (
-        <output className="mt-2 block text-right text-sm font-extrabold text-emerald-700 dark:text-emerald-300">
-          Valor identificado: {formatMoney(value.amountCents)}
+      <ReceiptReadingNotices
+        receipt={{ ...receipt, receiptAmountCents: value.amountCents }}
+      />
+      {(value.amountCents ?? localSuggestionCents) !== null && (
+        <output
+          className={cn(
+            'mt-2 block text-right text-sm font-extrabold',
+            value.amountCents !== null
+              ? 'text-emerald-700 dark:text-emerald-300'
+              : 'text-amber-700 dark:text-amber-300',
+          )}
+        >
+          {value.amountCents !== null ? 'Valor identificado' : 'Valor sugerido'}:{' '}
+          {formatMoney(value.amountCents ?? localSuggestionCents!)}
         </output>
       )}
     </div>

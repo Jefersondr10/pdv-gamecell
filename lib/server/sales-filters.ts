@@ -11,6 +11,51 @@ import { SALE_ISSUES } from '../sale-display-status.ts';
 import { SALE_ISSUE_SQL } from './sale-status-sql.ts';
 export { SALE_ALERT_SQL, SALE_RECONCILED_SQL } from './sale-status-sql.ts';
 
+export function salesAggregateSql(
+  filterSql: string,
+  filteredToAlerts = false,
+) {
+  const alertCountSql = filteredToAlerts
+    ? `COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0)`
+    : `COALESCE(SUM(CASE WHEN s.status = 'completed' AND ${SALE_ALERT_SQL} THEN 1 ELSE 0 END), 0)`;
+  return `SELECT COUNT(*) AS total,
+                 COALESCE(SUM(CASE WHEN s.status = 'completed'
+                   THEN 1 ELSE 0 END), 0) AS saleCount,
+                 COALESCE(SUM(CASE WHEN s.status = 'completed'
+                   THEN s.products_total_cents ELSE 0 END), 0) AS amountCents,
+                 COALESCE(SUM(CASE WHEN s.status = 'completed' THEN (
+                   SELECT COUNT(*) FROM sale_items aggregate_item
+                   WHERE aggregate_item.sale_id = s.id
+                     AND aggregate_item.store_id = s.store_id
+                 ) ELSE 0 END), 0) AS itemCount,
+                 ${alertCountSql} AS alertCount
+          FROM sales s WHERE ${filterSql}`;
+}
+
+export function salesAggregateQueries(
+  filterSql: string,
+  bindings: Array<string | number>,
+  comparison: {
+    bindings: Array<string | number>;
+    filterSql: string;
+  } | null,
+  filteredToAlerts = false,
+) {
+  const queries = [
+    {
+      bindings,
+      sql: salesAggregateSql(filterSql, filteredToAlerts),
+    },
+  ];
+  if (comparison) {
+    queries.push({
+      bindings: comparison.bindings,
+      sql: salesAggregateSql(comparison.filterSql, filteredToAlerts),
+    });
+  }
+  return queries;
+}
+
 export type SalesPeriod =
   | 'today'
   | 'yesterday'

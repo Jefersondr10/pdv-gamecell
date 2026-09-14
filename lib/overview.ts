@@ -83,6 +83,27 @@ export function overviewSaleComparison(
   return 'matched';
 }
 
+export function overviewReceiptFinanciallyReconciled(
+  sale: Pick<
+    OverviewSale,
+    | 'receiptCount'
+    | 'pendingCount'
+    | 'receiptReviewCount'
+    | 'receiptCents'
+    | 'pixCents'
+    | 'receivedCents'
+    | 'saleCents'
+  >,
+) {
+  return (
+    sale.receiptCount > 0 &&
+    sale.pendingCount === 0 &&
+    (sale.receiptReviewCount ?? 0) === 0 &&
+    sale.receiptCents === sale.pixCents &&
+    sale.receivedCents === sale.saleCents
+  );
+}
+
 // Equal aggregate sums can conceal opposite differences in individual sales.
 export function overviewComparison(totals: OverviewTotals) {
   if (!totals.saleCount) return 'empty';

@@ -3,11 +3,14 @@ import {
   receiptTransactionDisplay,
   shortReceiptDate,
 } from '@/lib/receipt-document';
+import { ReceiptReadingNotices } from '@/components/pdv/receipt-reading-notices';
 
 export function ReceiptPaymentDetails({
+  financiallyReconciled = false,
   receipts,
   required = true,
 }: {
+  financiallyReconciled?: boolean;
   receipts: ReceiptAttachmentRecord[];
   required?: boolean;
 }) {
@@ -115,11 +118,10 @@ export function ReceiptPaymentDetails({
               </p>
             </div>
           )}
-          {receipt.receiptReviewReason && (
-            <p role="alert" className="mt-2 font-semibold text-amber-800">
-              {receipt.receiptReviewReason}
-            </p>
-          )}
+          <ReceiptReadingNotices
+            financiallyReconciled={financiallyReconciled}
+            receipt={receipt}
+          />
         </section>
       ))}
     </div>

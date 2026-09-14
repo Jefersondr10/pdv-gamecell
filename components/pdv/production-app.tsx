@@ -68,10 +68,6 @@ import {
 } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { messageOf, requestJson } from '@/lib/client-api';
-import {
-  activateReceiptOcrQueue,
-  enqueueReceiptOcrJobs,
-} from '@/lib/client-receipt-background';
 import { displayCommercialCode } from '@/lib/commercial-code';
 import type { BootstrapData } from '@/lib/pdv-types';
 import { ServerReceiptProvider } from '@/components/pdv/server-receipt-runtime';
@@ -515,21 +511,6 @@ function CloudPdv({
   }, [reload]);
 
   useEffect(() => {
-    if (
-      !data?.store.id ||
-      !data.csrfToken ||
-      data.serverReceiptOcr ||
-      !can(data.user, 'sales.receipts')
-    )
-      return;
-    return activateReceiptOcrQueue({
-      userId: data.user.id,
-      storeId: data.store.id,
-      csrfToken: data.csrfToken,
-    });
-  }, [data?.csrfToken, data?.store.id, data?.serverReceiptOcr, data?.user]);
-
-  useEffect(() => {
     if (!data?.systemCatalog.updateAvailable) return;
     const version = data.systemCatalog.currentVersion;
     if (catalogSyncRef.current === version) return;
@@ -775,7 +756,7 @@ function CloudPdv({
       ),
     );
     sale.receipts.forEach((receipt) => form.append('receipts', receipt));
-    const result = await submitRecoverableOperation(
+    await submitRecoverableOperation(
       {
         storeId: data!.store.id,
         userId: data!.user.id,
@@ -786,15 +767,6 @@ function CloudPdv({
       `${sale.customer} · ${sale.items.length} aparelho(s)`,
       form,
     );
-    if (!data!.serverReceiptOcr)
-      void enqueueReceiptOcrJobs({
-        userId: data!.user.id,
-        storeId: data!.store.id,
-        saleId: result.id,
-        attachments: result.receipts ?? [],
-        files: undefined,
-        receiptValues: undefined,
-      }).catch(() => {});
     window.dispatchEvent(new Event('pdv:receipts-saved'));
     void reload(true);
   };
@@ -1073,7 +1045,17 @@ function CloudPdv({
               />
             )}
             {displayedView === 'entries' && (
-              <EntryHistoryView key={`entries-${run}`} />
+              <EntryHistoryView
+                key={`entries-${run}`}
+                onOpenSale={
+                  can(data.user, 'sales')
+                    ? (saleId) => {
+                        setSaleToOpen(saleId);
+                        changeView('sales');
+                      }
+                    : undefined
+                }
+              />
             )}
             {displayedView === 'overview' && (
               <OverviewProductionView
@@ -1873,13 +1855,14 @@ function GuideDialog({
           <GuideStep number="Novo" title="Comprovantes: conferir os pagamentos">
             No menu da loja, abra Comprovantes e escolha o período pela data da
             venda. O Pix vem dos comprovantes e é somado ao dinheiro recebido,
-            separados por venda. Toque em um arquivo para abrir a foto ou PDF,
-            passe para o próximo ou abra a venda para corrigir dados. Valores
-            ainda não identificados ficam pendentes; anexos só são carregados ao
-            abrir. Vendas canceladas não entram. Pagamentos em dinheiro são
-            informados e conferidos manualmente, fora da comparação dos
-            comprovantes. Esta conferência é documental: não confirma crédito na
-            conta bancária.
+            separados por venda. Um valor único e válido atualiza o recebido
+            automaticamente; dados como banco, pagador, recebedor, data ou ID que
+            não forem lidos aparecem como avisos separados, sem zerar o valor.
+            Agendamento, cancelamento, processamento, valores ambíguos e
+            duplicidade conhecida continuam exigindo conferência. Toque em um
+            arquivo para abrir a foto ou PDF, ou use Reler comprovante. Pagamentos
+            em dinheiro são informados e conferidos manualmente. Esta conferência
+            é documental: não confirma crédito na conta bancária.
           </GuideStep>
           <GuideStep number="Novo" title="iPhone 15 e cores revisadas">
             O catálogo padrão inclui agora o iPhone 15 base, com cinco cores e
@@ -1906,7 +1889,7 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="1" title="Cadastre a base">
             Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
-            UPCs, EANs, JANs e contas Pix. O catálogo padrão do sistema já traz
+            UPCs, EANs e JANs. O catálogo padrão do sistema já traz
             o iPhone 15 base, o iPhone 16 (exceto o Pro Max) e toda a linha
             iPhone 17, com códigos verificados dos Estados Unidos, Japão e
             referências regionais adicionais. Códigos de outros mercados podem
@@ -1923,10 +1906,10 @@ function GuideDialog({
             Pesquise ou cadastre o cliente, bipe um ou mais SNs, adicione fotos,
             confira ou altere o preço e anexe ou pule o comprovante. Na versão
             de produção, após salvar o envio, o servidor lê o comprovante sem
-            depender do celular aberto. O resultado atualiza a venda e pode ser
-            corrigido manualmente. Um arquivo sem valor identificado fica para
-            conferência. Também é possível salvar sem informar pagamento e
-            completar depois. A conferência de valores não prova que a
+            depender do celular aberto. O Pix identificado atualiza a venda; só
+            o dinheiro é informado manualmente. Um arquivo sem valor identificado
+            fica para conferência. Também é possível salvar sem comprovante e
+            anexar ou reler depois. A conferência de valores não prova que a
             transferência bancária foi efetivada.
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
@@ -1940,8 +1923,11 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="5" title="Relatórios e histórico">
             O estoque abre somente com variações disponíveis. Nos detalhes,
-            alterne entre SNs disponíveis e vendidos; um SN vendido abre sua
-            venda. O relatório ignora estoque zerado. Em Vendas, o botão
+            alterne entre SNs disponíveis e vendidos e use o ícone para copiar o
+            SN. Ao pesquisar um SN em Vendas ou no Histórico de entradas, toque
+            no resultado para ver toda a linha do tempo: entrada, vendas,
+            cancelamentos e revendas, com acesso aos detalhes. O relatório ignora
+            estoque zerado. Em Vendas, o botão
             Relatório de vendas baixa o período filtrado nos formatos
             simplificado, detalhado ou completo, separa os resultados por dia e
             destaca o total diário; cada venda também mantém seu próprio PDF. O
@@ -1951,14 +1937,12 @@ function GuideDialog({
             number="6"
             title="Pagamento, status e anexos depois da venda"
           >
-            Em Vendas, toque em Editar e depois em Alterar no pagamento para
-            corrigir o valor, a forma ou a conta Pix, inclusive em vendas
-            quitadas. As correções ficam no histórico e o saldo é recalculado.
-            Você também pode completar o pagamento, dividir o saldo em mais de
-            uma forma, mudar o status do pedido, conferir comprovantes ou
-            acrescentar fotos ao SN correto. Com permissão, use Editar preços
-            nos detalhes para corrigir os valores vendidos. Produtos e SNs
-            permanecem protegidos, e as alterações de preço ficam no histórico.
+            Em Vendas, toque em Editar para acrescentar dinheiro recebido,
+            anexar ou reler comprovantes, mudar o acompanhamento do pedido ou
+            acrescentar fotos ao SN correto. O Pix vem da leitura dos
+            comprovantes. Com permissão, use Editar preços nos detalhes para
+            corrigir os valores vendidos. Produtos e SNs permanecem protegidos,
+            e as alterações ficam no histórico.
           </GuideStep>
           <GuideStep number="7" title="Usuários e lojas">
             Cada loja é isolada. O proprietário cria funcionários e senhas;

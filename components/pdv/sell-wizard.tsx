@@ -910,18 +910,6 @@ export function SellWizard({
           receiptError={receiptError}
           receiptValues={receiptValues}
           targetCents={Math.max(0, total - paid)}
-          onReceiptValueChange={(index, value) =>
-            setReceiptValues((current) =>
-              receiptFiles.map((_, candidateIndex) =>
-                candidateIndex === index
-                  ? value
-                  : (current[candidateIndex] ?? {
-                      amountCents: null,
-                      source: null,
-                    }),
-              ),
-            )
-          }
         />
       )}
 
@@ -1825,7 +1813,6 @@ function ReceiptStage({
   onClear,
   onSkip,
   onNext,
-  onReceiptValueChange,
 }: {
   cashCents: number;
   files: File[];
@@ -1840,7 +1827,6 @@ function ReceiptStage({
   onClear: () => void;
   onSkip: () => void;
   onNext: () => void;
-  onReceiptValueChange: (index: number, value: ReceiptValueInput) => void;
 }) {
   return (
     <Card className={STAGE_CARD_CLASS}>
@@ -1930,7 +1916,6 @@ function ReceiptStage({
           className="mt-3 max-w-xl"
           disabled={preparing}
           files={files}
-          onValueChange={onReceiptValueChange}
           targetCents={targetCents}
           values={receiptValues}
         />

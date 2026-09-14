@@ -42,7 +42,10 @@ import {
 } from '@/lib/server/sale-status-sql';
 import { saleReceiptIncome } from '@/lib/receipt-income';
 import { parseReceiptDocument } from '@/lib/receipt-document';
-import { parseSalesFilters, SALE_ALERT_SQL } from '@/lib/server/sales-filters';
+import {
+  parseSalesFilters,
+  salesAggregateQueries,
+} from '@/lib/server/sales-filters';
 import {
   isValidAppleSerial,
   normalizeAppleSerial,
@@ -120,10 +123,6 @@ type SalesAggregateRow = {
   saleCount: number;
   itemCount: number;
   alertCount: number;
-  previousAmountCents?: number | null;
-  previousSaleCount?: number | null;
-  previousItemCount?: number | null;
-  previousAlertCount?: number | null;
 };
 
 export const dynamic = 'force-dynamic';
@@ -155,7 +154,10 @@ export async function GET(request: Request) {
       grouping === 'all'
         ? grouping
         : 'sale';
-    const { bindings, comparison, where } = parseSalesFilters(url, storeId);
+    const { alertOnly, bindings, comparison, where } = parseSalesFilters(
+      url,
+      storeId,
+    );
     const filterSql = where.join(' AND ');
     const db = runtime().DB;
     await consumeStoreReadBudget(
@@ -164,7 +166,7 @@ export async function GET(request: Request) {
       storeId,
       group === 'sale' ? 10 : group === 'all' ? 16 : 12,
     );
-    const aggregateStatement = salesAggregateStatement(
+    const aggregateStatements = salesAggregateStatements(
       db,
       filterSql,
       bindings,
@@ -174,25 +176,30 @@ export async function GET(request: Request) {
             filterSql: comparison.where.join(' AND '),
           }
         : null,
+      alertOnly,
     );
 
     if (group === 'all') {
       const results = await db.batch([
-        aggregateStatement,
+        ...aggregateStatements,
         salesGroupStatement(db, 'model', filterSql, bindings),
         salesGroupStatement(db, 'customer', filterSql, bindings),
         salesGroupStatement(db, 'seller', filterSql, bindings),
       ]);
       const aggregate = firstRow<SalesAggregateRow>(results[0]);
+      const previousAggregate = comparison
+        ? firstRow<SalesAggregateRow>(results[1])
+        : null;
+      const groupOffset = aggregateStatements.length;
       return json({
         groups: {
-          model: numericSalesGroups(results[1]),
-          customer: numericSalesGroups(results[2]),
-          seller: numericSalesGroups(results[3]),
+          model: numericSalesGroups(results[groupOffset]),
+          customer: numericSalesGroups(results[groupOffset + 1]),
+          seller: numericSalesGroups(results[groupOffset + 2]),
         },
         total: Number(aggregate?.total ?? 0),
         aggregates: numericSalesAggregates(aggregate),
-        comparison: salesComparison(comparison, aggregate),
+        comparison: salesComparison(comparison, previousAggregate),
       } satisfies SalesAnalytics);
     }
 
@@ -203,15 +210,21 @@ export async function GET(request: Request) {
         filterSql,
         bindings,
       );
-      const results = await db.batch([aggregateStatement, groupStatement]);
+      const results = await db.batch([
+        ...aggregateStatements,
+        groupStatement,
+      ]);
       const aggregate = firstRow<SalesAggregateRow>(results[0]);
+      const previousAggregate = comparison
+        ? firstRow<SalesAggregateRow>(results[1])
+        : null;
       return json({
         items: [],
-        groups: numericSalesGroups(results[1]),
+        groups: numericSalesGroups(results[aggregateStatements.length]),
         nextCursor: null,
         total: Number(aggregate?.total ?? 0),
         aggregates: numericSalesAggregates(aggregate),
-        comparison: salesComparison(comparison, aggregate),
+        comparison: salesComparison(comparison, previousAggregate),
       } satisfies SalesPage);
     }
 
@@ -251,9 +264,17 @@ export async function GET(request: Request) {
          ORDER BY s.created_at DESC, s.id DESC LIMIT ?`,
       )
       .bind(...pageBindings, pageSize + 1);
-    const baseResults = await db.batch([aggregateStatement, listStatement]);
+    const baseResults = await db.batch([
+      ...aggregateStatements,
+      listStatement,
+    ]);
     const aggregate = firstRow<SalesAggregateRow>(baseResults[0]);
-    const listed = resultRows<SaleListRow>(baseResults[1]);
+    const previousAggregate = comparison
+      ? firstRow<SalesAggregateRow>(baseResults[1])
+      : null;
+    const listed = resultRows<SaleListRow>(
+      baseResults[aggregateStatements.length],
+    );
     const hasMore = listed.length > pageSize;
     const visible = listed.slice(0, pageSize);
     const ids = visible.map((sale) => sale.id);
@@ -276,7 +297,7 @@ export async function GET(request: Request) {
         hasMore && last ? encodeCursor(last.createdAt, last.id) : null,
       total: Number(aggregate?.total ?? 0),
       aggregates: numericSalesAggregates(aggregate),
-      comparison: salesComparison(comparison, aggregate),
+      comparison: salesComparison(comparison, previousAggregate),
     } satisfies SalesPage;
     if (!can(session, 'sales')) {
       return json({
@@ -1822,7 +1843,10 @@ function attachmentRecord(
   };
 }
 
-function salesAggregateStatement(
+// D1 limits each SQL statement independently. Keep current and comparison
+// aggregates as separate statements in the same atomic batch rather than
+// concatenating both expanded status predicates into one oversized CTE.
+function salesAggregateStatements(
   db: D1Database,
   filterSql: string,
   bindings: Array<string | number>,
@@ -1830,37 +1854,14 @@ function salesAggregateStatement(
     bindings: Array<string | number>;
     filterSql: string;
   } | null,
+  filteredToAlerts: boolean,
 ) {
-  const currentSql = salesAggregateSql(filterSql);
-  if (!comparison) return db.prepare(currentSql).bind(...bindings);
-  return db
-    .prepare(
-      `WITH current_period AS (${currentSql}),
-            previous_period AS (${salesAggregateSql(comparison.filterSql)})
-       SELECT current_period.*,
-              previous_period.amountCents AS previousAmountCents,
-              previous_period.saleCount AS previousSaleCount,
-              previous_period.itemCount AS previousItemCount,
-              previous_period.alertCount AS previousAlertCount
-       FROM current_period CROSS JOIN previous_period`,
-    )
-    .bind(...bindings, ...comparison.bindings);
-}
-
-function salesAggregateSql(filterSql: string) {
-  return `SELECT COUNT(*) AS total,
-                 COALESCE(SUM(CASE WHEN s.status = 'completed'
-                   THEN 1 ELSE 0 END), 0) AS saleCount,
-                 COALESCE(SUM(CASE WHEN s.status = 'completed'
-                   THEN s.products_total_cents ELSE 0 END), 0) AS amountCents,
-                 COALESCE(SUM(CASE WHEN s.status = 'completed' THEN (
-                   SELECT COUNT(*) FROM sale_items aggregate_item
-                   WHERE aggregate_item.sale_id = s.id
-                     AND aggregate_item.store_id = s.store_id
-                 ) ELSE 0 END), 0) AS itemCount,
-                 COALESCE(SUM(CASE WHEN s.status = 'completed'
-                   AND ${SALE_ALERT_SQL} THEN 1 ELSE 0 END), 0) AS alertCount
-          FROM sales s WHERE ${filterSql}`;
+  return salesAggregateQueries(
+    filterSql,
+    bindings,
+    comparison,
+    filteredToAlerts,
+  ).map((query) => db.prepare(query.sql).bind(...query.bindings));
 }
 
 function salesGroupStatement(
@@ -1978,12 +1979,7 @@ function salesComparison(
   if (!comparison) return null;
   return {
     label: comparison.label,
-    aggregates: numericSalesAggregates({
-      amountCents: Number(value?.previousAmountCents ?? 0),
-      saleCount: Number(value?.previousSaleCount ?? 0),
-      itemCount: Number(value?.previousItemCount ?? 0),
-      alertCount: Number(value?.previousAlertCount ?? 0),
-    }),
+    aggregates: numericSalesAggregates(value),
   };
 }
 

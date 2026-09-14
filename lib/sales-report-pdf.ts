@@ -10,6 +10,7 @@ import {
   shortReceiptDate,
 } from './receipt-document.ts';
 import { summarizeSalesPayments } from './sales-payment-summary.ts';
+import { splitReceiptReadingNotices } from './receipt-reading-notices.ts';
 import { reportCard, reportColors, reportTones } from './report-pdf-theme.ts';
 import type { RGB } from 'pdf-lib';
 
@@ -584,13 +585,29 @@ function saleDetails(
           `${transaction.label}: ${transaction.value || 'Não identificado'}`,
           { size: 8, muted: true },
         );
-      } else
-        layout.paragraph(
-          'Dados bancários não identificados. Use Reler comprovante em Editar venda.',
-          { size: 9, muted: true },
-        );
-      if (receipt.receiptReviewReason)
-        layout.paragraph(receipt.receiptReviewReason, { size: 9, bold: true });
+      }
+      const notices = splitReceiptReadingNotices(receipt);
+      if (notices.blocking.length) {
+        layout.paragraph('Conferência necessária', { size: 9, bold: true });
+        for (const notice of notices.blocking)
+          layout.paragraph(`- ${notice.label}`, { size: 8 });
+      }
+      if (notices.progress.length)
+        for (const notice of notices.progress)
+          layout.paragraph(notice.label, { size: 8, muted: true });
+      if (notices.informational.length) {
+        if (
+          sale.reconciliation.status === 'reconciled' &&
+          income.receivedDifferenceCents === 0
+        )
+          layout.paragraph(
+            'Valor conciliado; os dados abaixo são somente informativos.',
+            { size: 8, bold: true },
+          );
+        layout.paragraph('Dados não identificados', { size: 8, bold: true });
+        for (const notice of notices.informational)
+          layout.paragraph(`- ${notice.label}`, { size: 8, muted: true });
+      }
       layout.y += 6;
     }
   }

@@ -227,10 +227,50 @@ try {
     JSON.stringify([{ amountCents: 12300, source: 'ocr' }]),
   );
   late.append('receipts', photo('late-receipt'), 'late-receipt.png');
-  await call('/api/sales/' + zero.id + '/attachments', {
+  const lateUpload = await call('/api/sales/' + zero.id + '/attachments', {
     method: 'POST',
     form: late,
   });
+  const browserSuggestion = await call(
+    '/api/sales/' + zero.id + '/receipt-values',
+    {
+      method: 'PATCH',
+      json: {
+        operationId: crypto.randomUUID(),
+        onlyIfPending: true,
+        receipts: [
+          {
+            id: lateUpload.receipts[0].id,
+            amountCents: 710000,
+            source: 'ocr',
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(
+    browserSuggestion.updatedCount,
+    0,
+    'an amount-only browser suggestion cannot become payment evidence',
+  );
+  const forgedAutomatic = await call(
+    '/api/sales/' + zero.id + '/receipt-values',
+    {
+      method: 'PATCH',
+      status: 400,
+      json: {
+        operationId: crypto.randomUUID(),
+        receipts: [
+          {
+            id: lateUpload.receipts[0].id,
+            amountCents: 710000,
+            source: 'ocr',
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(forgedAutomatic.code, 'UNTRUSTED_CLIENT_OCR');
   assert.equal(
     (await list(zero.id)).receivedTotalCents,
     0,

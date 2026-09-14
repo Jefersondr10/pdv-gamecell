@@ -4,8 +4,8 @@ import {
   canAny,
   type Permission,
   type PermissionSubject,
-} from '@/lib/permissions';
-import { HttpError } from '@/lib/server/http';
+} from '../permissions.ts';
+import { HttpError } from './http.ts';
 
 export function assertPermission(
   subject: PermissionSubject,
@@ -94,6 +94,7 @@ export function routePermissions(request: Request): Permission[] | null {
   if (path === '/api/receipt-ocr/status') return ['sales', 'overview', 'sell'];
   if (path === '/api/receipt-ocr/legacy-review') return ['sales.receipts'];
   if (path === '/api/entries') return [read ? 'entries' : 'entry'];
+  if (path === '/api/inventory/history') return ['entries', 'sales'];
   if (path === '/api/inventory') return ['stock'];
   if (path === '/api/inventory/lookup') return ['sell', 'entry', 'stock'];
   if (path === '/api/rankings') return ['ranking'];

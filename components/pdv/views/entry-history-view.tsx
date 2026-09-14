@@ -16,6 +16,7 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { SerialHistoryDialog } from '@/components/pdv/serial-history-dialog';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import {
   Dialog,
@@ -28,11 +29,17 @@ import { Input } from '@/components/ui/input';
 import { messageOf, requestJson } from '@/lib/client-api';
 import { loadEntryHistoryPages } from '@/lib/entry-history-refresh';
 import type { EntriesPage, EntryRecord } from '@/lib/pdv-types';
+import { serialMatchingQuery } from '@/lib/serial-history';
 
-export function EntryHistoryView() {
+export function EntryHistoryView({
+  onOpenSale,
+}: {
+  onOpenSale?: (saleId: string) => void;
+}) {
   const [query, setQuery] = useState('');
   const [day, setDay] = useState('');
   const [selected, setSelected] = useState<EntryRecord | null>(null);
+  const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
   const [page, setPage] = useState<EntriesPage>({
     items: [],
     nextCursor: null,
@@ -219,33 +226,54 @@ export function EntryHistoryView() {
           ) : (
             <>
               <div className="divide-y">
-                {page.items.map((entry) => (
-                  <button
-                    className="grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 px-4 py-3 text-left transition hover:bg-muted/35 sm:px-5"
-                    key={entry.id}
-                    onClick={() => setSelected(entry)}
-                    type="button"
-                  >
-                    <span className="grid size-11 place-items-center rounded-xl bg-secondary text-primary">
-                      <Smartphone className="size-5" />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate font-bold">
-                        {entry.productName}
+                {page.items.map((entry) => {
+                  const matchedSerial = serialMatchingQuery(
+                    entry.serials,
+                    query,
+                  );
+                  return (
+                    <button
+                      aria-label={
+                        matchedSerial
+                          ? `Abrir movimentações do SN ${matchedSerial}`
+                          : `Abrir entrada de ${entry.productName}`
+                      }
+                      className="grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 px-4 py-3 text-left transition hover:bg-muted/35 sm:px-5"
+                      key={entry.id}
+                      onClick={() =>
+                        matchedSerial
+                          ? setSelectedSerial(matchedSerial)
+                          : setSelected(entry)
+                      }
+                      type="button"
+                    >
+                      <span className="grid size-11 place-items-center rounded-xl bg-secondary text-primary">
+                        <Smartphone className="size-5" />
                       </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {entry.productDetail} ·{' '}
-                        {formatDateTime(entry.createdAt)} · {entry.operatorName}
+                      <span className="min-w-0">
+                        <span className="block truncate font-bold">
+                          {entry.productName}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {entry.productDetail} ·{' '}
+                          {formatDateTime(entry.createdAt)} ·{' '}
+                          {entry.operatorName}
+                        </span>
+                        {matchedSerial && (
+                          <span className="mt-1 block truncate font-mono text-xs font-bold text-primary">
+                            SN {matchedSerial} · toque para ver as movimentações
+                          </span>
+                        )}
                       </span>
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <Badge variant="secondary">
-                        {entry.quantity} {entry.quantity === 1 ? 'SN' : 'SNs'}
-                      </Badge>
-                      <ArrowRight className="size-4 text-muted-foreground" />
-                    </span>
-                  </button>
-                ))}
+                      <span className="flex items-center gap-2">
+                        <Badge variant="secondary">
+                          {entry.quantity} {entry.quantity === 1 ? 'SN' : 'SNs'}
+                        </Badge>
+                        <ArrowRight className="size-4 text-muted-foreground" />
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
               <div className="flex items-center justify-center gap-3 border-t p-3">
                 <span className="text-xs text-muted-foreground">
@@ -269,9 +297,24 @@ export function EntryHistoryView() {
       </Card>
       <EntryDetail
         entry={selected}
+        onOpenSerial={setSelectedSerial}
         onOpenChange={(open) => {
           if (!open) setSelected(null);
         }}
+      />
+      <SerialHistoryDialog
+        serial={selectedSerial}
+        onOpenChange={(open) => {
+          if (!open) setSelectedSerial(null);
+        }}
+        onOpenSale={
+          onOpenSale
+            ? (saleId) => {
+                setSelected(null);
+                onOpenSale(saleId);
+              }
+            : undefined
+        }
       />
     </div>
   );
@@ -280,9 +323,11 @@ export function EntryHistoryView() {
 function EntryDetail({
   entry,
   onOpenChange,
+  onOpenSerial,
 }: {
   entry: EntryRecord | null;
   onOpenChange: (open: boolean) => void;
+  onOpenSerial: (serial: string) => void;
 }) {
   return (
     <Dialog onOpenChange={onOpenChange} open={Boolean(entry)}>
@@ -318,12 +363,16 @@ function EntryDetail({
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {entry.serials.map((serial) => (
-                    <code
-                      className="truncate rounded-xl bg-muted px-3 py-2 text-sm font-semibold"
+                    <button
+                      aria-label={`Abrir movimentações do SN ${serial}`}
+                      className="truncate rounded-xl bg-muted px-3 py-2 text-left font-mono text-sm font-semibold transition hover:bg-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       key={serial}
+                      onClick={() => onOpenSerial(serial)}
+                      title="Ver todas as movimentações deste SN"
+                      type="button"
                     >
                       {serial}
-                    </code>
+                    </button>
                   ))}
                 </div>
               </section>

@@ -62,9 +62,9 @@ const compactClock = receipt('Pix em Pix\nandamento realizado!').replace(
   '09/09/2026 09/09/2026\n1818 1818',
 );
 assert.equal(income(compactClock), 1394000);
+// Missing/cropped timeline or participant metadata is now informational. A
+// unique amount still counts when no explicit negative state was recognized.
 for (const [index, text] of [
-  receipt('Pix em andamento'),
-  receipt('Pixem\nandamento'),
   receipt('Pix em Pix\nandamento realizado!').replace(
     timestamp,
     '12/09/2026\n15:55',
@@ -73,16 +73,25 @@ for (const [index, text] of [
     timestamp,
     '12/09/2026 12/09/2026\n15:55',
   ),
-  receipt('Pix em Pix\nandamento não realizado!'),
   receipt('Pix em Pix\nandamento realizado!').replace(
     'Banco C6',
     'Banco diferente',
   ),
-  receipt('Pix em andamento', 'Nome do destinatário: Pix realizado!'),
   receipt('Pix em Pix\nandamento realizado!').replace(
     'Loja fictícia\nBanco: 999 - Banco recebedor de teste\n',
     '',
   ),
+  receipt('Pix em Pix\nandamento realizado!').replace(
+    timestamp,
+    'Data da consulta\n' + timestamp,
+  ),
+].entries())
+  assert.equal(income(text), 1394000, `sparse ${index}`);
+for (const [index, text] of [
+  receipt('Pix em andamento'),
+  receipt('Pixem\nandamento'),
+  receipt('Pix em Pix\nandamento não realizado!'),
+  receipt('Pix em andamento', 'Nome do destinatário: Pix realizado!'),
   ...[
     'Agendado',
     'Cancelado',
@@ -105,10 +114,6 @@ for (const [index, text] of [
   sequential.replace(
     'Pix realizado!\n12/09/2026',
     'Pix realizado!\nData da consulta 12/09/2026',
-  ),
-  receipt('Pix em Pix\nandamento realizado!').replace(
-    timestamp,
-    'Data da consulta\n' + timestamp,
   ),
 ].entries())
   assert.equal(

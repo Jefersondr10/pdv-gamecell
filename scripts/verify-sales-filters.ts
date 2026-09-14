@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 
-import { parseSalesFilters } from '../lib/server/sales-filters.ts';
+import {
+  parseSalesFilters,
+  salesAggregateQueries,
+} from '../lib/server/sales-filters.ts';
 
 const storeId = '11111111-1111-4111-8111-111111111111';
 const now = new Date('2026-09-05T12:00:00-03:00').getTime();
@@ -39,6 +42,42 @@ assert.throws(() =>
     now,
   ),
 );
+
+for (const query of [
+  'alert=1',
+  'saleStatus=pending',
+  'saleStatus=review',
+  'issue=review',
+  'issue=pending_payment',
+  'alert=1&saleStatus=pending&issue=review',
+]) {
+  const parsed = parseSalesFilters(
+    new URL(`https://example.test/api/sales?period=today&${query}`),
+    storeId,
+    now,
+  );
+  assert.ok(parsed.comparison, `${query}: previous period expected`);
+  const statements = salesAggregateQueries(
+    parsed.where.join(' AND '),
+    parsed.bindings,
+    {
+      bindings: parsed.comparison!.bindings,
+      filterSql: parsed.comparison!.where.join(' AND '),
+    },
+    parsed.alertOnly,
+  );
+  assert.equal(
+    statements.length,
+    2,
+    `${query}: current and previous aggregates stay separate`,
+  );
+  for (const [index, statement] of statements.entries()) {
+    assert.ok(
+      Buffer.byteLength(statement.sql, 'utf8') < 100_000,
+      `${query}: aggregate ${index + 1} exceeds the D1 statement limit`,
+    );
+  }
+}
 
 const today = parseSalesFilters(
   new URL('https://example.test/api/sales?period=today&issue=pending_payment'),

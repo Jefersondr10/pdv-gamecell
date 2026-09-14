@@ -1,7 +1,10 @@
-import { extractReceiptAmount } from './receipt-amount.ts';
+import {
+  extractReceiptAmount,
+  receiptAmountRelevantText,
+} from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 6;
+export const RECEIPT_READER_REVISION = 7;
 
 export type ReceiptDocument = {
   version: 1;
@@ -18,6 +21,22 @@ export type ReceiptDocument = {
   automaticEligible: boolean;
   ambiguous: boolean;
   blocked: boolean;
+};
+
+export type ReceiptDataWarningKey =
+  | 'completion_status'
+  | 'transaction_id'
+  | 'paid_at'
+  | 'payer_name'
+  | 'payer_bank'
+  | 'recipient_name'
+  | 'recipient_bank'
+  | 'recipient_document';
+
+export type ReceiptDataWarning = {
+  key: ReceiptDataWarningKey;
+  label: string;
+  message: string;
 };
 
 export const normalizeReceiptIdentity = (value: string) =>
@@ -50,6 +69,60 @@ export function receiptEvidenceKey(
   document: ReceiptDocument | null | undefined,
 ) {
   return receiptEvidenceAliases(document)[0] ?? null;
+}
+
+// Missing descriptive fields must remain visible to the operator, but they do
+// not invalidate a uniquely read amount. These are informational warnings;
+// explicit negative states, ambiguity and known duplicate identities are
+// handled separately by the financial safety checks.
+export function receiptDataWarnings(
+  document: ReceiptDocument | null | undefined,
+): ReceiptDataWarning[] {
+  const warnings: ReceiptDataWarning[] = [];
+  const add = (
+    key: ReceiptDataWarningKey,
+    label: string,
+    message: string,
+  ) => warnings.push({ key, label, message });
+  if (!document || (document.state === 'unknown' && !document.blocked))
+    add(
+      'completion_status',
+      'Situação do pagamento',
+      document?.automaticEligible
+        ? 'A frase de conclusão não foi identificada. O valor foi conciliado porque não há indicação de agendamento, processamento, cancelamento ou estorno.'
+        : 'A frase de conclusão não foi identificada no comprovante.',
+    );
+  if (!receiptEvidenceKey(document))
+    add(
+      'transaction_id',
+      'Identificador da transação',
+      'Não identificado; a verificação automática de duplicidade por identificador fica indisponível.',
+    );
+  if (!document?.paidAtText)
+    add('paid_at', 'Data e hora', 'Não identificadas no comprovante.');
+  if (!document?.payerName)
+    add('payer_name', 'Nome do pagador', 'Não identificado no comprovante.');
+  if (!document?.payerBank)
+    add('payer_bank', 'Banco pagador', 'Não identificado no comprovante.');
+  if (!document?.recipientName)
+    add(
+      'recipient_name',
+      'Nome do recebedor',
+      'Não identificado no comprovante.',
+    );
+  if (!document?.recipientBank)
+    add(
+      'recipient_bank',
+      'Banco recebedor',
+      'Não identificado no comprovante.',
+    );
+  if (!document?.recipientDocument)
+    add(
+      'recipient_document',
+      'CPF/CNPJ do recebedor',
+      'Não identificado ou mascarado no comprovante.',
+    );
+  return warnings;
 }
 
 export function receiptTransactionDisplay(
@@ -457,6 +530,14 @@ export function extractReceiptDocument(text: string) {
   const heading = participantStarts.length
     ? lines.slice(0, Math.min(...participantStarts)).join('\n')
     : '';
+  // Ignore clearly promotional/footer values before determining uniqueness.
+  // The amount extractor applies the same filter when selecting a value; the
+  // filtered line collection also prevents an advertisement from fabricating
+  // an ambiguity against a valid transaction.
+  const amountLines = receiptAmountRelevantText(text)
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const amountHeading = receiptAmountRelevantText(heading);
   const receiptSectionStarts = lines
     .map((line, index) =>
       /^(?:comprovante|confirma[cç][aã]o)\s+(?:(?:de|do|da)\s+)?(?:pix|envio(?:\s+de)?\s+pix|transfer[eê]ncia|pagamento|transa[cç][aã]o)\b/i.test(
@@ -474,20 +555,24 @@ export function extractReceiptDocument(text: string) {
       );
     })
     .filter(Boolean);
-  const headingAmounts = heading
+  const headingAmounts = amountHeading
     .split('\n')
     .filter((line) => /R\s*[$S]/i.test(line))
     .map((line) => extractReceiptAmount(line))
     .filter(Boolean);
   const strongLayoutCurrencyAmounts =
     c6 || bradescoDebitedCompleted
-      ? lines
+      ? amountLines
           .filter((line) => /R\s*[$S]/i.test(line))
           .map((line) => extractReceiptAmount(line))
           .filter(Boolean)
       : [];
+  const documentCurrencyAmounts = amountLines
+    .filter((line) => /R\s*[$S]/i.test(line))
+    .map((line) => extractReceiptAmount(line))
+    .filter(Boolean);
   const suggestion =
-    extractReceiptAmount(heading) ?? extractReceiptAmount(text);
+    extractReceiptAmount(amountHeading) ?? extractReceiptAmount(text);
   const valueIndexes = lines
     .map((line, index) => (/^valor\s*:?$/i.test(line) ? index : -1))
     .filter((index) => index >= 0);
@@ -504,6 +589,9 @@ export function extractReceiptDocument(text: string) {
   const uniqueStrongLayoutCurrencyAmounts = new Set(
     strongLayoutCurrencyAmounts.map((amount) => amount!.amountCents),
   );
+  const uniqueDocumentCurrencyAmounts = new Set(
+    documentCurrencyAmounts.map((amount) => amount!.amountCents),
+  );
   const ambiguous =
     uniqueIds.length > 1 ||
     observedIds.length > 1 ||
@@ -511,13 +599,18 @@ export function extractReceiptDocument(text: string) {
     mercadoPagoTransactionNumbers.length > 1 ||
     uniqueHeadingAmounts.size > 1 ||
     uniqueReceiptSectionAmounts.size > 1 ||
-    uniqueStrongLayoutCurrencyAmounts.size > 1;
+    uniqueStrongLayoutCurrencyAmounts.size > 1 ||
+    uniqueDocumentCurrencyAmounts.size > 1;
   const uniqueAmount =
     !ambiguous &&
     suggestion !== null &&
     (suggestion.confidence === 'high' ||
       (uniqueHeadingAmounts.size === 1 &&
         headingAmounts[0]!.amountCents === suggestion.amountCents) ||
+      (uniqueReceiptSectionAmounts.size === 1 &&
+        receiptSectionAmounts[0]!.amountCents === suggestion.amountCents) ||
+      (uniqueDocumentCurrencyAmounts.size === 1 &&
+        documentCurrencyAmounts[0]!.amountCents === suggestion.amountCents) ||
       ((c6 || bradescoDebitedCompleted) &&
         (labelledAmount?.amountCents === suggestion.amountCents ||
           (uniqueStrongLayoutCurrencyAmounts.size === 1 &&
@@ -535,8 +628,13 @@ export function extractReceiptDocument(text: string) {
     observedTransactionId: observedIds.length === 1 ? observedIds[0] : null,
     paidAtText: new Set(dates).size === 1 ? (dates[0] ?? null) : null,
     state,
+    // A unique amount is the financial evidence requested by the workflow.
+    // Missing descriptive metadata or a missing generic completion phrase is
+    // reported separately; only explicit negative states and ambiguity block.
     automaticEligible:
-      state === 'completed' && singleTransaction && uniqueAmount,
+      uniqueAmount &&
+      !ambiguous &&
+      !(state === 'scheduled' || state === 'cancelled' || pending || rejected),
     ambiguous,
     blocked:
       state === 'scheduled' || state === 'cancelled' || pending || rejected,
@@ -602,7 +700,6 @@ export function parseReceiptDocument(value: unknown): ReceiptDocument | null {
       )
     )
       return null;
-    if (result.automaticEligible && !receiptEvidenceKey(result)) return null;
     if (
       result.observedTransactionId !== null &&
       !/^E[A-Za-z0-9]{32}$/.test(result.observedTransactionId)
@@ -681,7 +778,19 @@ export function preferReceiptReading(
   readings: Array<ReturnType<typeof extractReceiptDocument>>,
 ) {
   const found = readings.filter((reading) => reading.amountCents !== null);
+  const completed = (reading: (typeof found)[number]) =>
+    reading.details.automaticEligible && reading.details.state === 'completed';
   const preferred =
+    found.find(
+      (reading) =>
+        completed(reading) &&
+        reading.details.recipientBank &&
+        reading.details.recipientDocument,
+    ) ??
+    found.find(
+      (reading) => completed(reading) && reading.details.recipientBank,
+    ) ??
+    found.find(completed) ??
     found.find(
       (reading) =>
         reading.details.automaticEligible &&

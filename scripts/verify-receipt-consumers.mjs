@@ -6,7 +6,11 @@ import { jsx, jsxs, Fragment } from 'react/jsx-runtime';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { useEffect, useRef } from 'react';
 import { SqliteDatabase } from '../lib/server/node/sqlite.mjs';
-import { parseReceiptDocument } from '../lib/receipt-document.ts';
+import {
+  parseReceiptDocument,
+  receiptTransactionDisplay,
+} from '../lib/receipt-document.ts';
+import { splitReceiptReadingNotices } from '../lib/receipt-reading-notices.ts';
 import {
   receiptDrivenPayments,
   saleReceiptIncome,
@@ -81,12 +85,14 @@ const { SaleComparison } = functionsFrom(
   ['SaleComparison'],
   {
     overviewSaleComparison,
+    splitReceiptReadingNotices,
     receiptTargetLabel,
     money: (cents) => `BRL ${cents / 100}`,
     cn: (...values) => values.filter(Boolean).join(' '),
     TriangleAlert: () => null,
     Check: () => null,
     FileText: () => null,
+    Info: () => null,
   },
 );
 const { ReceiptPaymentSync } = functionsFrom(
@@ -107,10 +113,26 @@ const { SystemSaleStatusBadge } = functionsFrom(
     cn: (...values) => values.filter(Boolean).join(' '),
   },
 );
+const { ReceiptReadingNotices } = functionsFrom(
+  'components/pdv/receipt-reading-notices.tsx',
+  ['ReceiptReadingNotices'],
+  {
+    splitReceiptReadingNotices,
+    cn: (...values) => values.filter(Boolean).join(' '),
+    CircleAlert: () => null,
+    CircleCheck: () => null,
+    Info: () => null,
+    LoaderCircle: () => null,
+  },
+);
 const { ReceiptPaymentDetails } = functionsFrom(
   'components/pdv/receipt-payment-details.tsx',
   ['ReceiptPaymentDetails'],
-  { shortReceiptDate: () => '' },
+  {
+    ReceiptReadingNotices,
+    receiptTransactionDisplay,
+    shortReceiptDate: () => '',
+  },
 );
 const { SalesReportPayments } = functionsFrom(
   'components/pdv/sales-report-payments.tsx',
@@ -194,12 +216,23 @@ for (const raw of [
     assert.equal((await overview()).items[0].receiptReviewCount, 1);
     assert.ok((await overview()).items[0].receipts[0].receiptReviewReason);
   }
-  if (raw === JSON.stringify(document))
+  if (raw === JSON.stringify(document)) {
     assert.equal(
       hydrated.receipts[0].receiptDetails.recipientDocument,
       '***0199',
       'document remains masked',
     );
+    const overviewReceipt = (await overview()).items[0].receipts[0];
+    assert.equal(
+      overviewReceipt.receiptDetails.recipientDocument,
+      '***0199',
+      'overview also masks the receiver document',
+    );
+    assert.ok(
+      !JSON.stringify(overviewReceipt).includes(document.recipientDocument),
+      'overview JSON never exposes the full receiver document',
+    );
+  }
   db.database.exec("DELETE FROM attachments WHERE id='receipt'");
 }
 
@@ -410,6 +443,55 @@ assert.equal(
   '',
   'cash-only sales do not show a missing-receipt prompt',
 );
+const informationalReceiptMarkup = renderToStaticMarkup(
+  jsx(ReceiptPaymentDetails, {
+    financiallyReconciled: true,
+    receipts: [
+      {
+        id: 'receipt-informational-metadata',
+        name: 'comprovante.png',
+        url: '/receipt',
+        receiptAmountCents: 710000,
+        receiptAmountSource: 'ocr',
+        receiptDetails: {
+          ...document,
+          payerName: null,
+          payerBank: null,
+          recipientName: null,
+          recipientBank: null,
+          recipientDocument: null,
+          paidAtText: null,
+        },
+      },
+    ],
+  }),
+);
+assert.match(informationalReceiptMarkup, /Valor conciliado/);
+assert.match(informationalReceiptMarkup, /Dados não identificados/);
+assert.match(informationalReceiptMarkup, /Nome do pagador/);
+assert.match(informationalReceiptMarkup, /Banco recebedor/);
+assert.doesNotMatch(informationalReceiptMarkup, /Conferência necessária/);
+const scheduledReceiptMarkup = renderToStaticMarkup(
+  jsx(ReceiptPaymentDetails, {
+    receipts: [
+      {
+        id: 'scheduled-receipt',
+        name: 'agendamento.png',
+        url: '/scheduled',
+        receiptAmountCents: 710000,
+        receiptAmountSource: 'ocr',
+        receiptDetails: {
+          ...document,
+          state: 'scheduled',
+          automaticEligible: false,
+          blocked: true,
+        },
+      },
+    ],
+  }),
+);
+assert.match(scheduledReceiptMarkup, /Conferência necessária/);
+assert.match(scheduledReceiptMarkup, /Pagamento apenas agendado/);
 const cashReportMarkup = renderToStaticMarkup(
   jsx(SalesReportPayments, {
     summary: {
@@ -469,8 +551,10 @@ const salesReportSource = readFileSync(
 );
 assert.doesNotMatch(salesReportSource, /sale\.payments\.length\s*===\s*0/);
 assert.equal(
-  (salesReportSource.match(/receiptDrivenPayments\(sale\)\.length\s*===/g) || [])
-    .length,
+  (
+    salesReportSource.match(/receiptDrivenPayments\(sale\)\.length\s*===/g) ||
+    []
+  ).length,
   2,
   'both HTML sale-report variants detect receipt-driven payments',
 );

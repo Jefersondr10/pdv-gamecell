@@ -5,6 +5,7 @@ import {
   parseReceiptDocument,
   preferReceiptReading,
   RECEIPT_READER_REVISION,
+  receiptDataWarnings,
 } from '../lib/receipt-document.ts';
 import { receiptIncomeCents } from '../lib/receipt-income.ts';
 
@@ -104,8 +105,13 @@ const completedWithoutId = extractReceiptDocument(
 assert.equal(completedWithoutId.details.state, 'completed');
 assert.equal(
   completedWithoutId.details.automaticEligible,
-  false,
-  'A leitura automática ainda exige um identificador Pix único',
+  true,
+  'Um valor único não depende de identificador Pix para conciliar',
+);
+assert.ok(
+  receiptDataWarnings(completedWithoutId.details).some(
+    (warning) => warning.key === 'transaction_id',
+  ),
 );
 
 for (const text of [
@@ -167,8 +173,14 @@ for (const text of [
 ]) {
   const reading = extractReceiptDocument(text);
   assert.equal(reading.details.state, 'unknown');
-  assert.equal(income(reading), 0);
-  assert.equal(needsReceiptOcrEnrichment(reading), true);
+  assert.equal(reading.details.automaticEligible, true);
+  assert.equal(income(reading), 730000);
+  assert.equal(needsReceiptOcrEnrichment(reading), false);
+  assert.ok(
+    receiptDataWarnings(reading.details).some(
+      (warning) => warning.key === 'completion_status',
+    ),
+  );
 }
 for (const status of [
   'Agendado',

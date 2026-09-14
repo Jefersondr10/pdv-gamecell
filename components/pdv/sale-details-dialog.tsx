@@ -45,6 +45,7 @@ export function SaleDetailsDialog({
   canEditPrices,
   csrfToken,
   onPricesChanged,
+  onOpenSerial,
   closeLabel = 'Fechar',
 }: {
   sale: SaleRecord | null;
@@ -57,13 +58,13 @@ export function SaleDetailsDialog({
   canEditPrices: boolean;
   csrfToken: string;
   onPricesChanged: (saleId: string, value: SalePrices) => void;
+  onOpenSerial: (serial: string) => void;
   closeLabel?: string;
 }) {
   const financial = sale ? saleFinancialSummary(sale) : null;
   const showReceiptConference = Boolean(
     sale &&
-      (sale.receipts.length > 0 ||
-        sale.reconciliation.status !== 'not_required'),
+    (sale.receipts.length > 0 || sale.reconciliation.status !== 'not_required'),
   );
   const [pricesBusy, setPricesBusy] = useState(false);
   const [pricesEditing, setPricesEditing] = useState(false);
@@ -147,7 +148,8 @@ export function SaleDetailsDialog({
                 <p className="rounded-xl bg-muted p-3 text-sm">
                   Cancelada{' '}
                   {sale.cancelledAt ? `em ${date(sale.cancelledAt)}` : ''}
-                  {sale.cancelledByName ? ` por ${sale.cancelledByName}` : ''}.
+                  {sale.cancelledByName ? ` por ${sale.cancelledByName}` : ''}
+                  .
                   <br />
                   Motivo: {sale.cancellationReason || 'Não informado'}
                 </p>
@@ -184,9 +186,15 @@ export function SaleDetailsDialog({
                       <p className="text-sm text-muted-foreground">
                         {item.productDetail}
                       </p>
-                      <p className="text-sm break-all">
+                      <button
+                        aria-label={`Abrir movimentações do SN ${item.serial}`}
+                        className="rounded-md text-left text-sm break-all outline-none transition hover:text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => onOpenSerial(item.serial)}
+                        title="Ver todas as movimentações deste SN"
+                        type="button"
+                      >
                         SN <code className="font-semibold">{item.serial}</code>
-                      </p>
+                      </button>
                       {item.photos.length > 0 && (
                         <div className="flex flex-wrap gap-2 pt-1">
                           {item.photos.map((photo, i) => (
@@ -235,7 +243,13 @@ export function SaleDetailsDialog({
                 </div>
                 {showReceiptConference && (
                   <>
-                    <ReceiptPaymentDetails receipts={sale.receipts} />
+                    <ReceiptPaymentDetails
+                      financiallyReconciled={
+                        sale.reconciliation.status === 'reconciled' &&
+                        sale.receivedDifferenceCents === 0
+                      }
+                      receipts={sale.receipts}
+                    />
                     <p className="mt-2 text-sm text-muted-foreground">
                       Valor identificado nos comprovantes:{' '}
                       <strong>

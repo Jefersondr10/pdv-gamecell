@@ -8,6 +8,7 @@ import {
 } from '../lib/permissions.ts';
 import { matchesProductSearch } from '../lib/product-search.ts';
 import { attachmentReadPermissions } from '../lib/server/attachment-permissions.ts';
+import { routePermissions } from '../lib/server/permissions.ts';
 
 assert.equal(new Set(ALL_PERMISSIONS).size, ALL_PERMISSIONS.length);
 for (const role of ['owner', 'admin', 'operator'] as const) {
@@ -91,6 +92,13 @@ assert.equal(mayReadAttachment('receipt'), true);
 assert.equal(mayReadAttachment('item_photo'), false);
 assert.equal(mayReadAttachment('entry_photo'), false);
 assert.equal(attachmentReadPermissions('unknown'), null);
+assert.deepEqual(
+  routePermissions(
+    new Request('https://example.test/api/inventory/history?serial=SNTEST000001'),
+  ),
+  ['entries', 'sales'],
+  'SN history requires access to entries or sales',
+);
 const product = {
   model: 'iPhone 17 Pro Max',
   color: 'Azul',

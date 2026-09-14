@@ -12,6 +12,7 @@ export const DERIVED_RECEIPT_REVIEW_REASONS = [
   'A leitura não identificou uma transação concluída com segurança. Releia o comprovante.',
   'Esta transação já foi registrada por outro comprovante. Ela não será somada novamente.',
   'A leitura não contém identificação suficiente para conciliação automática. Releia o comprovante.',
+  'Não foi possível confirmar um único valor para conciliação automática. Releia o comprovante.',
 ] as const;
 
 export function isDerivedReceiptReviewReason(

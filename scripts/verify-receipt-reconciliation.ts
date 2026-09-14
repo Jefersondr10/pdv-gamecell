@@ -126,7 +126,7 @@ const document: ReceiptDocument = {
 for (const receiptDetails of [
   { ...document, blocked: true },
   { ...document, ambiguous: true },
-  ...(['unknown', 'scheduled', 'cancelled'] as const).map((state) => ({
+  ...(['scheduled', 'cancelled'] as const).map((state) => ({
     ...document,
     state,
   })),
@@ -147,6 +147,25 @@ for (const receiptDetails of [
     'unconfirmed documents are neither credited nor reconciled',
   );
 }
+assert.deepEqual(
+  deriveReceiptReconciliation(
+    [
+      { receiptAmountCents: 100 },
+      {
+        receiptAmountCents: 200,
+        receiptDetails: { ...document, state: 'unknown' },
+      },
+    ],
+    300,
+  ),
+  {
+    status: 'reconciled',
+    confirmedTotalCents: 300,
+    differenceCents: 0,
+    pendingReceiptCount: 0,
+  },
+  'a unique eligible amount remains usable when the completion phrase is absent',
+);
 assert.equal(
   deriveReceiptReconciliation(
     [{ receiptAmountCents: 300, receiptDetails: document }],

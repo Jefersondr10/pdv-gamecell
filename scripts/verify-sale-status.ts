@@ -12,9 +12,18 @@ import {
 import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
 import { parseSalesFilters } from '../lib/server/sales-filters.ts';
 import {
+  SALE_ALERT_SQL,
   SALE_AUTO_STATUS_SQL,
   SALE_CHECK_STATUS_SQL,
 } from '../lib/server/sale-status-sql.ts';
+
+// Aggregate and filter predicates can share this fragment in one D1 statement.
+// Keep enough headroom below the statement-size ceiling for both uses and the
+// surrounding SELECT and filter clauses.
+assert.ok(
+  Buffer.byteLength(SALE_ALERT_SQL, 'utf8') < 45_000,
+  'sale alert SQL must stay compact enough for D1 aggregates and filters',
+);
 
 const db = new SqliteDatabase(':memory:');
 db.database

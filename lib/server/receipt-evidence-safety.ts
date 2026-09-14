@@ -127,7 +127,11 @@ export async function receiptEvidenceProblem(
 ) {
   const documents = receipts.map((r) => parseReceiptDocument(r.details));
   if (
-    documents.some((doc) => doc && (doc.blocked || doc.state !== 'completed'))
+    documents.some(
+      (doc) =>
+        doc?.blocked ||
+        (doc !== null && ['scheduled', 'cancelled'].includes(doc.state)),
+    )
   )
     return 'Documento sem confirmação de pagamento realizado: confira agendamento, processamento, cancelamento ou estorno.';
   if (documents.some((doc) => doc?.ambiguous))

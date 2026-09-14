@@ -55,6 +55,18 @@ for (const [text, amount] of [
     'Comprovante de Pix\n8/setembro/2026 às 17:51:29.\nR$ 15.000\nPagamento fornec\nCNPJ: 61.120.555/0001-61\nID de transação Pix\nE10573521202609082051a4daXPDZcCD',
     1_500_000,
   ],
+  [
+    'Comprovante de Pix\nValor da transação\nR$ 1.000,00\nPix realizado\nValor máximo por Pix: R$ 20.000,00',
+    100_000,
+  ],
+  [
+    'Comprovante de Pix\nValor da transação\nR$ 1.000,00\nPix realizado\nTotal da sua fatura R$ 2.000,00',
+    100_000,
+  ],
+  [
+    'Comprovante de Pix\nValor da transação\nR$ 1.000,00\nPix realizado\nValor máximo por Pix: 20.000,00',
+    100_000,
+  ],
 ] as const)
   assert.equal(extractReceiptAmount(text)?.amountCents, amount, text);
 for (const text of [
