@@ -203,7 +203,10 @@ export function rankingView(sales, {
 } = {}) {
   const selected = TABS.some(tab => tab.key === active) ? active : 'sellers';
   const model = buildRankings(sales, { canViewProfit });
-  const showProfitMetric = Object.values(model.sections).some(section => section.show_profit);
+  // Keep the available ranking choices stable for authorized users, including
+  // periods with no confirmed sales. The empty summary still omits profit so
+  // it never invents a financial value merely to render this control.
+  const showProfitMetric = canViewProfit === true;
   const selectedMetric = ['revenue', 'sales', ...(showProfitMetric ? ['profit'] : [])].includes(metric) ? metric : 'revenue';
   const summaryProfit = own(model.summary, 'profit_cents')
     ? `<div class="ranking-summary-profit"><span>Lucro</span>${valueMarkup(model.summary.profit_cents, money, esc)}</div>` : '';

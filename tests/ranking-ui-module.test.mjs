@@ -122,8 +122,13 @@ test('estado vazio não cria linhas nem valores financeiros fictícios', () => {
   assert.deepEqual(model.sections.sellers.rows, []);
   assert.deepEqual(model.sections.products.rows, []);
   assert.deepEqual(model.sections.days.rows, []);
-  const html = rankingView(undefined, { canViewProfit: true, money });
+  const html = rankingView(undefined, { canViewProfit: true, metric: 'profit', money });
   assert.equal((html.match(/Nenhuma venda confirmada neste filtro\./g) ?? []).length, 3);
   assert.doesNotMatch(html, /<li class="ranking-row/);
-  assert.doesNotMatch(html, /Lucro/);
+  assert.doesNotMatch(html, /ranking-summary-profit/);
+  assert.match(html, /class="active" aria-pressed="true" data-ranking-metric="profit">Lucro/);
+
+  const restricted = rankingView(undefined, { canViewProfit: false, metric: 'profit', money });
+  assert.doesNotMatch(restricted, /data-ranking-metric="profit"|>Lucro<\/button>/);
+  assert.match(restricted, /class="active" aria-pressed="true" data-ranking-metric="revenue">Faturamento/);
 });
