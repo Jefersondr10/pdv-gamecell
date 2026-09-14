@@ -22,15 +22,16 @@ export function duplicateReceiptSql(alias: string) {
     `json_extract(CASE WHEN json_valid(${a}.receipt_details_json) THEN ${a}.receipt_details_json ELSE '{}' END,'$.${field}')`;
   const canonical = identity(alias, 'transactionId');
   const alternate = identity(alias, 'alternateTransactionId');
-  const sameAttachmentIdentity = (other: string) => {
-    const otherCanonical = identity(other, 'transactionId');
-    const otherAlternate = identity(other, 'alternateTransactionId');
-    return `((${canonical} IS NOT NULL AND (${canonical}=${otherCanonical} OR ${canonical}=${otherAlternate})) OR (${alternate} IS NOT NULL AND (${alternate}=${otherCanonical} OR ${alternate}=${otherAlternate})))`;
-  };
-  const matchesClaim = (claim: string) =>
-    `((${canonical} IS NOT NULL AND ${claim}=${canonical}) OR (${alternate} IS NOT NULL AND ${claim}=${alternate}))`;
-  const auditIdentity = `json_extract(CASE WHEN json_valid(claimed_event.details_json) THEN claimed_event.details_json ELSE '{}' END,'$.transactionId')`;
-  return `((${canonical} IS NOT NULL OR ${alternate} IS NOT NULL) AND (EXISTS(SELECT 1 FROM attachments other_receipt WHERE other_receipt.kind='receipt' AND other_receipt.store_id=${alias}.store_id AND other_receipt.id<>${alias}.id AND ${sameAttachmentIdentity('other_receipt')}) OR EXISTS(SELECT 1 FROM receipt_payment_links claimed WHERE claimed.store_id=${alias}.store_id AND claimed.attachment_id<>${alias}.id AND ${matchesClaim('claimed.transaction_id')}) OR EXISTS(SELECT 1 FROM audit_events claimed_event WHERE claimed_event.store_id=${alias}.store_id AND claimed_event.action='sale.receipt_transaction_claimed' AND claimed_event.entity_id<>${alias}.id AND ${matchesClaim(auditIdentity)})))`;
+  // A cancelled sale is terminal and no longer owns the financial allocation.
+  // Keep its attachment/payment/audit history, but do not let that preserved
+  // history block the same receipt on a replacement sale. Missing/orphan sale
+  // context remains fail-closed: only a sale proven cancelled is ignored.
+  const otherDoc = `CASE WHEN json_valid(other.receipt_details_json) THEN other.receipt_details_json ELSE '{}' END`;
+  const claimRows = `(SELECT other.store_id,other.id attachment_id,other.sale_id,json_extract(${otherDoc},'$.transactionId') transaction_id FROM attachments other WHERE other.kind='receipt'
+    UNION ALL SELECT other.store_id,other.id,other.sale_id,json_extract(${otherDoc},'$.alternateTransactionId') FROM attachments other WHERE other.kind='receipt'
+    UNION ALL SELECT store_id,attachment_id,sale_id,transaction_id FROM receipt_payment_links
+    UNION ALL SELECT store_id,entity_id,json_extract(details_json,'$.saleId'),json_extract(details_json,'$.transactionId') FROM audit_events WHERE action='sale.receipt_transaction_claimed' AND json_valid(details_json))`;
+  return `((${canonical} IS NOT NULL OR ${alternate} IS NOT NULL) AND EXISTS(SELECT 1 FROM ${claimRows} duplicate WHERE duplicate.store_id=${alias}.store_id AND duplicate.attachment_id<>${alias}.id AND (duplicate.transaction_id=${canonical} OR duplicate.transaction_id=${alternate}) AND NOT EXISTS(SELECT 1 FROM sales cancelled_duplicate WHERE cancelled_duplicate.id=duplicate.sale_id AND cancelled_duplicate.store_id=duplicate.store_id AND cancelled_duplicate.status='cancelled')))`;
 }
 // A present OCR document is accepted automatically only when the reader marked
 // it eligible. Historical documents can keep their established value when an

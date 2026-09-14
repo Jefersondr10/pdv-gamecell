@@ -2,6 +2,7 @@ import {
   parseReceiptDocument,
   receiptEvidenceAliases,
 } from '../receipt-document.ts';
+import { acceptedReceiptSql } from './sale-status-sql.ts';
 
 const receiptIdentitySql = (
   alias: string,
@@ -27,18 +28,127 @@ const receiptsShareIdentitySql = (left: string, right: string) => {
 // registration. Choosing an account does not turn a scheduled/duplicate Pix into payment.
 export const receiptConflictSql = `NOT EXISTS (
  SELECT 1 FROM attachments own JOIN (
- SELECT store_id,attachment_id,transaction_id FROM receipt_payment_links
+ SELECT store_id,attachment_id,transaction_id,sale_id FROM receipt_payment_links
  UNION ALL
- SELECT store_id,entity_id AS attachment_id,json_extract(details_json,'$.transactionId') AS transaction_id
+ SELECT store_id,entity_id AS attachment_id,json_extract(details_json,'$.transactionId') AS transaction_id,
+ json_extract(details_json,'$.saleId') AS sale_id
  FROM audit_events WHERE action='sale.receipt_transaction_claimed' AND json_valid(details_json)
  ) claim ON claim.store_id=own.store_id
  AND ${receiptMatchesIdentitySql('own', 'claim.transaction_id')}
+ LEFT JOIN sales claim_sale ON claim_sale.id=claim.sale_id AND claim_sale.store_id=claim.store_id
  WHERE own.store_id=? AND own.sale_id=? AND own.kind='receipt' AND claim.attachment_id<>own.id
-) AND NOT EXISTS (
+ AND COALESCE(claim_sale.status,'')<>'cancelled'
+ ) AND NOT EXISTS (
  SELECT 1 FROM attachments own JOIN attachments other ON other.store_id=own.store_id AND other.kind='receipt' AND other.id<>own.id
  AND ${receiptsShareIdentitySql('own', 'other')}
+ LEFT JOIN sales other_sale ON other_sale.id=other.sale_id AND other_sale.store_id=other.store_id
  WHERE own.store_id=? AND own.sale_id=? AND own.kind='receipt'
-)`;
+ AND COALESCE(other_sale.status,'')<>'cancelled'
+ )`;
+
+// Cancellation preserves the receipt, payment and immutable audit trail, but
+// releases the 1:1 link that reserves a transaction identity. The audit guard
+// makes the release part of the same atomic cancellation as the status change.
+export function releaseCancelledSaleReceiptLinks(
+  db: D1Database,
+  storeId: string,
+  saleId: string,
+  cancellationAuditId: string,
+) {
+  return db
+    .prepare(`DELETE FROM receipt_payment_links
+      WHERE store_id=? AND sale_id=?
+      AND EXISTS(SELECT 1 FROM sales cancelled_sale
+        WHERE cancelled_sale.id=receipt_payment_links.sale_id
+        AND cancelled_sale.store_id=receipt_payment_links.store_id
+        AND cancelled_sale.status='cancelled')
+      AND EXISTS(SELECT 1 FROM audit_events cancellation
+        WHERE cancellation.id=? AND cancellation.store_id=receipt_payment_links.store_id
+        AND cancellation.action='sale.cancelled'
+        AND cancellation.entity_id=receipt_payment_links.sale_id)`)
+    .bind(storeId, saleId, cancellationAuditId);
+}
+
+// If this receipt was moved to a replacement sale before the original sale
+// was cancelled, its automatic sync may already be waiting in review. Reopen
+// only reviews that share a durable transaction identity with the cancelled
+// sale; unrelated manual reviews remain untouched.
+export function requeueReceiptsBlockedByCancelledSale(
+  db: D1Database,
+  scope: {
+    storeId: string;
+    cancelledSaleId: string;
+    actorId: string;
+    requestId: string;
+    cancellationAuditId: string;
+  },
+  now: number,
+) {
+  return db
+    .prepare(`UPDATE sale_receipt_payment_sync AS q
+      SET request_id=?||':'||q.sale_id, requested_by=?, target_payment_id=NULL,
+          status='pending', updated_at=?
+      WHERE q.store_id=? AND q.sale_id<>? AND q.status IN ('pending','review')
+      AND EXISTS(SELECT 1 FROM sales active_sale
+        WHERE active_sale.id=q.sale_id AND active_sale.store_id=q.store_id
+          AND active_sale.status='completed')
+      AND EXISTS(SELECT 1 FROM audit_events cancellation
+        WHERE cancellation.id=? AND cancellation.store_id=q.store_id
+          AND cancellation.action='sale.cancelled'
+          AND cancellation.entity_id=?)
+      AND EXISTS(SELECT 1 FROM sales cancelled_sale
+        WHERE cancelled_sale.id=? AND cancelled_sale.store_id=q.store_id
+          AND cancelled_sale.status='cancelled')
+      AND NOT EXISTS(SELECT 1 FROM attachments a
+        WHERE a.store_id=q.store_id AND a.sale_id=q.sale_id
+          AND a.kind='receipt' AND NOT ${acceptedReceiptSql('a')})
+      AND (
+        EXISTS(
+          SELECT 1 FROM attachments candidate
+          JOIN attachments cancelled_receipt
+            ON cancelled_receipt.store_id=candidate.store_id
+           AND cancelled_receipt.kind='receipt'
+           AND cancelled_receipt.sale_id=?
+           AND cancelled_receipt.id<>candidate.id
+           AND ${receiptsShareIdentitySql('candidate', 'cancelled_receipt')}
+          WHERE candidate.store_id=q.store_id AND candidate.sale_id=q.sale_id
+            AND candidate.kind='receipt'
+        )
+        OR EXISTS(
+          SELECT 1 FROM attachments candidate
+          JOIN receipt_payment_links cancelled_link
+            ON cancelled_link.store_id=candidate.store_id
+           AND cancelled_link.sale_id=?
+           AND ${receiptMatchesIdentitySql('candidate', 'cancelled_link.transaction_id')}
+          WHERE candidate.store_id=q.store_id AND candidate.sale_id=q.sale_id
+            AND candidate.kind='receipt'
+        )
+        OR EXISTS(
+          SELECT 1 FROM attachments candidate
+          JOIN audit_events cancelled_claim
+            ON cancelled_claim.store_id=candidate.store_id
+           AND cancelled_claim.action='sale.receipt_transaction_claimed'
+           AND json_valid(cancelled_claim.details_json)
+           AND json_extract(cancelled_claim.details_json,'$.saleId')=?
+           AND ${receiptMatchesIdentitySql('candidate', "json_extract(cancelled_claim.details_json,'$.transactionId')")}
+          WHERE candidate.store_id=q.store_id AND candidate.sale_id=q.sale_id
+            AND candidate.kind='receipt'
+        )
+      )`)
+    .bind(
+      scope.requestId,
+      scope.actorId,
+      now,
+      scope.storeId,
+      scope.cancelledSaleId,
+      scope.cancellationAuditId,
+      scope.cancelledSaleId,
+      scope.cancelledSaleId,
+      scope.cancelledSaleId,
+      scope.cancelledSaleId,
+      scope.cancelledSaleId,
+    );
+}
 
 // Explicit allocations can group several receipts into one payment, so keep
 // their durable transaction claims in immutable audit history, not 1:1 links.

@@ -379,7 +379,15 @@ export async function settleAutomaticReceiptPayments(
           };
     const claim = await db
       .prepare(
-        'SELECT attachment_id AS attachmentId FROM receipt_payment_links WHERE store_id=? AND transaction_id=?',
+        `SELECT claimed.attachment_id AS attachmentId
+         FROM receipt_payment_links claimed
+         WHERE claimed.store_id=? AND claimed.transaction_id=?
+         AND NOT EXISTS (
+           SELECT 1 FROM sales cancelled_sale
+           WHERE cancelled_sale.id=claimed.sale_id
+             AND cancelled_sale.store_id=claimed.store_id
+             AND cancelled_sale.status='cancelled'
+         )`,
       )
       .bind(storeId, transactionId)
       .first<{ attachmentId: string }>();
@@ -472,6 +480,32 @@ export async function settleAutomaticReceiptPayments(
           now,
         ),
       );
+    // A cancelled sale keeps its receipt, payment and audit history, but it
+    // no longer owns the transaction identity. Release only that stale link
+    // inside the guarded settlement batch, immediately before claiming or
+    // upgrading the identity for the active sale. Any failure rolls back the
+    // whole transfer.
+    statements.push(
+      db
+        .prepare(`DELETE FROM receipt_payment_links AS stale
+        WHERE stale.store_id=? AND stale.transaction_id=? AND stale.attachment_id<>?
+        AND EXISTS(SELECT 1 FROM sales cancelled_sale
+          WHERE cancelled_sale.id=stale.sale_id
+            AND cancelled_sale.store_id=stale.store_id
+            AND cancelled_sale.status='cancelled')
+        AND EXISTS(SELECT 1 FROM audit_events transfer_guard
+          WHERE transfer_guard.id=? AND transfer_guard.store_id=stale.store_id
+            AND transfer_guard.action='sale.payment_from_receipts'
+            AND transfer_guard.entity_id=? AND transfer_guard.details_json=?)`)
+        .bind(
+          storeId,
+          p.transactionId,
+          p.receipt.id,
+          auditId,
+          saleId,
+          auditDetails,
+        ),
+    );
     if (p.link) {
       if (p.link.transactionId !== p.transactionId)
         statements.push(

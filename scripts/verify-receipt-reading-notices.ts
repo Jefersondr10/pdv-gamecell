@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 
 import type { ReceiptDocument } from '../lib/receipt-document.ts';
+import { DERIVED_RECEIPT_REVIEW_REASONS } from '../lib/receipt-review-reasons.ts';
 import {
+  receiptNoticeGroup,
+  receiptNoticeSentence,
   receiptReadingNotices,
   splitReceiptReadingNotices,
 } from '../lib/receipt-reading-notices.ts';
@@ -182,6 +185,99 @@ const review = splitReceiptReadingNotices({
 assert.deepEqual(
   review.blocking.map((notice) => notice.key),
   ['system_review'],
+);
+assert.equal(
+  receiptNoticeSentence(review.blocking[0]),
+  'Pix repetido em outro comprovante; o valor não foi somado.',
+  'known duplicate warnings use concise copy',
+);
+
+const singlePresentation = receiptNoticeGroup([
+  {
+    key: 'amount_missing',
+    label: 'Valor do pagamento não identificado',
+    tone: 'blocking',
+  },
+]);
+assert.deepEqual(singlePresentation, {
+  items: ['Valor não identificado.'],
+  numbered: false,
+});
+
+const multiplePresentation = receiptNoticeGroup([
+  {
+    key: 'payer_missing',
+    label: 'Nome do pagador: Não identificado no comprovante.',
+    tone: 'informational',
+  },
+  {
+    key: 'recipient_bank_missing',
+    label: 'Banco recebedor: Não identificado no comprovante.',
+    tone: 'informational',
+  },
+]);
+assert.deepEqual(multiplePresentation, {
+  items: ['Pagador não identificado.', 'Banco recebedor não identificado.'],
+  numbered: true,
+});
+assert.ok(
+  multiplePresentation.items.every((label) => /[.!?]$/.test(label)),
+  'every rendered notice is punctuated',
+);
+
+assert.equal(
+  receiptNoticeSentence({
+    key: 'system_review',
+    label:
+      'A leitura não contém identificação suficiente para conciliação automática. Releia o comprovante.',
+    tone: 'blocking',
+  }),
+  'Dados insuficientes; releia o comprovante.',
+  'known automatic reviews never fall back to long copy',
+);
+
+for (const reason of DERIVED_RECEIPT_REVIEW_REASONS) {
+  const sentence = receiptNoticeSentence({
+    key: 'system_review',
+    label: reason,
+    tone: 'blocking',
+  });
+  assert.ok(sentence.length <= 75, `automatic notice stayed long: ${sentence}`);
+  assert.ok(/[.!?]$/.test(sentence), `automatic notice lost punctuation`);
+}
+
+for (const [reason, expected] of [
+  [
+    'O pagamento deste comprovante foi alterado manualmente. Confira os pagamentos; dinheiro não será convertido em Pix.',
+    'Pagamento alterado manualmente; dinheiro não será convertido em Pix.',
+  ],
+  [
+    'Um comprovante já aplicado ou seu pagamento foi alterado/excluído. Confira a alocação; o Pix não será registrado novamente.',
+    'Vínculo do comprovante mudou; confira o pagamento.',
+  ],
+  [
+    'A identificação da transação mudou na releitura. Confira o pagamento registrado.',
+    'ID da transação mudou; confira o pagamento.',
+  ],
+] as const)
+  assert.equal(
+    receiptNoticeSentence({
+      key: 'system_review',
+      label: reason,
+      tone: 'blocking',
+    }),
+    expected,
+  );
+
+const missingValueWithReaderReason = splitReceiptReadingNotices({
+  receiptAmountCents: null,
+  receiptReviewReason:
+    'Não foi possível identificar o valor do comprovante. Releia o arquivo.',
+});
+assert.deepEqual(
+  missingValueWithReaderReason.blocking.map((notice) => notice.key),
+  ['amount_missing'],
+  'the reader reason does not duplicate the structured missing-value warning',
 );
 
 console.log('receipt reading notices verified');

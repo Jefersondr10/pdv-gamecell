@@ -32,6 +32,90 @@ export type ReceiptReadingNotice = {
   tone: ReceiptReadingNoticeTone;
 };
 
+const SHORT_NOTICE_LABELS: Partial<
+  Record<ReceiptReadingNotice['key'], string>
+> = {
+  reading: 'Leitura em andamento.',
+  amount_missing: 'Valor não identificado.',
+  amount_invalid: 'Valor inválido.',
+  payment_scheduled: 'Pagamento apenas agendado.',
+  payment_cancelled: 'Pagamento cancelado ou estornado.',
+  payment_status_unconfirmed: 'Conclusão do pagamento não identificada.',
+  reading_ambiguous: 'Mais de uma transação foi identificada.',
+  reading_blocked: 'Documento bloqueado para conciliação.',
+  payer_missing: 'Pagador não identificado.',
+  payer_bank_missing: 'Banco pagador não identificado.',
+  recipient_missing: 'Recebedor não identificado.',
+  recipient_bank_missing: 'Banco recebedor não identificado.',
+  recipient_document_missing: 'CPF/CNPJ do recebedor ausente ou mascarado.',
+  paid_at_missing: 'Data e hora não identificadas.',
+  transaction_id_missing: 'ID da transação não identificado.',
+};
+
+function compactSystemReview(label: string) {
+  const normalized = label
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  if (
+    normalized.includes('outro comprovante') ||
+    normalized.includes('outra venda')
+  )
+    return 'Pix repetido em outro comprovante; o valor não foi somado.';
+  if (
+    normalized.includes('mesma transacao') ||
+    normalized.includes('anexos duplicados')
+  )
+    return 'Pix repetido nesta venda; o valor não foi somado.';
+  if (
+    normalized.includes('agendamento') ||
+    normalized.includes('cancelamento') ||
+    normalized.includes('estorno')
+  )
+    return 'Pagamento não confirmado; confira se foi concluído.';
+  if (
+    normalized.includes('ambigua') ||
+    normalized.includes('unico valor')
+  )
+    return 'Leitura ambígua; reenvie um único comprovante legível.';
+  if (normalized.includes('identificacao suficiente'))
+    return 'Dados insuficientes; releia o comprovante.';
+  if (normalized.includes('transacao concluida com seguranca'))
+    return 'Pagamento concluído não confirmado; releia o comprovante.';
+  if (
+    normalized.includes('identificar o valor') ||
+    normalized.includes('valor do comprovante nao identificado')
+  )
+    return 'Valor não identificado; releia o comprovante.';
+  if (normalized.includes('alterado manualmente'))
+    return 'Pagamento alterado manualmente; dinheiro não será convertido em Pix.';
+  if (
+    normalized.includes('ja aplicado') ||
+    normalized.includes('alocacao')
+  )
+    return 'Vínculo do comprovante mudou; confira o pagamento.';
+  if (normalized.includes('identificacao da transacao mudou'))
+    return 'ID da transação mudou; confira o pagamento.';
+  if (normalized.includes('valor fora do limite'))
+    return 'Valor fora do limite; confira os pagamentos.';
+  return label;
+}
+
+export function receiptNoticeSentence(notice: ReceiptReadingNotice) {
+  const concise =
+    SHORT_NOTICE_LABELS[notice.key] ?? compactSystemReview(notice.label);
+  const normalized = concise.trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+  return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+}
+
+export function receiptNoticeGroup(notices: ReceiptReadingNotice[]) {
+  return {
+    items: notices.map(receiptNoticeSentence).filter(Boolean),
+    numbered: notices.length > 1,
+  };
+}
+
 export type ReceiptNoticeInput = {
   receiptAmountCents: number | null;
   receiptDetails?: ReceiptDocument | null;

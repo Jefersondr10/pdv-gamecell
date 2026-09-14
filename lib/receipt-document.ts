@@ -4,7 +4,7 @@ import {
 } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 8;
+export const RECEIPT_READER_REVISION = 9;
 
 export type ReceiptDocument = {
   version: 1;

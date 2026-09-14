@@ -10,7 +10,11 @@ import {
   parseReceiptDocument,
   receiptTransactionDisplay,
 } from '../lib/receipt-document.ts';
-import { splitReceiptReadingNotices } from '../lib/receipt-reading-notices.ts';
+import {
+  receiptNoticeGroup,
+  receiptNoticeSentence,
+  splitReceiptReadingNotices,
+} from '../lib/receipt-reading-notices.ts';
 import {
   receiptDrivenPayments,
   saleReceiptIncome,
@@ -117,6 +121,8 @@ const { ReceiptReadingNotices } = functionsFrom(
   'components/pdv/receipt-reading-notices.tsx',
   ['ReceiptReadingNotices'],
   {
+    receiptNoticeGroup,
+    receiptNoticeSentence,
     splitReceiptReadingNotices,
     cn: (...values) => values.filter(Boolean).join(' '),
     CircleAlert: () => null,
@@ -467,10 +473,35 @@ const informationalReceiptMarkup = renderToStaticMarkup(
   }),
 );
 assert.match(informationalReceiptMarkup, /Valor conciliado/);
-assert.match(informationalReceiptMarkup, /Dados não identificados/);
-assert.match(informationalReceiptMarkup, /Nome do pagador/);
+assert.match(informationalReceiptMarkup, /\d+ dados não identificados:/);
+assert.match(informationalReceiptMarkup, /Pagador não identificado\./);
 assert.match(informationalReceiptMarkup, /Banco recebedor/);
+assert.match(informationalReceiptMarkup, /<ol/);
+assert.doesNotMatch(informationalReceiptMarkup, /<ul/);
 assert.doesNotMatch(informationalReceiptMarkup, /Conferência necessária/);
+const archivedReceiptMarkup = renderToStaticMarkup(
+  jsx(ReceiptPaymentDetails, {
+    receipts: [
+      {
+        id: 'archived-receipt',
+        name: 'arquivado.png',
+        url: '/archived',
+        receiptAmountCents: 710000,
+        receiptAmountSource: 'ocr',
+        receiptDetails: document,
+        receiptReviewReason:
+          'Esta transação aparece em outro comprovante. Ela não será somada novamente; confira os anexos.',
+      },
+    ],
+    showNotices: false,
+  }),
+);
+assert.match(archivedReceiptMarkup, /Comprovante 1/);
+assert.doesNotMatch(
+  archivedReceiptMarkup,
+  /Pix repetido|problemas no comprovante|Conferência necessária/,
+  'a cancelled sale can show archived proof details without active warnings',
+);
 const scheduledReceiptMarkup = renderToStaticMarkup(
   jsx(ReceiptPaymentDetails, {
     receipts: [
@@ -490,8 +521,45 @@ const scheduledReceiptMarkup = renderToStaticMarkup(
     ],
   }),
 );
-assert.match(scheduledReceiptMarkup, /Conferência necessária/);
-assert.match(scheduledReceiptMarkup, /Pagamento apenas agendado/);
+assert.match(scheduledReceiptMarkup, /Pagamento apenas agendado\./);
+assert.doesNotMatch(scheduledReceiptMarkup, /Conferência necessária/);
+const singleBlockingMarkup = renderToStaticMarkup(
+  jsx(ReceiptReadingNotices, {
+    receipt: {
+      receiptAmountCents: 710000,
+      receiptDetails: {
+        ...document,
+        state: 'scheduled',
+        automaticEligible: false,
+        blocked: true,
+        payerName: 'Pagador',
+        payerBank: 'Banco pagador',
+        recipientName: 'Recebedor',
+        recipientBank: 'Banco recebedor',
+        paidAtText: '13/09/2026 14:16',
+      },
+    },
+  }),
+);
+assert.match(singleBlockingMarkup, /Pagamento apenas agendado\./);
+assert.doesNotMatch(singleBlockingMarkup, /Conferência necessária|<ol/);
+const multipleBlockingMarkup = renderToStaticMarkup(
+  jsx(ReceiptReadingNotices, {
+    receipt: {
+      receiptAmountCents: null,
+      receiptDetails: {
+        ...document,
+        state: 'scheduled',
+        automaticEligible: false,
+        blocked: true,
+      },
+    },
+  }),
+);
+assert.match(multipleBlockingMarkup, /\d+ problemas no comprovante:/);
+assert.match(multipleBlockingMarkup, /<ol/);
+assert.match(multipleBlockingMarkup, /Valor não identificado\./);
+assert.match(multipleBlockingMarkup, /Pagamento apenas agendado\./);
 const cashReportMarkup = renderToStaticMarkup(
   jsx(SalesReportPayments, {
     summary: {

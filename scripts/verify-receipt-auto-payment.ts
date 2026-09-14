@@ -12,7 +12,10 @@ import {
 import { processReceiptJob } from '../lib/server/node/receipt-jobs.mjs';
 import { retryReceipt } from '../lib/server/retry-receipt.ts';
 import { deleteSaleReceipt } from '../lib/server/delete-receipt.ts';
-import { refreshSaleReceivedTotals } from '../lib/server/sale-received-totals.ts';
+import {
+  refreshSaleReceivedTotals,
+  refreshStoreReceivedTotals,
+} from '../lib/server/sale-received-totals.ts';
 import {
   readReceiptPaymentSync,
   registerFirstReceiptPix,
@@ -21,7 +24,11 @@ import {
   stopReceiptPaymentSync,
   processReceiptPaymentSync,
 } from '../lib/server/receipt-payment-sync.ts';
-import { receiptEvidenceProblem } from '../lib/server/receipt-evidence-safety.ts';
+import {
+  receiptEvidenceProblem,
+  releaseCancelledSaleReceiptLinks,
+  requeueReceiptsBlockedByCancelledSale,
+} from '../lib/server/receipt-evidence-safety.ts';
 import { readOverview } from '../lib/server/overview.ts';
 import { overviewComparison, overviewSaleComparison } from '../lib/overview.ts';
 import { originalSalePayments } from '../lib/server/original-sale-payments.ts';
@@ -807,6 +814,339 @@ assert.equal(
   (await readReceiptPaymentSync(db, 'shop', 'second'))!.request?.status,
   'review',
 );
+
+// A cancelled sale retains its immutable history but no longer reserves the
+// Pix identity. A historical stale link is transferred atomically to the
+// active replacement sale, without deleting the cancelled payment or proof.
+seed(0, 410000);
+const replacementReading = addReceipt('replacement-proof');
+adapter.database.exec(`
+  INSERT INTO sales(id,store_id,number,customer_name,seller_user_id,seller_name,status,products_total_cents,received_total_cents,received_difference_cents,reference_total_cents,price_difference_cents,created_at)
+  VALUES('cancelled-sale','shop',2,'Cancelada','owner','Teste','cancelled',410000,410000,0,410000,0,1);
+`);
+addReceipt('cancelled-proof');
+adapter.database.exec(`
+  UPDATE attachments SET sale_id='cancelled-sale' WHERE id='cancelled-proof';
+  INSERT INTO payments(id,store_id,sale_id,method,account_name,amount_cents,created_at)
+  VALUES('cancelled-pix','shop','cancelled-sale','pix','Conta histórica',410000,1);
+`);
+adapter.database
+  .prepare(
+    `INSERT INTO receipt_payment_links(attachment_id,store_id,sale_id,payment_id,transaction_id,created_at)
+     VALUES('cancelled-proof','shop','cancelled-sale','cancelled-pix',?,1)`,
+  )
+  .run(receiptEvidenceKey(replacementReading.details)!);
+adapter.database
+  .prepare(
+    `INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+     VALUES('cancelled-claim','shop','owner','sale.receipt_transaction_claimed','attachment','cancelled-proof',?,1)`,
+  )
+  .run(
+    JSON.stringify({
+      transactionId: receiptEvidenceKey(replacementReading.details),
+      saleId: 'cancelled-sale',
+      paymentIds: ['cancelled-pix'],
+    }),
+  );
+await sync();
+await check(410000, 1);
+assert.deepEqual(
+  adapter.database
+    .prepare(
+      'SELECT attachment_id AS attachmentId,sale_id AS saleId FROM receipt_payment_links',
+    )
+    .all()
+    .map((row) => ({ ...row })),
+  [{ attachmentId: 'replacement-proof', saleId: 'sale' }],
+  'the active sale owns the transaction after the atomic transfer',
+);
+assert.equal(
+  adapter.database
+    .prepare("SELECT COUNT(*) AS n FROM payments WHERE id='cancelled-pix' AND sale_id='cancelled-sale'")
+    .get()!.n,
+  1,
+  'the cancelled payment remains available in history',
+);
+assert.equal(
+  adapter.database
+    .prepare("SELECT COUNT(*) AS n FROM attachments WHERE id='cancelled-proof' AND sale_id='cancelled-sale'")
+    .get()!.n,
+  1,
+  'the cancelled proof remains available in history',
+);
+assert.equal(
+  adapter.database
+    .prepare("SELECT COUNT(*) AS n FROM audit_events WHERE id='cancelled-claim'")
+    .get()!.n,
+  1,
+  'the cancelled transaction claim remains in the immutable audit trail',
+);
+
+// The same transfer also covers a provisional value-only link promoted to a
+// canonical Pix identity after rereading the active attachment.
+seed(0, 440000);
+adapter.database
+  .prepare(
+    `INSERT INTO attachments(id,store_id,kind,sale_id,r2_key,file_name,mime_type,size_bytes,receipt_amount_cents,receipt_amount_source,receipt_amount_confirmed_at,receipt_details_json,created_by,created_at)
+     VALUES('promoted-proof','shop','receipt','sale','promoted-proof','promoted.png','image/png',4,440000,'ocr',1,?,'owner',1)`,
+  )
+  .run(JSON.stringify(valueOnly.details));
+await sync();
+const promotedPaymentId = (await state())!.payments[0].id;
+assert.equal(
+  adapter.database
+    .prepare("SELECT transaction_id AS id FROM receipt_payment_links WHERE attachment_id='promoted-proof'")
+    .get()!.id,
+  'receipt:promoted-proof',
+);
+adapter.database.exec(`
+  INSERT INTO sales(id,store_id,number,customer_name,seller_user_id,seller_name,status,products_total_cents,received_total_cents,received_difference_cents,reference_total_cents,price_difference_cents,created_at)
+  VALUES('cancelled-promotion','shop',2,'Cancelada','owner','Teste','cancelled',440000,440000,0,440000,0,1);
+`);
+const canonicalReading = addReceipt(
+  'cancelled-canonical',
+  9,
+  'Banco Recebedor',
+  '12345678000199',
+  '4.400,00',
+);
+adapter.database.exec(`
+  UPDATE attachments SET sale_id='cancelled-promotion' WHERE id='cancelled-canonical';
+  INSERT INTO payments(id,store_id,sale_id,method,account_name,amount_cents,created_at)
+  VALUES('cancelled-canonical-pix','shop','cancelled-promotion','pix','Conta histórica',440000,1);
+`);
+adapter.database
+  .prepare(
+    `INSERT INTO receipt_payment_links(attachment_id,store_id,sale_id,payment_id,transaction_id,created_at)
+     VALUES('cancelled-canonical','shop','cancelled-promotion','cancelled-canonical-pix',?,1)`,
+  )
+  .run(receiptEvidenceKey(canonicalReading.details)!);
+adapter.database
+  .prepare(
+    `UPDATE attachments SET receipt_details_json=?,receipt_amount_confirmed_at=2
+     WHERE id='promoted-proof'`,
+  )
+  .run(JSON.stringify(canonicalReading.details));
+await sync();
+await check(440000, 1);
+assert.equal(
+  (await state())!.payments[0].id,
+  promotedPaymentId,
+  'identity promotion keeps the same active Pix payment',
+);
+assert.deepEqual(
+  adapter.database
+    .prepare(
+      'SELECT attachment_id AS attachmentId,transaction_id AS transactionId FROM receipt_payment_links',
+    )
+    .all()
+    .map((row) => ({ ...row })),
+  [
+    {
+      attachmentId: 'promoted-proof',
+      transactionId: receiptEvidenceKey(canonicalReading.details),
+    },
+  ],
+);
+assert.equal(
+  adapter.database
+    .prepare("SELECT COUNT(*) AS n FROM payments WHERE id='cancelled-canonical-pix'")
+    .get()!.n,
+  1,
+  'the old payment remains even when a provisional link is promoted',
+);
+
+// A future cancellation releases every operational Pix link and reopens only
+// replacement sales that were blocked by the same transaction identity.
+seed(0, 410000);
+const blockedReading = addReceipt('blocked-proof');
+adapter.database.exec(`
+  INSERT INTO sales(id,store_id,number,customer_name,seller_user_id,seller_name,products_total_cents,received_total_cents,received_difference_cents,reference_total_cents,price_difference_cents,created_at)
+  VALUES('original-sale','shop',2,'Original','owner','Teste',410000,410000,0,410000,0,1);
+`);
+addReceipt('original-proof');
+adapter.database.exec(`
+  UPDATE attachments SET sale_id='original-sale' WHERE id='original-proof';
+  INSERT INTO payments(id,store_id,sale_id,method,account_name,amount_cents,created_at)
+  VALUES('original-pix','shop','original-sale','pix','Conta original',410000,1);
+`);
+adapter.database
+  .prepare(
+    `INSERT INTO receipt_payment_links(attachment_id,store_id,sale_id,payment_id,transaction_id,created_at)
+     VALUES('original-proof','shop','original-sale','original-pix',?,1)`,
+  )
+  .run(receiptEvidenceKey(blockedReading.details)!);
+await sync();
+assert.equal((await state())!.request?.status, 'review');
+const cancellationDetails = JSON.stringify({ reason: 'Venda substituída' });
+await adapter.batch([
+  db
+    .prepare("UPDATE sales SET status='cancelled' WHERE id='original-sale' AND store_id='shop'")
+    .bind(),
+  db
+    .prepare(
+      `INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+       VALUES('cancel-original','shop','owner','sale.cancelled','sale','original-sale',?,2)`,
+    )
+    .bind(cancellationDetails),
+  releaseCancelledSaleReceiptLinks(
+    db,
+    'shop',
+    'original-sale',
+    'cancel-original',
+  ),
+  requeueReceiptsBlockedByCancelledSale(
+    db,
+    {
+      storeId: 'shop',
+      cancelledSaleId: 'original-sale',
+      actorId: 'owner',
+      requestId: 'cancel-release:original-sale',
+      cancellationAuditId: 'cancel-original',
+    },
+    2,
+  ),
+  refreshStoreReceivedTotals(db, 'shop', {
+    auditId: 'cancel-original',
+    auditAction: 'sale.cancelled',
+    auditEntityId: 'original-sale',
+  }),
+]);
+assert.equal(
+  adapter.database
+    .prepare("SELECT COUNT(*) AS n FROM receipt_payment_links WHERE sale_id='original-sale'")
+    .get()!.n,
+  0,
+  'cancellation releases all receipt transaction links',
+);
+assert.equal((await state())!.request?.status, 'pending');
+assert.equal(
+  (await state())!.sale.receivedTotalCents,
+  410000,
+  'the replacement balance refreshes as soon as cancellation releases the duplicate',
+);
+await settleReceiptPaymentSync(db, 'shop', 'sale');
+await check(410000, 1);
+
+// Every reopened sale gets its own request identity. This prevents the global
+// audit id from colliding when one cancellation unblocks several replacements.
+seed(0, 410000);
+addReceipt('first-replacement', 21);
+adapter.database.exec(`
+  INSERT INTO sales(id,store_id,number,customer_name,seller_user_id,seller_name,status,products_total_cents,received_total_cents,received_difference_cents,reference_total_cents,price_difference_cents,created_at)
+  VALUES('cancelled-multi','shop',2,'Cancelada','owner','Teste','cancelled',820000,820000,0,820000,0,1),
+        ('second-replacement','shop',3,'Substituta 2','owner','Teste','completed',410000,0,-410000,410000,0,1);
+  INSERT INTO sale_receipt_payment_sync(sale_id,store_id,request_id,requested_by,status,updated_at)
+  VALUES('sale','shop','review:first','owner','review',1),
+        ('second-replacement','shop','in-flight:second','owner','pending',1);
+`);
+addReceipt('cancelled-multi-proof-1', 21);
+adapter.database.exec(
+  "UPDATE attachments SET sale_id='cancelled-multi' WHERE id='cancelled-multi-proof-1'",
+);
+addReceipt('second-replacement-proof', 22);
+adapter.database.exec(
+  "UPDATE attachments SET sale_id='second-replacement' WHERE id='second-replacement-proof'",
+);
+addReceipt('cancelled-multi-proof-2', 22);
+adapter.database.exec(
+  "UPDATE attachments SET sale_id='cancelled-multi' WHERE id='cancelled-multi-proof-2'",
+);
+adapter.database.exec(`
+  INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+  VALUES('cancel-multi','shop','owner','sale.cancelled','sale','cancelled-multi','{}',2);
+`);
+await adapter.batch([
+  requeueReceiptsBlockedByCancelledSale(
+    db,
+    {
+      storeId: 'shop',
+      cancelledSaleId: 'cancelled-multi',
+      actorId: 'owner',
+      requestId: 'cancel-release:multi',
+      cancellationAuditId: 'cancel-multi',
+    },
+    2,
+  ),
+]);
+assert.deepEqual(
+  adapter.database
+    .prepare(
+      "SELECT sale_id AS saleId,request_id AS requestId,status FROM sale_receipt_payment_sync ORDER BY sale_id",
+    )
+    .all()
+    .map((row) => ({ ...row })),
+  [
+    {
+      saleId: 'sale',
+      requestId: 'cancel-release:multi:sale',
+      status: 'pending',
+    },
+    {
+      saleId: 'second-replacement',
+      requestId: 'cancel-release:multi:second-replacement',
+      status: 'pending',
+    },
+  ],
+);
+
+// A cancellation must never reopen or erase a genuine manual hold, even when
+// another receipt in that sale shares the cancelled transaction identity.
+seed(0, 410000);
+addReceipt('manual-hold-target', 31);
+adapter.database.exec(`
+  UPDATE attachments SET receipt_review_reason='Revisão manual' WHERE id='manual-hold-target';
+  INSERT INTO sales(id,store_id,number,customer_name,seller_user_id,seller_name,status,products_total_cents,received_total_cents,received_difference_cents,reference_total_cents,price_difference_cents,created_at)
+  VALUES('cancelled-manual-hold','shop',2,'Cancelada','owner','Teste','cancelled',410000,410000,0,410000,0,1);
+  INSERT INTO sale_receipt_payment_sync(sale_id,store_id,request_id,requested_by,status,updated_at)
+  VALUES('sale','shop','review:manual','owner','review',1);
+`);
+addReceipt('cancelled-manual-proof', 31);
+adapter.database.exec(`
+  UPDATE attachments SET sale_id='cancelled-manual-hold' WHERE id='cancelled-manual-proof';
+  INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+  VALUES('cancel-manual-hold','shop','owner','sale.cancelled','sale','cancelled-manual-hold','{}',2);
+`);
+await adapter.batch([
+  requeueReceiptsBlockedByCancelledSale(
+    db,
+    {
+      storeId: 'shop',
+      cancelledSaleId: 'cancelled-manual-hold',
+      actorId: 'owner',
+      requestId: 'cancel-release:manual-hold',
+      cancellationAuditId: 'cancel-manual-hold',
+    },
+    2,
+  ),
+]);
+assert.equal((await state())!.request?.status, 'review');
+assert.equal(
+  adapter.database
+    .prepare("SELECT receipt_review_reason AS reason FROM attachments WHERE id='manual-hold-target'")
+    .get()!.reason,
+  'Revisão manual',
+);
+
+// Unknown/orphan claims remain fail-closed; only a sale proven cancelled can
+// release a transaction identity.
+seed(0, 410000);
+const orphanReading = addReceipt('orphan-target');
+adapter.database
+  .prepare(
+    `INSERT INTO audit_events(id,store_id,actor_user_id,action,entity_type,entity_id,details_json,created_at)
+     VALUES('orphan-claim','shop','owner','sale.receipt_transaction_claimed','attachment','missing-proof',?,1)`,
+  )
+  .run(
+    JSON.stringify({
+      transactionId: receiptEvidenceKey(orphanReading.details),
+      saleId: 'missing-sale',
+      paymentIds: ['missing-payment'],
+    }),
+  );
+await sync();
+assert.equal((await state())!.request?.status, 'review');
+await check(0, 0);
 // Transaction identity is store-wide: a reading on another sale invalidates
 // both caches, and deleting that duplicate restores the original sale.
 seed();

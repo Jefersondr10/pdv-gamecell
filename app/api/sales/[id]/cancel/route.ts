@@ -1,6 +1,11 @@
 import { assertCsrf, requireSession } from '@/lib/server/auth';
 import { stopReceiptPaymentSync } from '@/lib/server/receipt-payment-sync';
 import {
+  releaseCancelledSaleReceiptLinks,
+  requeueReceiptsBlockedByCancelledSale,
+} from '@/lib/server/receipt-evidence-safety';
+import { refreshStoreReceivedTotals } from '@/lib/server/sale-received-totals';
+import {
   apiError,
   assertJsonRequest,
   assertSameOrigin,
@@ -79,7 +84,7 @@ export async function POST(
       now,
       session.storeId!,
       session.id,
-      8 + Math.min(50, Number(sale.itemCount) || 0) * 2,
+      11 + Math.min(50, Number(sale.itemCount) || 0) * 2,
     );
     try {
       await db.batch([
@@ -142,6 +147,28 @@ export async function POST(
             }),
             now,
           ),
+        requeueReceiptsBlockedByCancelledSale(
+          db,
+          {
+            storeId,
+            cancelledSaleId: saleId,
+            actorId: session.id,
+            requestId: `cancel-release:${operationId}`,
+            cancellationAuditId: operationId,
+          },
+          now,
+        ),
+        releaseCancelledSaleReceiptLinks(
+          db,
+          storeId,
+          saleId,
+          operationId,
+        ),
+        refreshStoreReceivedTotals(db, storeId, {
+          auditId: operationId,
+          auditAction: 'sale.cancelled',
+          auditEntityId: saleId,
+        }),
       ]);
     } catch (error) {
       const saved = await findCancellationOperation(db, operationId);

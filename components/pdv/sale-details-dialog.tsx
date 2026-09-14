@@ -64,6 +64,7 @@ export function SaleDetailsDialog({
   const financial = sale ? saleFinancialSummary(sale) : null;
   const showReceiptConference = Boolean(
     sale &&
+    sale.status !== 'cancelled' &&
     (sale.receipts.length > 0 || sale.reconciliation.status !== 'not_required'),
   );
   const [pricesBusy, setPricesBusy] = useState(false);
@@ -133,7 +134,7 @@ export function SaleDetailsDialog({
                     )}
                 </div>
               </dl>
-              {financial?.receiptText && (
+              {sale.status !== 'cancelled' && financial?.receiptText && (
                 <p
                   className={`rounded-xl border p-3 text-sm tabular-nums ${
                     financial.receiptWarning
@@ -236,8 +237,9 @@ export function SaleDetailsDialog({
                     ))
                   ) : (
                     <p className="p-3 text-sm text-muted-foreground">
-                      Nenhum recebimento registrado. Falta receber{' '}
-                      {money(sale.productsTotalCents)}.
+                      {sale.status === 'cancelled'
+                        ? 'Venda cancelada; nenhum recebimento permanece no saldo ativo.'
+                        : `Nenhum recebimento registrado. Falta receber ${money(sale.productsTotalCents)}.`}
                     </p>
                   )}
                 </div>
@@ -268,6 +270,21 @@ export function SaleDetailsDialog({
                         : 'Os comprovantes são comparados ao preço da venda.'}{' '}
                       Não confirma crédito na conta bancária.
                     </p>
+                  </>
+                )}
+                {sale.status === 'cancelled' && sale.receipts.length > 0 && (
+                  <>
+                    <p className="mt-3 text-sm font-semibold">
+                      Comprovantes arquivados
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Preservados somente no histórico da venda cancelada.
+                    </p>
+                    <ReceiptPaymentDetails
+                      receipts={sale.receipts}
+                      required={false}
+                      showNotices={false}
+                    />
                   </>
                 )}
               </section>

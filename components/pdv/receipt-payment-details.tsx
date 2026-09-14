@@ -9,10 +9,12 @@ export function ReceiptPaymentDetails({
   financiallyReconciled = false,
   receipts,
   required = true,
+  showNotices = true,
 }: {
   financiallyReconciled?: boolean;
   receipts: ReceiptAttachmentRecord[];
   required?: boolean;
+  showNotices?: boolean;
 }) {
   if (!receipts.length && !required) return null;
   if (!receipts.length)
@@ -118,10 +120,12 @@ export function ReceiptPaymentDetails({
               </p>
             </div>
           )}
-          <ReceiptReadingNotices
-            financiallyReconciled={financiallyReconciled}
-            receipt={receipt}
-          />
+          {showNotices && (
+            <ReceiptReadingNotices
+              financiallyReconciled={financiallyReconciled}
+              receipt={receipt}
+            />
+          )}
         </section>
       ))}
     </div>
