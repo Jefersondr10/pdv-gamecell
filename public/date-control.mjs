@@ -36,6 +36,13 @@ export function dateRange(preset,today) {
 }
 export function salesFilterValues(data,today) {
  const {date_preset,...filters}=data;
+ if(Object.hasOwn(filters,'sale_status')){
+  const selected=String(filters.sale_status??'');
+  delete filters.sale_status;delete filters.review;delete filters.operational_status_id;
+  if(selected==='__review__')filters.review='required';
+  else if(selected==='__review_clear__')filters.review='clear';
+  else if(selected){filters.operational_status_id=selected;filters.review='clear';}
+ }
  if(date_preset==='period'){
   if(!filters.from||!filters.to)throw Error('Informe a data inicial e a data final.');
   for(const key of ['from','to'])if(!/^\d{4}-\d{2}-\d{2}$/.test(filters[key])||isoDate(brazilianDate(filters[key]))!==filters[key])throw Error('Informe uma data válida.');

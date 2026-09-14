@@ -121,8 +121,16 @@ const operationalBadge = status => status
  : '<span class="operational-badge status-neutral"><span class="status-dot" aria-hidden="true"></span>Sem status</span>';
 const operationalOptions = selected => option('','Sem status',selected)+saleStatuses().map(s=>option(s.id,s.name,selected)).join('');
 const reviewStatusValue='__review__';
+const reviewClearStatusValue='__review_clear__';
 const unifiedStatusValue = sale => sale?.review?.required ? reviewStatusValue : sale?.operational_status?.id??'';
 const unifiedStatusOptions = selected => option('','Sem status',selected)+option(reviewStatusValue,'A conferir',selected)+saleStatuses().map(status=>option(status.id,status.name,selected)).join('');
+const salesStatusFilterValue = current => current.review==='required'?reviewStatusValue:current.operational_status_id||(current.review==='clear'?reviewClearStatusValue:'');
+const salesStatusFilterOptions = selected => option('','Todos os status',selected)+option(reviewStatusValue,'A conferir',selected)+saleStatuses().map(status=>option(status.id,status.name,selected)).join('')+option(reviewClearStatusValue,'Sem pendências',selected);
+function salesStatusFilterLabel(selected) {
+ if(selected===reviewStatusValue)return 'A conferir';
+ if(selected===reviewClearStatusValue)return 'Sem pendências';
+ return saleStatuses().find(status=>status.id===selected)?.name??'Todos os status';
+}
 function reviewBadge(s) {
  const review=s?.review;
  if(s?.status==='cancelled'||!review?.required)return '';
@@ -254,18 +262,17 @@ function filters() {
  const today=todayFilter(), from=filter.from??today.from, to=filter.to??today.to, summary=dateFilterSummary();
  const preset=filter.date_preset==='all'?'all':['today','yesterday','month'].find(p=>{const r=dateRange(p,today.from);return r.from===from&&r.to===to;})??'period';
  const typeLabel=filter.sale_type==='wholesale'?'Atacado':filter.sale_type==='retail'?'Varejo':'Atacado e varejo';
- const reviewLabel=filter.review==='required'?'Somente A conferir':filter.review==='clear'?'Somente conferidas':'Todas as conferências';
+ const selectedStatus=salesStatusFilterValue(filter),statusLabel=salesStatusFilterLabel(selectedStatus);
  return `<form id="filter-form" class="filters sales-filters" data-filter-owner="${esc(state.user.id)}" aria-label="Filtrar vendas">
  <label class="field sales-query">Buscar venda<input name="q" type="search" maxlength="120" value="${esc(filter.q??'')}" placeholder="Nº da venda, cliente ou produto" aria-label="Buscar por número da venda, cliente, produto ou vendedor" autocomplete="off"></label>
  <label class="field sales-date-filter">Data<select name="date_preset" data-date-preset aria-label="Período das vendas">${option('today','Hoje',preset)}${option('yesterday','Ontem',preset)}${option('month','Este mês',preset)}${option('period','Escolher período',preset)}${option('all','Todos os dias',preset)}</select></label>
  <label class="field sales-type-filter">Tipo de venda<select name="sale_type" aria-label="Filtrar atacado ou varejo">${option('','Todas',filter.sale_type)}${option('wholesale','Atacado',filter.sale_type)}${option('retail','Varejo',filter.sale_type)}</select></label>
  <div id="sales-period-range" class="sales-period-range" ${preset==='period'?'':'hidden'}>${field('De',input('from',from,`type="date" required ${preset==='period'?'':'disabled'}`))}${field('Até',input('to',to,`type="date" required ${preset==='period'?'':'disabled'}`))}</div>
  ${field('Vendedor',`<select name="seller_id" aria-label="Filtrar vendedor">${option('','Todos os vendedores',filter.seller_id)}${state.users.map(u=>option(u.id,u.name,filter.seller_id)).join('')}</select>`)}
- ${field('Status',`<select name="operational_status_id" aria-label="Filtrar status operacional">${option('','Todos os status',filter.operational_status_id)}${saleStatuses().map(s=>option(s.id,s.name,filter.operational_status_id)).join('')}</select>`)}
- ${field('Conferência',`<select name="review" aria-label="Filtrar vendas a conferir">${option('','Todas',filter.review)}${option('required','A conferir',filter.review)}${option('clear','Sem pendências',filter.review)}</select>`)}
+ ${field('Status',`<select name="sale_status" aria-label="Filtrar status da venda">${salesStatusFilterOptions(selectedStatus)}</select>`)}
  ${field('Situação',`<select name="status" aria-label="Filtrar situação da venda">${option('','Todas as situações',filter.status)}${option('confirmed','Confirmadas',filter.status)}${option('draft','Rascunhos',filter.status)}${option('cancelled','Canceladas',filter.status)}</select>`)}
  <button class="small subtle" type="button" data-action="clear-filters">Limpar</button><p class="error sales-filter-error" role="alert"></p></form>
- <p class="applied-sales-period" role="status">Período aplicado: ${esc(summary)} · ${esc(typeLabel)} · ${esc(reviewLabel)} · ${state.sales.length} ${state.sales.length===1?'registro encontrado':'registros encontrados'}${filter.q?` · Busca: “${esc(filter.q)}”`:''}</p>`;
+ <p class="applied-sales-period" role="status">Período aplicado: ${esc(summary)} · ${esc(typeLabel)} · Status: ${esc(statusLabel)} · ${state.sales.length} ${state.sales.length===1?'registro encontrado':'registros encontrados'}${filter.q?` · Busca: “${esc(filter.q)}”`:''}</p>`;
 }
 function empty(title, description) {return `<div class="empty">${icon('bag')}<h3>${title}</h3><p>${description}</p></div>`;}
 function saleListStatus(s) {
@@ -466,11 +473,19 @@ function startSale(productId='',fresh=false) {
  if(product)working.items.push({product_id:product.id,description:product.name,quantity:1,price:value(product.price_cents),cost:'',manual_cost_known:true});
  workingDirty=false;productHistory=null;view='editor';render();
 }
+function paymentRateBasis(payment) {
+ const rate=state.rates.find(r=>r.id===payment.rate_id);
+ return payment.saved&&payment.keep_card_rate?payment.basis_points:rate?.basis_points;
+}
+function paymentNumbers(payment) {
+ const amount=cents(payment.amount),basis=paymentRateBasis(payment);
+ const fee=payment.method==='card'?Number((BigInt(amount)*BigInt(basis??0)+5000n)/10000n):0;
+ return {amount,basis,fee,net:amount-fee};
+}
 function editorNumbers() {
  const total=working.items.reduce((s,i)=>s+cents(i.price)*Number(i.quantity||0),0);
- let gross=0, fees=0;
- for(const p of working.payments){const amount=cents(p.amount);gross+=amount;const rate=state.rates.find(r=>r.id===p.rate_id),basis=p.saved&&p.keep_card_rate?p.basis_points:rate?.basis_points;fees+=p.method==='card'?Number((BigInt(amount)*BigInt(basis??0)+5000n)/10000n):0;}
- return {total,gross,fees,diff:gross-total};
+ const payments=working.payments.map(paymentNumbers),gross=payments.reduce((sum,p)=>sum+p.amount,0),fees=payments.reduce((sum,p)=>sum+p.fee,0);
+ return {total,gross,fees,diff:gross-total,payments};
 }
 function normalizeCardSelection(payment) {
  const rates=state.rates,previous=rates.find(r=>r.id===payment.rate_id);
@@ -525,8 +540,12 @@ function editorSellerOptions(w){
  const original=w.original_seller_id,missing=original&&!state.users.some(u=>u.id===original);
  return option('','Selecione o vendedor',w.seller_id)+(missing?option(original,`${w.original_seller_name||'Vendedor original'} (inativo)`,w.seller_id):'')+state.users.filter(u=>u.id===state.user.id||u.id===original||can('sales.assign_seller')).map(u=>option(u.id,u.name,w.seller_id)).join('');
 }
+function paymentNetMarkup(payment,index) {
+ if(!can('costs.view')||payment.method!=='card'||paymentRateBasis(payment)===undefined)return '';
+ return `<div class="payment-net-summary" data-payment-net="${index}" aria-live="polite"><span>Líquido a receber</span><strong data-payment-net-value>—</strong></div>`;
+}
 function paymentEditorRows(){
- return working.payments.map((p,n)=>`<section class="editable-payment"><div class="payment-row"><label class="field payment-method">Forma<select data-payment="${n}" data-key="method" ${paymentEditable(p)?'':'disabled'}>${Object.entries(methods).map(([v,l])=>option(v,l,p.method)).join('')}</select></label>${paymentAccountField(p,n)}<label class="field payment-value">Valor pago<input inputmode="decimal" data-payment="${n}" data-key="amount" value="${esc(p.amount)}" ${paymentEditable(p)?'':'disabled'}></label>${paymentEditable(p)?`<button class="subtle danger delete" data-action="remove-payment" data-index="${n}" aria-label="Remover pagamento ${n+1}">${icon('x')}</button>`:'<span class="badge good">Registrado</span>'}</div>${working.status==='confirmed'?`<label class="field payment-date">Data do pagamento<input data-date-kind="date" inputmode="numeric" maxlength="10" placeholder="DD/MM/AAAA" data-payment="${n}" data-key="paid_date" value="${esc(p.paid_date??brazilianDate(saoPauloToday()))}" ${paymentEditable(p)?'':'disabled'}></label>`:''}</section>`).join('');
+ return working.payments.map((p,n)=>`<section class="editable-payment"><div class="payment-row"><label class="field payment-method">Forma<select data-payment="${n}" data-key="method" ${paymentEditable(p)?'':'disabled'}>${Object.entries(methods).map(([v,l])=>option(v,l,p.method)).join('')}</select></label>${paymentAccountField(p,n)}<label class="field payment-value">Valor pago<input inputmode="decimal" data-payment="${n}" data-key="amount" value="${esc(p.amount)}" ${paymentEditable(p)?'':'disabled'}></label>${paymentEditable(p)?`<button class="subtle danger delete" data-action="remove-payment" data-index="${n}" aria-label="Remover pagamento ${n+1}">${icon('x')}</button>`:'<span class="badge good">Registrado</span>'}</div>${paymentNetMarkup(p,n)}${working.status==='confirmed'?`<label class="field payment-date">Data do pagamento<input data-date-kind="date" inputmode="numeric" maxlength="10" placeholder="DD/MM/AAAA" data-payment="${n}" data-key="paid_date" value="${esc(p.paid_date??brazilianDate(saoPauloToday()))}" ${paymentEditable(p)?'':'disabled'}></label>`:''}</section>`).join('');
 }
 function entryCostsFields(item,index){
  if(!item.product_id||working.status!=='confirmed'||!can('stock.correct')||!can('stock.receive')||!can('costs.enter')||!can('costs.view'))return '';
@@ -607,8 +626,9 @@ function updateSummary() {
   if(error)error.textContent='';
  alert.className=`alert ${n.diff===0?'good':n.diff>0?'bad':''}`;
  alert.textContent=n.diff===0?'Os pagamentos conferem com o total da venda.':n.diff<0?`Pagamento abaixo do total: faltam ${money(-n.diff)}.`:`Pagamento acima do total: diferença de ${money(n.diff)}. Verifique os valores.`;
+ for(const target of document.querySelectorAll('[data-payment-net]')){const payment=n.payments[Number(target.dataset.paymentNet)];if(payment)target.querySelector('[data-payment-net-value]').textContent=money(payment.net);}
  document.querySelector('#editor-summary').innerHTML=`<div class="summary-total"><div class="eyebrow">TOTAL DA VENDA ${wholesaleBadge(working)}</div><div class="metric-value">${money(n.total)}</div><p class="muted">${working.items.reduce((s,i)=>s+Number(i.quantity||0),0)} produtos</p></div><div class="row-stat"><span>Pagamentos brutos</span><strong>${money(n.gross)}</strong></div>${can('costs.view')?`<div class="row-stat"><span>Taxas do cartão</span><strong>${money(n.fees)}</strong></div><div class="row-stat"><span>Líquido registrado</span><strong>${money(n.gross-n.fees)}</strong></div>`:''}<div class="row-stat"><span>${n.diff>0?'Informado a mais':'Falta registrar'}</span><strong>${money(Math.abs(n.diff))}</strong></div><p class="stat-note">${can('profit.view')?'O resultado será apurado após confirmar a venda e identificar os custos FIFO.':'As informações financeiras seguem suas permissões.'}</p>`;
- }catch(e){document.querySelector('#editor-error').textContent=e.message;}
+ }catch(e){for(const target of document.querySelectorAll('[data-payment-net-value]'))target.textContent='—';document.querySelector('#editor-error').textContent=e.message;}
 }
 function renderDetail() {
  const s=detailSale?.id===detailId?detailSale:state.sales.find(s=>s.id===detailId); if(!s){view='sales';render();return;}
@@ -1010,7 +1030,7 @@ document.addEventListener('click',async e=>{
  else if(a==='add-expense'){working.expenses.push({description:'',amount:'0,00'});workingDirty=true;renderEditor();}
  else if(a==='remove-expense'){working.expenses.splice(n,1);workingDirty=true;renderEditor();}
  else if(a==='clear-filters'){salesFilters.clear();busy=true;await applySalesFilters({date_preset:'today'});}
- else if(a==='show-review-sales'){salesFilters.clear();const previous={...filter};filter={...filter,review:'required'};busy=true;try{await load();view='sales';render();}catch(error){filter=previous;throw error;}}
+ else if(a==='show-review-sales'){salesFilters.clear();const previous={...filter};filter={...filter,review:'required'};delete filter.operational_status_id;busy=true;try{await load();view='sales';render();}catch(error){filter=previous;throw error;}}
  else if(a==='status-swatch'){updateStatusPalette(button.dataset.colorSwatch);}
  else if(a==='add-machine-brand'){machineDraft.brands.push(freshMachineBrand());machineDraft.selected=machineDraft.brands.length-1;machineDraftDirty=true;renderMachineModal();modal.querySelector('[data-brand-name]').focus();}
  else if(a==='keep-machine-editing'){modal.querySelector('.machine-discard').hidden=true;modal.querySelector('[data-machine-name]').focus();}

@@ -396,6 +396,7 @@ dialog::backdrop { background: #090e207d; backdrop-filter: blur(5px); }
 .summary-actions textarea { resize: vertical; }
 .editable-payment { padding: 18px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fafbfe; }
 .editable-payment .payment-row { margin: 0; padding: 0; border: 0; align-items: start; }
+.payment-net-summary { display:none; }
 .editable-payment [data-action="change-saved-card"] { white-space: normal; max-width: 100%; text-align: left; justify-content: flex-start; }
 .editable-payment .payment-date { margin-top: 16px; max-width: 230px; }
 .payment-original { font-size: .875rem; line-height: 1.6; margin: 0; color: var(--ink); white-space: normal; overflow-wrap: anywhere; }
@@ -956,6 +957,9 @@ dialog::backdrop { background: #090e207d; backdrop-filter: blur(5px); }
  .mobile-flow .payment-row>.payment-value { grid-column:2; grid-row:1; }
  .mobile-flow .payment-row>.card-payment-fields,.mobile-flow .payment-row>.payment-rate { grid-column:1/-1; grid-row:2; }
  .mobile-flow .payment-row>.delete { grid-column:2; grid-row:3; }
+ .mobile-flow .payment-net-summary { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; min-height:42px; margin-top:10px; padding:8px 10px; border:1px solid #b9dfd3; border-radius:9px; background:#edf8f4; color:#245f50; }
+ .mobile-flow .payment-net-summary span { font-size:.75rem; font-weight:650; line-height:1.25; }
+ .mobile-flow .payment-net-summary strong { color:#126347; font-size:1rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
  .mobile-flow .footer-note,.mobile-flow .card-rate-note,.mobile-flow .field small { font-size:.75rem; line-height:1.35; }
  .mobile-flow .footer-note { margin:8px 0; }
  .mobile-flow .item-details-fields .fields { grid-template-columns:1fr; }
@@ -1515,7 +1519,8 @@ button.sale-detail-product-name:hover { color:#054f66; text-decoration:underline
 .sale-record-compact { border:1px solid #bfd6e2; border-left:4px solid #087d98; box-shadow:0 7px 20px rgba(27,52,82,.09); }
 .sale-record-compact.sale-record-cancelled { border-color:#edbec2; border-left-color:#bd3a43; }
 .sale-record-overview { position:relative; display:grid; grid-template-columns:minmax(220px,1.15fr) minmax(300px,1fr); align-items:center; gap:16px; width:100%; min-height:86px; padding:13px 16px; border:0; border-radius:0; background:linear-gradient(110deg,#f4fbfd,#faf8ff); color:var(--ink); font:inherit; text-align:left; overflow:hidden; }
-.sale-record-open-button { position:absolute; inset:0; z-index:1; width:100%; height:100%; min-height:0; padding:0; border:0; border-radius:0; background:transparent; cursor:pointer; }
+.sale-record-open-button { position:absolute; inset:0; z-index:1; width:100%; height:100%; min-height:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; cursor:pointer; }
+.sale-record-open-button:hover,.sale-record-open-button:active { background:transparent; border-color:transparent; box-shadow:none; }
 .sale-record-open-button:focus-visible { outline:3px solid var(--focus-ring); outline-offset:-3px; }
 .sale-record-overview>span { position:relative; pointer-events:none; }
 .sale-record-overview .sale-wholesale { position:relative; z-index:2; pointer-events:auto; }

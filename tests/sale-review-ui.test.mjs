@@ -27,9 +27,12 @@ test('interface A conferir: card abre a lista filtrada e Vendas continua sem car
   assert.match(dashboard, /reviewMetric\(String\(d\.incomplete_sales\)\)/);
   assert.match(app, /data-action="show-review-sales"/);
   assert.match(app, /filter=\{\.\.\.filter,review:'required'\}/);
+  assert.match(app, /filter=\{\.\.\.filter,review:'required'\};delete filter\.operational_status_id/);
   assert.doesNotMatch(sales, /metric-grid|reviewMetric/);
-  assert.match(app, /name="review" aria-label="Filtrar vendas a conferir"/);
-  assert.match(app, /option\('required','A conferir',filter\.review\)/);
+  const filterMarkup=source('function filters()', 'function empty(');
+  assert.match(filterMarkup, /name="sale_status" aria-label="Filtrar status da venda"/);
+  assert.match(app, /salesStatusFilterOptions = selected => option\('','Todos os status',selected\)\+option\(reviewStatusValue,'A conferir',selected\)/);
+  assert.doesNotMatch(filterMarkup, /name="review"|name="operational_status_id"|>Conferência</);
   assert.match(css, /\.metric-action/);
 });
 

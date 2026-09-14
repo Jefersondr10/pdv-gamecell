@@ -28,3 +28,8 @@ test('card mobile mantém Venda, Custo e Lucro em uma única faixa clicável', (
   assert.match(css, /@media screen and \(max-width:700px\)[\s\S]*?\.sale-record-compact-values\s*\{[^}]*grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
   assert.match(css, /\.sale-record-compact\s*\{[^}]*border-left:4px solid #087d98[^}]*box-shadow/);
 });
+
+test('card clicável mantém os textos visíveis ao passar o mouse', () => {
+  assert.match(css, /\.sale-record-open-button\s*\{[^}]*background:transparent[^}]*box-shadow:none/);
+  assert.match(css, /\.sale-record-open-button:hover,\.sale-record-open-button:active\s*\{[^}]*background:transparent[^}]*border-color:transparent[^}]*box-shadow:none/);
+});

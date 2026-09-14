@@ -28,6 +28,16 @@ test('filtro vendas: todos os dias remove limites antigos, preserva tipo/busca e
  assert.deepEqual(original,copy);
 });
 
+test('filtro vendas: um único Status traduz conferência e andamento sem enviar o campo visual',()=>{
+ const cases=[
+  [{date_preset:'all',sale_status:'__review__',review:'clear',operational_status_id:'antigo'},{date_preset:'all',review:'required'}],
+  [{date_preset:'all',sale_status:'__review_clear__',review:'required',operational_status_id:'antigo'},{date_preset:'all',review:'clear'}],
+  [{date_preset:'all',sale_status:'conciliado',review:'required',operational_status_id:'antigo'},{date_preset:'all',operational_status_id:'conciliado',review:'clear'}],
+  [{date_preset:'all',sale_status:'',review:'required',operational_status_id:'antigo'},{date_preset:'all'}]
+ ];
+ for(const [input,expected] of cases){const before={...input},actual=salesFilterValues(input,'2026-09-13');assert.deepEqual(actual,expected);assert.deepEqual(input,before);assert.equal(Object.hasOwn(actual,'sale_status'),false);}
+});
+
 test('filtro vendas: onchange consulta presets automaticamente e aguarda período personalizado',async()=>{
  const start=app.indexOf(' if(el.dataset.datePreset!==undefined)'),end=app.indexOf(' if(el.dataset.',start+4);
  assert.ok(start>=0&&end>start);const source=app.slice(start,end);

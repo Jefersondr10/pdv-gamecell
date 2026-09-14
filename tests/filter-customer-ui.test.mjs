@@ -26,7 +26,7 @@ test('interface de filtro: todos os dias, tipo e busca preservam seleção e esc
   const ctx = { ...helpers, filter: { date_preset: 'all', sale_type: 'wholesale', q: '"><script>consulta</script>' },
     state: { user: { id: 'owner' }, users: [{ id: 'seller', name: '<Vendedor>' }], sales: [{ id: 'sale' }] },
     saleStatuses: () => [{ id: 'status', name: '<Status>' }] };
-  runInNewContext(source('function dateFilterSummary(', 'function cents(') + source('function filters(', 'function empty('), ctx);
+  runInNewContext(source('const reviewStatusValue=', 'function reviewBadge(') + source('function dateFilterSummary(', 'function cents(') + source('function filters(', 'function empty('), ctx);
   let html = ctx.filters();
   assert.match(html, /value="all" selected>Todos os dias/); assert.match(html, /value="wholesale" selected>Atacado/);
   assert.match(html, /data-filter-owner="owner"/); assert.match(html, /name="q"[^>]*maxlength="120"/);
