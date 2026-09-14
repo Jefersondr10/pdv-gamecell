@@ -40,7 +40,7 @@ export function createSalesFilterController({
   }
  }
 
- function request(form, { automatic = false } = {}) {
+ function request(form, { automatic = false, delay = 0 } = {}) {
   if (!form || form.isConnected === false) return false;
   let data;
   try {
@@ -57,7 +57,9 @@ export function createSalesFilterController({
   if (!isCurrent(form, data)) return false;
   pending = { form, data, generation };
   stopTimer();
-  void drain();
+  const wait = Number.isFinite(delay) && delay > 0 ? delay : 0;
+  if (wait) timer = schedule(() => { timer = null; if (!running) void drain(); }, wait);
+  else void drain();
   return true;
  }
 

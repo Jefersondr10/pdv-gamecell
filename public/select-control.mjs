@@ -18,11 +18,12 @@ function fieldName(select) {
 function enhance(select) {
   if (controls.has(select) || select.multiple || select.size > 1) return;
   const hadFocus = document.activeElement === select;
-  const searchable=select.dataset.search==='product';
+  const searchKind=['product','customer'].includes(select.dataset.search)?select.dataset.search:'';
+  const searchable=!!searchKind;
   const name = fieldName(select), wrapper = document.createElement('span'), trigger = document.createElement(searchable?'input':'button');
-  wrapper.className = 'select-control'+(searchable?' product-search-control':'');
+  wrapper.className = 'select-control'+(searchable?` ${searchKind}-search-control`:'');
   trigger.type = searchable?'search':'button'; trigger.className = 'select-trigger';
-  if(searchable){trigger.placeholder='Buscar por nome ou código';trigger.autocomplete='off';trigger.setAttribute('aria-autocomplete','list');}
+  if(searchable){trigger.placeholder=searchKind==='customer'?'Buscar cliente pelo nome':'Buscar por nome ou código';trigger.autocomplete='off';trigger.setAttribute('aria-autocomplete','list');}
   trigger.setAttribute('role', 'combobox'); trigger.setAttribute('aria-haspopup', 'listbox');
   trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-label', name);
   if (select.getAttribute('aria-describedby')) trigger.setAttribute('aria-describedby', select.getAttribute('aria-describedby'));
@@ -31,7 +32,7 @@ function enhance(select) {
   trigger.insertAdjacentHTML('beforeend', '<svg class="select-chevron" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m6 8 4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
   select.before(wrapper); wrapper.append(select, trigger);
   select.classList.add('select-native'); select.tabIndex = -1; select.setAttribute('aria-hidden', 'true');
-  const control = { select, wrapper, trigger, caption, name, searchable, popup: null, options: [], highlighted: -1, typeahead: '', typeTimer: null };
+  const control = { select, wrapper, trigger, caption, name, searchable, searchKind, popup: null, options: [], highlighted: -1, typeahead: '', typeTimer: null };
   controls.set(select, control);
   const sync = () => {
     const label = select.selectedOptions[0]?.textContent ?? 'Selecione';
@@ -138,7 +139,7 @@ function renderOptions(control, list, query = '') {
     list.append(button); control.options.push({ button, option });
   }
   if (!filtered.length) {
-    const empty = document.createElement('p'); empty.className = 'select-empty'; empty.textContent = control.searchable?'Nenhum produto encontrado. Tente outro nome ou código.':'Nenhuma opção encontrada.'; empty.setAttribute('role', 'status'); list.append(empty);
+    const empty = document.createElement('p'); empty.className = 'select-empty'; empty.textContent = control.searchKind==='customer'?'Nenhum cliente encontrado. Tente outro nome.':control.searchable?'Nenhum produto encontrado. Tente outro nome ou código.':'Nenhuma opção encontrada.'; empty.setAttribute('role', 'status'); list.append(empty);
   }
   control.highlighted = -1;
   highlight(control, Math.max(0, control.options.findIndex(item => item.option.selected)));

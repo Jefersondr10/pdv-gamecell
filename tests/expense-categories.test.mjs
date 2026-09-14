@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 
 function setup(t){const db=new Store();t.after(()=>db.close());const session=db.register({name:'A',store_name:'Categorias teste',email:'categories@example.test',password:'senha-ficticia-de-teste'});return {db,f:db.finance,actor:db.actor(session.token)};}
-const expense=(extra={})=>({description:'Conta teste',kind:'variable',amount_cents:1500,reference_month:'2026-08',due_date:'2026-08-25',reminder_days:3,...extra});
+const expense=(extra={})=>({description:'Conta teste',kind:'fixed',amount_cents:1500,reference_month:'2026-08',due_date:'2026-08-25',reminder_days:3,...extra});
 const create=(x,extra={})=>x.f.saveExpense(x.actor,{...expense(extra),request_id:randomUUID()}).expenses[0];
 
 test('categorias: cadastro, normalização, cor, duplicidade, versão e inativação',t=>{
@@ -50,19 +50,19 @@ test('categorias: snapshot preservado após renomear/inativar; edição mantém 
 });
 
 test('categorias: lote e recorrência mantêm vínculo e reenvio após edição do catálogo não duplica',t=>{
- const x=setup(t),c=x.f.saveCategory(x.actor,{name:'Insumos'}),data={request_id:randomUUID(),expenses:[expense({category_id:c.id}),expense({category_id:c.id,description:'Segunda'})]};
+ const x=setup(t),c=x.f.saveCategory(x.actor,{name:'Insumos'}),s=x.f.saveSubcategory(x.actor,{category_id:c.id,name:'Materiais'}),variable=extra=>expense({kind:'variable',category_id:c.id,subcategory_id:s.id,...extra}),data={request_id:randomUUID(),expenses:[variable({}),variable({description:'Segunda'})]};
  const first=x.f.saveVariableBatch(x.actor,data);assert.ok(first.expenses.every(e=>e.category==='Insumos'&&e.category_id===c.id));
  const repeat={...expense({kind:'fixed',category_id:c.id}),repeat_count:3,request_id:randomUUID()};const recurring=x.f.saveExpense(x.actor,repeat);assert.equal(recurring.expenses.length,3);
  x.f.saveCategory(x.actor,{name:'Materiais',version:1,active:false},c.id);
  assert.deepEqual(x.f.saveVariableBatch(x.actor,data).expenses.map(e=>e.id),first.expenses.map(e=>e.id));
  assert.deepEqual(x.f.saveExpense(x.actor,repeat).expenses.map(e=>e.id),recurring.expenses.map(e=>e.id));
  assert.equal(x.f.categories(x.actor)[0].expense_count,5);
- assert.throws(()=>x.f.saveVariableBatch(x.actor,{...data,expenses:[expense({category_id:c.id,amount_cents:999})]}),/outros valores/);
+ assert.throws(()=>x.f.saveVariableBatch(x.actor,{...data,expenses:[variable({amount_cents:999})]}),/outros valores/);
 });
 
 test('categorias: categoria inválida em qualquer linha reverte o lote todo',t=>{
- const x=setup(t),c=x.f.saveCategory(x.actor,{name:'Válida'}),before=['operating_expenses','expense_batches','expense_category_links','audit'].map(table=>x.db.get(`SELECT COUNT(*) n FROM ${table}`).n);
- assert.throws(()=>x.f.saveVariableBatch(x.actor,{request_id:randomUUID(),expenses:[expense({category_id:c.id}),expense({category_id:randomUUID()})]}),/Linha 2: Categoria não encontrada/);
+ const x=setup(t),c=x.f.saveCategory(x.actor,{name:'Válida'}),s=x.f.saveSubcategory(x.actor,{category_id:c.id,name:'Detalhe'}),before=['operating_expenses','expense_batches','expense_category_links','audit'].map(table=>x.db.get(`SELECT COUNT(*) n FROM ${table}`).n);
+ assert.throws(()=>x.f.saveVariableBatch(x.actor,{request_id:randomUUID(),expenses:[expense({kind:'variable',category_id:c.id,subcategory_id:s.id}),expense({kind:'variable',category_id:randomUUID(),subcategory_id:s.id})]}),/Linha 2: Categoria não encontrada/);
  assert.deepEqual(['operating_expenses','expense_batches','expense_category_links','audit'].map(table=>x.db.get(`SELECT COUNT(*) n FROM ${table}`).n),before);
 });
 
@@ -77,15 +77,16 @@ test('categorias: edição antiga preserva vínculo omitido; valores falsy invá
 
 test('categorias: hash legado continua idêntico e classificação não altera fechamento',t=>{
  const x=setup(t),data={...expense({category:'Legada'}),request_id:randomUUID()};
- const clean={description:'Conta teste',kind:'variable',amount_cents:1500,reference_month:'2026-08',due_date:'2026-08-25',category:'Legada',payee:'',notes:'',reminder_days:3};
+ const clean={description:'Conta teste',kind:'fixed',amount_cents:1500,reference_month:'2026-08',due_date:'2026-08-25',category:'Legada',payee:'',notes:'',reminder_days:3};
  const oldHash=createHash('sha256').update(JSON.stringify({clean,count:1})).digest('hex');
  const e=x.f.saveExpense(x.actor,data).expenses[0];assert.equal(x.db.get('SELECT payload_hash FROM expense_batches WHERE id=?',data.request_id).payload_hash,oldHash);
  const c=x.f.saveCategory(x.actor,{name:'Categoria nova'});create(x,{category_id:c.id});
  const r=x.f.report(x.actor,'2026-08');x.f.closeMonth(x.actor,{month:'2026-08',source_hash:r.result.source_hash,settings_version:r.result.settings_version});
  x.f.saveCategory(x.actor,{name:'Renomeada',active:false,version:1},c.id);
  assert.equal(x.f.report(x.actor,'2026-08').source_changed,false);assert.equal(x.f.saveExpense(x.actor,data).expenses[0].id,e.id);
- const oldBulk={request_id:randomUUID(),expenses:[expense({reference_month:'2026-09',category:'Legada'})]};
- const bulkClean={...clean,reference_month:'2026-09'};x.f.saveVariableBatch(x.actor,oldBulk);
+ const variableCategory=x.f.saveCategory(x.actor,{name:'Variável'}),sub=x.f.saveSubcategory(x.actor,{category_id:variableCategory.id,name:'Detalhe'});
+ const oldBulk={request_id:randomUUID(),expenses:[expense({kind:'variable',due_date:'2026-09-10',reference_month:'2026-09',category_id:variableCategory.id,subcategory_id:sub.id})]};
+ const bulkClean={description:'Conta teste',kind:'variable',amount_cents:1500,reference_month:'2026-09',due_date:'2026-09-10',paid_date:'2026-09-10',category:'',payee:'',notes:'',reminder_days:0,category_id:variableCategory.id,subcategory_id:sub.id};x.f.saveVariableBatch(x.actor,oldBulk);
  assert.equal(x.db.get('SELECT payload_hash FROM expense_batches WHERE id=?',oldBulk.request_id).payload_hash,createHash('sha256').update(JSON.stringify({operation:'variable_batch',rows:[bulkClean]})).digest('hex'));
 });
 

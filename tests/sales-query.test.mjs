@@ -12,7 +12,7 @@ function setup(t) {
   return { db, actor, customer, product };
 }
 function sale(x, { wholesale = false, price = 1000, paid = price, confirmed = true, customer = x.customer.id, seller = x.actor.id, date = '2026-08-03', description = 'Edição especial', items } = {}) {
-  const key = x.db.saveDraft(x.actor, { customer_id: customer, seller_id: seller, business_date: date, is_wholesale: wholesale,
+  const key = x.db.saveDraft(x.actor, { customer_id: customer, seller_id: seller, business_date: date, is_wholesale: wholesale, review_manual: false,
     items: items ?? [{ product_id: x.product.id, description, quantity: 1, unit_price_cents: price }] }).id;
   if (paid) x.db.addPayment(x.actor, key, { method: 'cash', amount_cents: paid, request_id: randomUUID() });
   if (confirmed) x.db.confirm(x.actor, key, true);
@@ -35,7 +35,7 @@ test('consulta de vendas: atacado e varejo filtram os mesmos registros usados no
   assert.deepEqual(ids(retailState.sales), [retail]);
   assert.equal(retailState.dashboard.revenue_cents, 2000); assert.equal(retailState.dashboard.pending_cents, 1500);
   assert.equal(all.dashboard.revenue_cents, 3000); assert.equal(all.dashboard.sales_count, 2);
-  assert.deepEqual(retailState.refunds_pending, filtered.refunds_pending); assert.equal(filtered.refunds_pending.total_cents, 3000);
+  assert.deepEqual(retailState.refunds_pending, filtered.refunds_pending); assert.equal(filtered.refunds_pending.total_cents, 0);
   assert.equal(x.db.snapshot(x.actor, { sale_type: 'wholesale', status: 'cancelled' }).dashboard.sales_count, 0);
 });
 

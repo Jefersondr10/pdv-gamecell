@@ -20,7 +20,7 @@ test('HTTP: subcategorias, escopo, detalhes por item e datas mantêm contratos a
  const c=await(await send('/api/expense-categories',{name:'Estrutura',applicability:'fixed'})).json();
  assert.equal((await send('/api/expense-subcategories',{category_id:c.id,name:'Energia'},'POST',{Origin:'https://invalid.example'})).status,403);
  let response=await send('/api/expense-subcategories',{category_id:c.id,name:'Energia',applicability:'fixed'});assert.equal(response.status,201);const sub=await response.json();
- response=await send('/api/expenses',{...expense({category_id:c.id,subcategory_id:sub.id}),request_id:randomUUID()});assert.equal(response.status,400);
+ response=await send('/api/expenses',{...expense({kind:'variable',category_id:c.id,subcategory_id:sub.id}),request_id:randomUUID()});assert.equal(response.status,400);
  response=await send('/api/expenses',{...expense({kind:'fixed',category_id:c.id,subcategory_id:sub.id}),request_id:randomUUID()});assert.equal(response.status,201);
  const list=await(await fetch(base+'/api/expenses?month=all',{headers})).json();assert.equal(list.rows[0].subcategory,'Energia');assert.equal(list.rows[0].due_date,'2026-08-15');assert.equal(list.subcategories[0].applicability,'fixed');
  response=await send(`/api/expense-subcategories/${sub.id}`,{name:'Renomeada',version:sub.version,active:false},'PUT');assert.equal(response.status,200);
@@ -28,7 +28,7 @@ test('HTTP: subcategorias, escopo, detalhes por item e datas mantêm contratos a
  const saved=await(await fetch(base+`/api/sales/${sale.id}`,{headers})).json();assert.equal(saved.items[0].serial_number,'000SN');assert.equal(saved.items[0].share_details,false);
  const asset=await fetch(base+'/date-control.mjs');assert.equal(asset.status,200);assert.match(asset.headers.get('content-type'),/javascript/);assert.equal(asset.headers.get('cache-control'),'no-store');
 });
-const expense=(extra={})=>({description:'Conta',kind:'variable',amount_cents:1000,reference_month:'2026-08',due_date:'2026-08-15',...extra});
+const expense=(extra={})=>({description:'Conta',kind:'fixed',amount_cents:1000,reference_month:'2026-08',due_date:'2026-08-15',...extra});
 const create=(x,extra={})=>x.f.saveExpense(x.actor,{...expense(extra),request_id:randomUUID()}).expenses[0];
 const category=(x,extra={})=>x.f.saveCategory(x.actor,{name:'Categoria',...extra});
 const subcategory=(x,c,extra={})=>x.f.saveSubcategory(x.actor,{category_id:c.id,name:'Subcategoria',...extra});
@@ -46,8 +46,8 @@ test('subcategorias: CRUD, nomes por categoria, versão e escopo compatível',t=
 });
 test('subcategorias: somente fixas, somente variáveis e ambas são validadas no servidor',t=>{
  const x=setup(t),both=category(x),cf=category(x,{name:'F',applicability:'fixed'}),cv=category(x,{name:'V',applicability:'variable'});
- const sf=subcategory(x,both,{name:'F',applicability:'fixed'}),sv=subcategory(x,both,{name:'V',applicability:'variable'}),sb=subcategory(x,both,{name:'B'});
- assert.throws(()=>create(x,{kind:'variable',category_id:cf.id}),/tipo/);assert.throws(()=>create(x,{kind:'fixed',category_id:cv.id}),/tipo/);
+ const cfSub=subcategory(x,cf,{name:'Fixa'}),sf=subcategory(x,both,{name:'F',applicability:'fixed'}),sv=subcategory(x,both,{name:'V',applicability:'variable'}),sb=subcategory(x,both,{name:'B'});
+ assert.throws(()=>create(x,{kind:'variable',category_id:cf.id,subcategory_id:cfSub.id}),/tipo/);assert.throws(()=>create(x,{kind:'fixed',category_id:cv.id}),/tipo/);
  assert.throws(()=>create(x,{kind:'variable',category_id:both.id,subcategory_id:sf.id}),/tipo/);assert.throws(()=>create(x,{kind:'fixed',category_id:both.id,subcategory_id:sv.id}),/tipo/);
  for(const kind of ['fixed','variable'])assert.equal(create(x,{kind,category_id:both.id,subcategory_id:sb.id}).subcategory,'B');
  assert.equal(create(x,{kind:'fixed',category_id:cf.id}).kind,'fixed');
@@ -62,13 +62,13 @@ test('subcategorias: categoria errada, outra loja e permissão insuficiente não
  for(const permissions of [[],['expenses.view'],['expenses.manage']])assert.throws(()=>x.f.saveSubcategory({...x.actor,is_owner:false,permissions},{name:'X',category_id:c.id}),/Acesso/);
 });
 test('subcategorias: fotografia e vínculo são preservados após renomear, inativar e restringir',t=>{
- const x=setup(t),c=category(x,{color:'#123ABC'}),s=subcategory(x,c),e=create(x,{category_id:c.id,subcategory_id:s.id});
+ const x=setup(t),c=category(x,{color:'#123ABC'}),s=subcategory(x,c),variable=extra=>expense({kind:'variable',...extra}),e=create(x,{kind:'variable',category_id:c.id,subcategory_id:s.id});
  x.f.saveSubcategory(x.actor,{name:'Nome atual',version:1,active:false,applicability:'fixed'},s.id);
  const edited=x.f.saveCategory(x.actor,{name:'Nova categoria',version:1,active:false,applicability:'fixed'},c.id);
  const kept=x.f.saveCategory(x.actor,{name:edited.name,version:2},c.id);assert.equal(kept.color,'#123ABC');assert.equal(kept.active,false);assert.equal(kept.applicability,'fixed');
- const saved=x.f.saveExpense(x.actor,{...expense(),version:e.version},e.id).expenses[0];assert.equal(saved.category,'Categoria');assert.equal(saved.subcategory,'Subcategoria');assert.equal(saved.subcategory_id,s.id);
+ const saved=x.f.saveExpense(x.actor,{...variable({}),version:e.version},e.id).expenses[0];assert.equal(saved.category,'Categoria');assert.equal(saved.subcategory,'Subcategoria');assert.equal(saved.subcategory_id,s.id);
  assert.throws(()=>create(x,{category_id:c.id,subcategory_id:s.id}),/inativa/);
- assert.throws(()=>x.f.saveExpense(x.actor,{...expense({kind:'fixed'}),version:saved.version},saved.id),/inativa/);
+ assert.throws(()=>x.f.saveExpense(x.actor,{...expense({kind:'fixed'}),version:saved.version},saved.id),/tipo/);
 });
 test('subcategorias: limpar subcategoria mantém categoria; mudar ou limpar categoria remove dependente',t=>{
  const x=setup(t),c=category(x),c2=category(x,{name:'Outra'}),s=subcategory(x,c);
@@ -79,13 +79,13 @@ test('subcategorias: limpar subcategoria mantém categoria; mudar ou limpar cate
  e=x.f.saveExpense(x.actor,{...expense({category_id:null}),version:e.version},e.id).expenses[0];assert.equal(e.category_id,null);
  assert.deepEqual(x.db.all('PRAGMA foreign_key_check'),[]);
 });
-test('subcategorias: tipos inválidos, lote atômico e recorrência idempotente',t=>{
+test('subcategorias: tipos inválidos, lote atômico e recorrência fixa idempotente',t=>{
  const x=setup(t),c=category(x),s=subcategory(x,c);
  for(const invalid of [false,0,{},[]])assert.throws(()=>create(x,{category_id:c.id,subcategory_id:invalid}),/Subcategoria inválida/);
  const before=x.db.get('SELECT COUNT(*) n FROM audit').n;
- assert.throws(()=>x.f.saveVariableBatch(x.actor,{request_id:randomUUID(),expenses:[expense({category_id:c.id,subcategory_id:s.id}),expense({subcategory_id:randomUUID()})]}),/Linha 2/);
+ assert.throws(()=>x.f.saveVariableBatch(x.actor,{request_id:randomUUID(),expenses:[expense({kind:'variable',category_id:c.id,subcategory_id:s.id}),expense({kind:'variable',category_id:c.id,subcategory_id:randomUUID()})]}),/Linha 2/);
  assert.equal(x.db.get('SELECT COUNT(*) n FROM operating_expenses').n,0);assert.equal(x.db.get('SELECT COUNT(*) n FROM audit').n,before);
- const data={...expense({category_id:c.id,subcategory_id:s.id}),request_id:randomUUID(),repeat_count:3};
+ const data={...expense({kind:'fixed',category_id:c.id,subcategory_id:s.id}),request_id:randomUUID(),repeat_count:3};
  const result=x.f.saveExpense(x.actor,data);assert.equal(result.expenses.length,3);assert.ok(result.expenses.every(e=>e.subcategory==='Subcategoria'));
  x.f.saveSubcategory(x.actor,{name:'Alterada',version:1,active:false},s.id);
  assert.deepEqual(x.f.saveExpense(x.actor,data).expenses.map(e=>e.id),result.expenses.map(e=>e.id));assert.throws(()=>x.f.saveExpense(x.actor,{...data,subcategory_id:null}),/outros valores/);

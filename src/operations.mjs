@@ -2,6 +2,7 @@ import { randomUUID,randomBytes,createHash,createHmac } from 'node:crypto';
 import { check,integer,text,allowed,requirePermission,planFIFO,businessDate } from './domain.mjs';
 import { validDate } from './finance.mjs';
 import { correctPayments,editedTimestamp } from './payment-corrections.mjs';
+import { AUTOMATIC_CANCELLATION_REFUND_NOTE } from './sale-cancellation.mjs';
 const now=()=>new Date().toISOString();
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const aggregate=values=>{const total=values.reduce((sum,value)=>sum+BigInt(value),0n);check(total<=BigInt(Number.MAX_SAFE_INTEGER),'O total do relatório excede a capacidade de representação exata. Consulte um conjunto menor de dados.');return Number(total);};
@@ -172,81 +173,27 @@ export class Operations {
    if(before.status==='confirmed')check(!this.s.get('SELECT id FROM finance_closures WHERE tenant_id=? AND reference_month=?',actor.tenant_id,before.business_date.slice(0,7)),
     'O mês desta venda já foi fechado. O cancelamento está protegido.',409);
    const reason=text(data.reason,'Motivo do cancelamento',500);
-   check(data.acknowledge_stock_return===true,'Confirme a devolução dos produtos ao estoque.');
-   const refund=before.reconciliation.gross_cents;
-   check(refund===0||data.acknowledge_refund_pending===true,'Confirme que o valor recebido ficará como devolução pendente. Nenhum estorno bancário será realizado.');
-   const at=now();
+   const refund=before.reconciliation.gross_cents,at=now(),refundId=refund>0?randomUUID():null;
    this.s.run('INSERT INTO sale_cancellations VALUES(?,?,?,?,?,?)',actor.tenant_id,key,actor.id,reason,at,JSON.stringify(before));
+   if(refundId)this.s.run(`INSERT INTO sale_refunds(id,tenant_id,sale_id,actor_id,actor_name_snapshot,request_id,amount_cents,method,refunded_date,notes,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)`,refundId,actor.tenant_id,key,actor.id,actor.name,randomUUID(),refund,'other',businessDate(new Date(at)),AUTOMATIC_CANCELLATION_REFUND_NOTE,at);
    this.s.run("UPDATE sales SET status='cancelled',updated_at=?,share_hash=NULL,share_expires=NULL WHERE tenant_id=? AND id=?",at,actor.tenant_id,key);
    this.s.run('DELETE FROM allocations WHERE tenant_id=? AND item_id IN (SELECT id FROM sale_items WHERE tenant_id=? AND sale_id=?)',actor.tenant_id,actor.tenant_id,key);
    for(const productId of new Set(before.items.map(item=>item.product_id).filter(Boolean)))this.rebuildProduct(actor,productId);
-   this.s.audit(actor,'sale',key,'cancelled',{reason,previous_status:before.status,refund_pending_cents:refund});
-   return {id:key,cancelled:true,refund_pending_cents:refund};
+   this.s.audit(actor,'sale',key,'cancelled',{reason,previous_status:before.status,stock_returned:true,
+    refund_id:refundId,refund_completed_cents:refund,refund_pending_cents:0});
+   return {id:key,cancelled:true,refund_completed_cents:refund,refund_pending_cents:0};
   }));
- }
- refundResponse(actor,key,result,refundId=result.id){
-  const cancellation=this.s.sale(actor,key).cancellation;
-  const refund=cancellation.refunds.find(item=>item.id===refundId);
-  return {...result,effective:refund?.effective??false,reversed:refund?.reversed??false,reversal:refund?.reversal??null,
-   refund_completed_cents:cancellation.refund_completed_cents,refund_pending_cents:cancellation.refund_pending_cents,
-   refund_state:cancellation.refund_state,refund_token:cancellation.refund_token};
  }
  recordRefund(actor,key,data){
   requirePermission(actor,'sales.refund');this.s.saleAccess(actor,key);
   check(data&&typeof data==='object'&&!Array.isArray(data),'Dados da devolução inválidos.');
-  const result=this.request(actor,'sale_refund',key,data,()=>{
-   const sale=this.s.sale(actor,key);check(sale.status==='cancelled','Somente uma venda cancelada pode registrar devolução.',409);
-   check(data.acknowledge_refund_completed===true,'Confirme que o dinheiro já foi devolvido fora do sistema.');
-   check(data.refund_token===sale.cancellation.refund_token,'As devoluções desta venda mudaram. Atualize e confira o saldo antes de continuar.',409);
-   const amount=integer(data.amount_cents,'Valor devolvido',1);
-   check(amount<=sale.cancellation.refund_pending_cents,'O valor devolvido não pode ser maior que o saldo pendente.');
-   const method=text(data.method,'Método da devolução',20);
-   check(['pix','cash','card','other'].includes(method),'Método da devolução inválido.');
-   const refundedDate=validDate(data.refunded_date),cancellationDate=businessDate(new Date(sale.cancellation.created_at));
-   check(refundedDate>=cancellationDate,'A data da devolução não pode ser anterior ao cancelamento.');
-   check(refundedDate<=businessDate(),'A data da devolução não pode estar no futuro.');
-   check(!this.s.get('SELECT id FROM finance_closures WHERE tenant_id=? AND reference_month=?',actor.tenant_id,refundedDate.slice(0,7)),
-    'O mês desta devolução já foi fechado. Escolha uma data de mês aberto.',409);
-   const notes=text(data.notes,'Observações da devolução',1000,false),refundId=randomUUID(),at=now(),normalizedRequest=requestId(data.request_id);
-   this.s.run(`INSERT INTO sale_refunds(id,tenant_id,sale_id,actor_id,actor_name_snapshot,request_id,amount_cents,method,refunded_date,notes,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?)`,refundId,actor.tenant_id,key,actor.id,actor.name,normalizedRequest,amount,method,refundedDate,notes,at);
-   const pending=sale.cancellation.refund_pending_cents-amount;
-   this.s.audit(actor,'sale',key,'refund_recorded',{refund_id:refundId,amount_cents:amount,method,refunded_date:refundedDate,
-    refund_pending_before_cents:sale.cancellation.refund_pending_cents,refund_pending_after_cents:pending});
-   return {id:refundId,sale_id:key,amount_cents:amount,method,refunded_date:refundedDate,notes,
-    author_id:actor.id,author:actor.name};
-  });
-  return this.refundResponse(actor,key,result);
+  check(false,'A devolução já é encerrada automaticamente ao cancelar a venda.',409);
  }
  reverseRefund(actor,key,refundKey,data){
   requirePermission(actor,'sales.refund_correct');this.s.saleAccess(actor,key);
   check(data&&typeof data==='object'&&!Array.isArray(data),'Dados da correção inválidos.');
-  const result=this.request(actor,'sale_refund_reversal',`${key}:${refundKey}`,data,()=>{
-   const sale=this.s.sale(actor,key);check(sale.status==='cancelled','Somente uma venda cancelada pode corrigir devolução.',409);
-   const refund=this.s.get('SELECT * FROM sale_refunds WHERE tenant_id=? AND sale_id=? AND id=?',actor.tenant_id,key,refundKey);
-   check(refund,'Baixa de devolução não encontrada.',404);
-   check(!this.s.get('SELECT id FROM sale_refund_reversals WHERE tenant_id=? AND refund_id=?',actor.tenant_id,refundKey),
-    'Esta baixa de devolução já foi corrigida.',409);
-   check(data.refund_token===sale.cancellation.refund_token,'As devoluções desta venda mudaram. Atualize e confira o saldo antes de continuar.',409);
-   check(data.acknowledge_refund_reversal===true,
-    'Confirme que a baixa foi lançada por engano. A correção não recupera dinheiro do cliente e restaura o valor como pendente.');
-   check(!Object.hasOwn(data,'amount_cents'),'O valor da correção é sempre o valor integral da baixa original.');
-   const reason=text(data.reason,'Motivo da correção',500),reversedDate=validDate(data.reversed_date);
-   check(reversedDate>=refund.refunded_date,'A data da correção não pode ser anterior à data informada na devolução.');
-   check(reversedDate<=businessDate(),'A data da correção não pode estar no futuro.');
-   check(!this.s.get('SELECT id FROM finance_closures WHERE tenant_id=? AND reference_month=?',actor.tenant_id,reversedDate.slice(0,7)),
-    'O mês desta correção já foi fechado. Escolha uma data de mês aberto.',409);
-   const reversalId=randomUUID(),at=now(),normalizedRequest=requestId(data.request_id);
-   this.s.run(`INSERT INTO sale_refund_reversals(id,tenant_id,sale_id,refund_id,actor_id,actor_name_snapshot,request_id,reason,reversed_date,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?)`,reversalId,actor.tenant_id,key,refundKey,actor.id,actor.name,normalizedRequest,reason,reversedDate,at);
-   const pending=sale.cancellation.refund_pending_cents+refund.amount_cents;
-   this.s.audit(actor,'sale',key,'refund_reversal_recorded',{reversal_id:reversalId,refund_id:refundKey,
-    amount_cents:refund.amount_cents,reason,reversed_date:reversedDate,
-    refund_pending_before_cents:sale.cancellation.refund_pending_cents,refund_pending_after_cents:pending});
-   return {id:reversalId,sale_id:key,refund_id:refundKey,amount_cents:refund.amount_cents,reason,
-    reversed_date:reversedDate,author_id:actor.id,author:actor.name};
-  });
-  return this.refundResponse(actor,key,result,refundKey);
+  check(false,'O encerramento automático do cancelamento não pode ser reaberto.',409);
  }
  editSale(actor,key,data){
   requirePermission(actor,'sales.edit_confirmed');

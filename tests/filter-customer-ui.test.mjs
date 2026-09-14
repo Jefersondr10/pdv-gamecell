@@ -149,6 +149,7 @@ test('interface de filtro: Limpar invalida intenção pendente e formulário de 
   ctx.salesMutationRefreshPending = true; assert.equal(options.isCurrent({ dataset: { filterOwner: 'owner' } }), false); ctx.salesMutationRefreshPending = false;
   ctx.cancellationRefreshPending = true; assert.equal(options.isCurrent({ dataset: { filterOwner: 'owner' } }), false); ctx.cancellationRefreshPending = false;
   ctx.view = 'customers'; assert.equal(options.isCurrent({ dataset: { filterOwner: 'owner' } }), false);
+  ctx.view = 'ranking'; assert.equal(options.isCurrent({ dataset: { filterOwner: 'owner' } }), true);
   ctx.view = 'sales'; ctx.state = null; assert.equal(options.isCurrent({ dataset: { filterOwner: 'owner' } }), false);
 });
 
@@ -158,7 +159,7 @@ async function changeSale(kind, { failWrite = false, failRefresh = false, expire
     : { dataset: { saleStatus: 'sale', previous: 'old-status' }, value: 'new-status', disabled: false, isConnected: true };
   const oldState = { sales: [{ id: 'sale', edit_token: 'current-sale-token', is_wholesale: true }], dashboard: { revenue_cents: 1000 } };
   const fresh = { sales: [], dashboard: { revenue_cents: 0 } };
-  const ctx = { el, busy: false, view: 'sales', state: oldState, detailId: null, detailSale: null, salesMutationRefreshPending: false,
+  const ctx = { el, busy: false, view: 'sales', state: oldState, detailId: null, detailSale: null, reviewStatusValue: '__review__', salesMutationRefreshPending: false,
     crypto: { randomUUID: () => 'test-request' }, salesFilters: { clear: () => calls.push('clear') },
     api: async (path, data, method) => { calls.push({ path, data: plain(data), method }); if (failWrite) throw Error('Falha ao salvar'); },
     load: async () => {
@@ -221,7 +222,7 @@ test('interface de venda: atualização pendente impede navegação e botão Atu
       document: { addEventListener(type, callback) { assert.equal(type, 'click'); ctx.clickHandler = callback; }, querySelector: () => null }
     };
     runInNewContext(source("document.addEventListener('click',async e=>{", "document.addEventListener('submit',async e=>{"), ctx);
-    const event = { target: { closest: () => button } }; await ctx.clickHandler(event);
+    const event = { target: { closest: selector => selector === '[data-action],[data-view]' ? button : null } }; await ctx.clickHandler(event);
     assert.equal(ctx.view, 'sales'); assert.equal(ctx.salesMutationRefreshPending, true); assert.equal(calls.length, 1); assert.match(calls[0], /já foi salva/);
     calls.length = 0; button.dataset = { action: 'refresh-sales' }; await ctx.clickHandler(event);
     assert.equal(calls[0], 'load'); assert.equal(ctx.busy, false); assert.equal(button.disabled, false);

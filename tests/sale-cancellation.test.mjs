@@ -8,7 +8,7 @@ import { runInNewContext } from 'node:vm';
 import { Store } from '../src/store.mjs';
 import { application } from '../src/server.mjs';
 import { migrateCancellationStatus } from '../src/sale-cancellation.mjs';
-import { cancelSaleButton, wholesaleControl, salesRecords } from '../public/sales-view.mjs';
+import { cancelSaleButton, wholesaleControl, salesRecords, cancelledSaleDetailView } from '../public/sales-view.mjs';
 
 function setup(t,path=':memory:'){
  const db=new Store(path);t.after(()=>db.close());
@@ -18,7 +18,7 @@ function setup(t,path=':memory:'){
 }
 const draftData=(x,quantity=1)=>({customer_id:x.customer.id,seller_id:x.actor.id,items:[{product_id:x.product.id,quantity,unit_price_cents:1000}]});
 function sale(x,quantity=1,confirmed=true){const id=x.db.saveDraft(x.actor,draftData(x,quantity)).id;if(confirmed)x.db.confirm(x.actor,id,true);return id;}
-const payload=(x,id,extra={})=>({request_id:randomUUID(),edit_token:x.db.sale(x.actor,id).edit_token,reason:'Cliente desistiu e devolveu o produto',acknowledge_stock_return:true,...extra});
+const payload=(x,id,extra={})=>({request_id:randomUUID(),edit_token:x.db.sale(x.actor,id).edit_token,reason:'Cliente desistiu e devolveu o produto',...extra});
 const stock=x=>x.db.products(x.actor).find(p=>p.id===x.product.id).stock;
 const receive=(x,q,cost)=>x.db.receive(x.actor,{product_id:x.product.id,quantity:q,unit_cost_cents:cost});
 const rows=(x)=>Object.fromEntries(x.db.all("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").map(({name})=>[name,x.db.all(`SELECT rowid,* FROM "${name}" ORDER BY rowid`)]));
@@ -61,18 +61,19 @@ test('cancelar: rascunho e avulso não geram movimento de estoque',t=>{
  x.db.confirm(x.actor,avulso,true);x.ops.cancelSale(x.actor,avulso,payload(x,avulso));assert.equal(stock(x),2);
 });
 
-test('cancelar: pagamento registrado exige ciência explícita da devolução pendente',t=>{
+test('cancelar: pagamento registrado é encerrado imediatamente sem devolução pendente',t=>{
  const x=setup(t),id=sale(x);x.db.addPayment(x.actor,id,{method:'cash',amount_cents:1000,request_id:randomUUID()});
- const before=rows(x);assert.throws(()=>x.ops.cancelSale(x.actor,id,payload(x,id)),/devolução pendente/);assert.deepEqual(rows(x),before);
- const result=x.ops.cancelSale(x.actor,id,payload(x,id,{acknowledge_refund_pending:true}));assert.equal(result.refund_pending_cents,1000);
+ const result=x.ops.cancelSale(x.actor,id,payload(x,id));assert.equal(result.refund_completed_cents,1000);assert.equal(result.refund_pending_cents,0);
+ const cancelled=x.db.sale(x.actor,id);assert.equal(cancelled.cancellation.refund_completed_cents,1000);assert.equal(cancelled.cancellation.refund_pending_cents,0);
+ assert.equal(cancelled.cancellation.refund_state,'completed');assert.equal(x.db.snapshot(x.actor).refunds_pending.count,0);
 });
 
-test('cancelar: exige permissão, loja, motivo, retorno físico, token e UUID válidos',t=>{
+test('cancelar: exige permissão, loja, motivo, token e UUID válidos',t=>{
  const x=setup(t),id=sale(x),data=payload(x,id),before=rows(x);
  assert.throws(()=>x.ops.cancelSale({...x.actor,is_owner:false,permissions:['sales.edit_confirmed']},id,data),/Acesso/);
  const other=x.db.actor(x.db.register({name:'Outra',store_name:'Outra',email:'outra-cancel@example.test',password:'senha-ficticia-de-teste'}).token);
  assert.throws(()=>x.ops.cancelSale(other,id,data),/encontrad/);
- for(const extra of [{reason:''},{reason:'a'.repeat(501)},{acknowledge_stock_return:false},{acknowledge_stock_return:'true'},{edit_token:'antigo'},{request_id:'abc'}])assert.throws(()=>x.ops.cancelSale(x.actor,id,{...data,...extra}));
+ for(const extra of [{reason:''},{reason:'a'.repeat(501)},{edit_token:'antigo'},{request_id:'abc'}])assert.throws(()=>x.ops.cancelSale(x.actor,id,{...data,...extra}));
  assert.deepEqual(x.db.all('SELECT rowid,* FROM sales'),before.sales);assert.deepEqual(x.db.all('SELECT * FROM sale_cancellations'),[]);
 });
 
@@ -183,12 +184,18 @@ test('interface cancelar: ação visível, situação pronta e cancelada sem con
  assert.match(cancelSaleButton(s,{esc,can}),/Cancelar venda/);assert.equal(cancelSaleButton(s,{esc,can:()=>false}),'');
  x.ops.cancelSale(x.actor,id,payload(x,id));const cancelled=x.db.sale(x.actor,id);
  assert.equal(cancelSaleButton(cancelled,{esc,can}),'');assert.equal(wholesaleControl(cancelled,{esc,can}),'');
- const html=salesRecords([cancelled],{esc,can,money:String,date:String,statusBadge:()=>'<span>Cancelada</span>'});
- assert.match(html,/Valor do pedido cancelado/);assert.doesNotMatch(html,/data-action="(?:edit-sale|cancel-sale)"|data-sale-wholesale|Lucro da venda|Pagamento pendente/);
+ const helpers={esc,can,money:String,date:String,time:()=>'',icon:()=>'<svg></svg>',statusBadge:()=>'<span>Cancelada</span>'};
+ const html=salesRecords([cancelled],helpers);
+ assert.match(html,/class="sale-record-overview"><button type="button" class="sale-record-open-button" data-action="open-sale"/);
+ assert.match(html,/class="sale-record-compact-values values-3"[\s\S]*?<small>Venda<\/small>[\s\S]*?<small>Recebido<\/small>[\s\S]*?<small>Estornado<\/small>/);
+ assert.doesNotMatch(html,/<table|data-action="(?:edit-sale|cancel-sale|record-refund|reverse-refund)"|data-sale-wholesale|Lucro(?: da venda)?|Pagamento pendente|A devolver|Devolução pendente|estorno bancário/i);
+ const detail=cancelledSaleDetailView(cancelled,helpers);
+ assert.match(detail,/aria-label="Resumo da venda cancelada"[\s\S]*?>Venda cancelada<[\s\S]*?>Recebido<[\s\S]*?>Estornado</);
+ assert.doesNotMatch(detail,/A devolver|Devolução ao cliente|Registrar devolução|estorno bancário/i);
  const source=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');assert.match(source,/option\('cancelled','Canceladas'/);assert.match(source,/badge bad">Cancelada/);assert.match(source,/name="acknowledge_stock_return" required/);
 });
 
-test('interface cancelar: busca dados atuais e exige ciência de devolução para pagos sem cancelar só ao abrir',async()=>{
+test('interface cancelar: busca dados atuais e pede somente ciência do retorno ao estoque',async()=>{
  const source=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
  const fn=source.slice(source.indexOf('async function openCancelSale('),source.indexOf('function showModal('));
  for(const paid of [false,true]){
@@ -197,7 +204,7 @@ test('interface cancelar: busca dados atuais e exige ciência de devolução par
   ctx.view='sales';ctx.working=null;ctx.workingDirty=false;ctx.pendingWorks=new Map();
   runInNewContext(fn,ctx);await ctx.openCancelSale('sale');assert.deepEqual(calls,[['/sales/sale']]);assert.equal(back.textContent,'Voltar');
   assert.equal(submit.textContent,'Confirmar cancelamento');assert.match(shown[0][1],/edit_token" value="novo"/);assert.match(shown[0][1],/acknowledge_stock_return" required/);assert.doesNotMatch(shown[0][1],/<Cliente>/);
-  if(paid){assert.match(shown[0][1],/acknowledge_refund_pending" required/);assert.match(shown[0][1],/Devolução pendente: 1000/);}
-  else assert.doesNotMatch(shown[0][1],/acknowledge_refund_pending/);
+  assert.match(shown[0][1],/estoque e os valores recebidos serão estornados no sistema/i);
+  assert.doesNotMatch(shown[0][1],/acknowledge_refund_pending|Devolução pendente|estorno bancário/i);
  }
 });

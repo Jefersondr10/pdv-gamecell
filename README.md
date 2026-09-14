@@ -6,8 +6,9 @@ Sistema de gestão de lojas com vendas, estoque, pagamentos, despesas e fechamen
 
 - Lojas independentes, usuários e permissões por loja; acesso Google configurável e login da equipe.
 - Cadastros de clientes, produtos, fornecedores, vendedores, contas Pix e máquinas de cartão.
-- Vendas com rascunho, classificação de atacado, data editável, correções auditadas e cancelamento.
+- Vendas com rascunho, classificação de atacado, data editável, status A conferir/Conciliado, correções auditadas e cancelamento.
 - Filtros de vendas e dashboard por período, atacado/varejo, vendedor, status e busca por número, cliente ou produto.
+- Ranking próprio de vendedores, produtos e dias por faturamento, lucro ou número de vendas, usando os mesmos filtros das vendas.
 - Edição de clientes com CPF opcional, proteção contra alterações simultâneas e histórico de auditoria.
 - Busca nos cadastros de clientes e produtos; edição de produtos e cadastro de novo produto durante a venda.
 - Pagamentos divididos entre dinheiro, Pix e cartão, com fotografia das taxas utilizadas.
@@ -63,7 +64,7 @@ Para produção são necessários HTTPS, login Google configurado, banco persist
 ## Limites importantes
 
 - Este repositório contém o código em desenvolvimento; um envio ao GitHub não atualiza automaticamente uma instalação online.
-- Cancelar uma venda preserva o histórico e pode gerar valor a devolver. O sistema permite registrar devoluções parciais ou totais já realizadas fora dele, mas não executa Pix nem estorno bancário automático.
+- Cancelar uma venda preserva o histórico e desfaz automaticamente no sistema o estoque, os pagamentos e os totais daquele pedido. O cancelamento pressupõe que o acerto com o cliente já foi feito fora do sistema.
 - Os pagamentos são registros operacionais, sem confirmação automática por bancos ou adquirentes.
 - Preenchimentos não salvos ficam somente na aba atual. Para conservar uma nova venda após fechar a aba, use Salvar rascunho; para aplicar uma edição, use Salvar alterações.
 - Produtos com controle por SN/IMEI exigem aparelhos identificados antes de confirmar a saída. O estoque antigo não ganha identificações inventadas: os números reais das unidades restantes devem ser informados nas entradas.

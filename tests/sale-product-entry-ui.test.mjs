@@ -25,11 +25,20 @@ test('produto na venda: falha mantém formulário e pedido; retorno tardio não 
  const y=setup();y.ctx.working={items:[],step:'people'};await y.ctx.saveProductForm({name:'Controle',price:'199,90'},{dataset:{}});
  assert.equal(y.item.product_id,undefined);assert.equal(y.ctx.working.items.length,0);
 });
-test('tela da venda: avulso é explícito, valores com R$ fora do input e grupo alinhado',()=>{
+test('tela da venda: produto é único, avulso é explícito e detalhes ficam na mesma etapa',()=>{
  const x=setup(),html=x.ctx.saleItemMarkup(x.item,0);
- assert.match(html,/Cadastrar novo produto/);assert.match(html,/Nome do produto avulso/);assert.doesNotMatch(html,/Nome neste pedido/);
+ assert.match(html,/Produto desta venda/);assert.match(source,/Produto avulso — sem cadastro/);assert.match(html,/Nome do produto avulso/);assert.doesNotMatch(html,/Nome neste pedido/);
+ const catalogHtml=x.ctx.saleItemMarkup({...x.item,product_id:'catalogo'},0);
+ assert.doesNotMatch(catalogHtml,/Nome do produto avulso|Nome exibido no pedido|Nome neste pedido/);
+ assert.doesNotMatch(html,/Cadastrar novo produto|create-sale-product/);
  assert.match(html,/item-values/);assert.match(html,/aria-hidden="true">R\$/);assert.match(html,/value="199,90"/);assert.doesNotMatch(html,/value="R\$/);
  assert.doesNotMatch(setup({allowed:false}).ctx.saleItemMarkup(x.item,0),/data-action="create-sale-product"/);
+ assert.match(source,/\$\{entryCostsFields\(i,n\)\}\$\{itemDetailsFields\(i,n\)\}/);
+ const detailsSource=source.slice(source.indexOf('function itemDetailsFields('),source.indexOf('function editorSaleDate('));
+ assert.match(detailsSource,/IMEI ou número de série \(SN\)/);assert.doesNotMatch(detailsSource,/Nome exibido no pedido|Nome neste pedido/);
+ assert.match(source,/Adicionar outro produto/);
  const mobile=readFileSync(new URL('../public/mobile-ui.mjs',import.meta.url),'utf8');
- assert.match(mobile,/body\.append\(n===items.length-1\?addItem:addItem.cloneNode\(true\)\)/);assert.doesNotMatch(mobile,/inner.append\(addItem\)/);
+ assert.match(mobile,/body\.append\(item\);add\('item-'\+n/);
+ assert.match(mobile,/body\.append\(n===items.length-1\?addItem:addItem\.cloneNode\(true\)\)/);
+ assert.doesNotMatch(mobile,/add\('item-details-'/);assert.doesNotMatch(mobile,/customerSlot/);
 });

@@ -18,7 +18,7 @@ function form(values, { disabled = [] } = {}) {
 }
 
 function harness(options = {}) {
- const timers = new Map(), calls = [], errors = [], success = [], busyChanges = [];
+ const timers = new Map(), delays = [], calls = [], errors = [], success = [], busyChanges = [];
  let busy = !!options.busy, serial = 0;
  const controller = createSalesFilterController({
   apply: async data => { calls.push(data); return options.apply?.(data); },
@@ -29,11 +29,11 @@ function harness(options = {}) {
   onSuccess: (node, data) => success.push({ form: node, data }),
   isCurrent: options.isCurrent,
   snapshot: node => Object.fromEntries(node.fields.filter(field => !field.disabled).map(field => [field.name, field.value])),
-  schedule: (callback, delay) => { assert.equal(delay, 40); timers.set(++serial, callback); return serial; },
+  schedule: (callback, delay) => { delays.push(delay); timers.set(++serial, callback); return serial; },
   cancel: id => timers.delete(id)
  });
  return {
-  controller, calls, errors, success, busyChanges, timers,
+  controller, calls, errors, success, busyChanges, timers, delays,
   setExternalBusy: value => { busy = value; },
   get busy() { return busy; },
   async tick() {
@@ -43,6 +43,19 @@ function harness(options = {}) {
   }
  };
 }
+
+test('busca automática: espera a digitação e consulta somente o texto mais recente', async () => {
+ const x = harness(), node = form({ date_preset: 'today', q: 'p' });
+ assert.equal(x.controller.request(node, { automatic: true, delay: 300 }), true);
+ assert.deepEqual(x.calls, []); assert.deepEqual(x.delays, [300]); assert.equal(x.timers.size, 1);
+ node.fields.find(field => field.name === 'q').value = 'ps4';
+ assert.equal(x.controller.request(node, { automatic: true, delay: 300 }), true);
+ assert.deepEqual(x.calls, []); assert.deepEqual(x.delays, [300, 300]); assert.equal(x.timers.size, 1);
+ await x.tick();
+ // The controller preserves the raw form intent; applySalesFilters performs the
+ // final date-preset normalization immediately before requesting the server.
+ assert.deepEqual(x.calls, [{ date_preset: 'today', q: 'ps4' }]);
+});
 
 test('filtros automáticos: captura valores e normaliza datas antes de bloquear os controles', async () => {
  const node = form({ date_preset: 'period', from: '01/09/2026', to: '13/09/2026', seller_id: 'v1', status: 'confirmed', q: 'Câmera', sale_type: 'wholesale' });

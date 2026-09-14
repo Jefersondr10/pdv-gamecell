@@ -1,14 +1,15 @@
 import { enhanceSelects, initSelectControls, closeSelectControls } from './select-control.mjs';
 import { dateInput, normalizeDateFields, dateRange, salesFilterValues, initDateControls, brazilianDate, isoDate } from './date-control.mjs';
 import { createStockUI, matchesStockProduct } from './stock-ui.mjs';
-import { salesRecords, wholesaleControl, wholesaleEditor, wholesaleBadge, cancelSaleButton, cancelledRecord, refundReminders, cancellationPayments } from './sales-view.mjs';
+import { salesRecords, wholesaleControl, wholesaleEditor, wholesaleBadge, cancelSaleButton, cancelledRecord, saleTiming, saleDetailView, cancelledSaleDetailView } from './sales-view.mjs';
 import { createFinanceUI } from './finance-ui.mjs';
 import { mountGoogle } from './google-ui.mjs';
 import { enhanceMobileTables, initMobileNavigation, compactMobilePage, rememberMobileFilterState, saleMobileSteps, stockMobileSteps, createPageHistory } from './mobile-ui.mjs';
 import { createCalculatorUI } from './installment-calculator.mjs';
 import { matchesCatalog, unitList, unitPicker } from './serial-ui.mjs';
 import { createSalesFilterController } from './sales-filter-controller.mjs';
-import { refundManagement, refundMethodOptions } from './refund-ui.mjs';
+import { createExpenseFilterController } from './expense-filter-controller.mjs';
+import { rankingView } from './ranking-ui.mjs';
 let authSettings = { password_registration: true, production: false };
 const app = document.querySelector('#app'), modal = document.querySelector('#modal');
 const mobileNavigation = initMobileNavigation();
@@ -32,7 +33,7 @@ async function applySalesFilters(data) {
 }
 let cancellationRefreshPending = false;
 let state = null, view = 'dashboard', authMode = 'login', working = null, workingDirty = false, pendingDiscardTarget = null, detailId = null, productHistory = null, productDetailReturnView = 'products', filter = todayFilter(), busy = false;
-let machineDraft=null, machineDraftDirty=false, expenseMenuOpen=false, registryMenuOpen=false;
+let machineDraft=null, machineDraftDirty=false, expenseMenuOpen=false, registryMenuOpen=false, rankingTab='sellers', rankingMetric='revenue';
 let stockSearch='',stockSearchOwner='';
 let catalogQueries={customers:'',products:''},catalogOwner='',pickerUnits=[],productCreateContext=null;
 let salesRefreshPending=false;
@@ -41,7 +42,7 @@ const pendingWorks=new Map();
 let pendingOwner='', sessionEpoch=0, mutationRefreshPending='';
 const machineBrandSelections=new Map();
 const labels = {
- 'sales.edit_confirmed':'Editar vendas confirmadas', 'sales.cancel':'Cancelar vendas', 'sales.refund':'Registrar devoluções realizadas', 'sales.refund_correct':'Corrigir baixas de devolução', 'stock.correct':'Editar e excluir entradas',
+ 'sales.edit_confirmed':'Editar vendas confirmadas', 'sales.cancel':'Cancelar vendas', 'stock.correct':'Editar e excluir entradas',
  'sales.create':'Criar vendas', 'sales.confirm':'Confirmar vendas', 'sales.edit_draft':'Editar rascunhos',
  'sales.view_all':'Ver todas as vendas', 'sales.assign_seller':'Selecionar outro vendedor', 'sales.change_status':'Alterar status das vendas', 'payments.correct':'Corrigir e remover pagamentos registrados', 'payments.record':'Registrar pagamentos',
  'costs.view':'Visualizar custos e taxas', 'costs.enter':'Informar custos', 'profit.view':'Visualizar lucro',
@@ -60,13 +61,15 @@ const paths = {
  settings:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2',
  plus:'M12 5v14 M5 12h14', arrow:'M5 12h14 M14 7l5 5-5 5', money:'M3 5h18v14H3z M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8',
  trend:'M3 17l6-6 4 4 8-10 M15 5h6v6', clock:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18 M12 7v5l3 2',
- check:'M5 12l4 4L19 6', x:'M6 6l12 12 M6 18L18 6', share:'M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M9 10l6-4 M9 14l6 4'
+ check:'M5 12l4 4L19 6', x:'M6 6l12 12 M6 18L18 6', share:'M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M9 10l6-4 M9 14l6 4',
+ trophy:'M8 4h8v3a4 4 0 0 0 4-4h1v2a6 6 0 0 1-5 5.91A6 6 0 0 1 13 14v3h4v3H7v-3h4v-3a6 6 0 0 1-3-3.09A6 6 0 0 1 3 5V3h1a4 4 0 0 0 4 4V4z'
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] ?? paths.box}"/></svg>`;
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 const money = cents => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((cents ?? 0)/100);
 const value = c => ((c ?? 0)/100).toFixed(2).replace('.', ',');
-const date = v => v ? new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'short',year:'numeric'}).format(new Date(v)) : '—';
+const date = v => {const parsed=v?new Date(v):null;return parsed&&!Number.isNaN(parsed.getTime())?new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'short',year:'numeric'}).format(parsed):'—';};
+const time = v => {const parsed=v?new Date(v):null;return parsed&&!Number.isNaN(parsed.getTime())?new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit',hour12:false}).format(parsed):'';};
 const filterDateLabel = v => /^\d{4}-\d{2}-\d{2}$/.test(v??'') ? `${v.slice(8,10)}/${v.slice(5,7)}/${v.slice(0,4)}` : 'Data não definida';
 function dateFilterSummary() {
  if(filter.date_preset==='all')return 'Todos os dias';
@@ -100,6 +103,7 @@ const pixAccounts = () => state?.pix_accounts ?? [];
 const activePixAccounts = () => pixAccounts().filter(account=>account.active!==false&&account.active!==0);
 const suppliers = () => state?.suppliers ?? [];
 const defaultPixAccountId = selected => {const accounts=activePixAccounts();return accounts.some(account=>account.id===selected)?selected:(accounts.length===1?accounts[0].id:'');};
+const preferredPaymentMethod = () => state?.rates?.some(rate=>rate.mode==='credit')?'card':'pix';
 const pixAccountOptions = selected => option('','Selecione a conta Pix',selected)+activePixAccounts().map(account=>option(account.id,account.name,selected)).join('');
 const pixAccountSnapshot = payment => payment.pix_account_name || pixAccounts().find(account=>account.id===payment.pix_account_id)?.name || 'Conta Pix não informada';
 const costValue = centsValue => centsValue==null?'Pendente':money(centsValue);
@@ -116,6 +120,9 @@ const operationalBadge = status => status
  ? `<span class="operational-badge" data-status-color="${statusHex(status.color)}"><span class="status-dot" aria-hidden="true"></span>${esc(status.name)}</span>`
  : '<span class="operational-badge status-neutral"><span class="status-dot" aria-hidden="true"></span>Sem status</span>';
 const operationalOptions = selected => option('','Sem status',selected)+saleStatuses().map(s=>option(s.id,s.name,selected)).join('');
+const reviewStatusValue='__review__';
+const unifiedStatusValue = sale => sale?.review?.required ? reviewStatusValue : sale?.operational_status?.id??'';
+const unifiedStatusOptions = selected => option('','Sem status',selected)+option(reviewStatusValue,'A conferir',selected)+saleStatuses().map(status=>option(status.id,status.name,selected)).join('');
 function reviewBadge(s) {
  const review=s?.review;
  if(s?.status==='cancelled'||!review?.required)return '';
@@ -136,9 +143,9 @@ function saleReviewEditor(w) {
 }
 function operationalStatusControl(s, context='lista') {
  if(s.status==='cancelled')return '';
- const selected=s.operational_status?.id??'';
- if(!can('sales.change_status'))return operationalBadge(s.operational_status);
- return `<label class="status-control"><span class="sr-only">Status operacional da venda #${String(s.number).padStart(4,'0')} no ${context}</span><select class="status-select" ${s.operational_status?`data-status-color="${statusHex(s.operational_status.color)}"`:''} data-sale-status="${s.id}" data-previous="${esc(selected)}" aria-label="Alterar status operacional da venda #${String(s.number).padStart(4,'0')}">${operationalOptions(selected)}</select></label>`;
+ const selected=unifiedStatusValue(s);
+ if(!can('sales.change_status'))return selected===reviewStatusValue?'<span class="operational-badge status-review"><span class="status-dot" aria-hidden="true"></span>A conferir</span>':operationalBadge(s.operational_status);
+ return `<label class="status-control"><span class="sr-only">Status da venda #${String(s.number).padStart(4,'0')} no ${context}</span><select class="status-select${selected===reviewStatusValue?' is-review':''}" ${selected!==reviewStatusValue&&s.operational_status?`data-status-color="${statusHex(s.operational_status.color)}"`:''} data-sale-status="${esc(s.id)}" data-previous="${esc(selected)}" aria-label="Alterar status da venda #${String(s.number).padStart(4,'0')}">${unifiedStatusOptions(selected)}</select></label>`;
 }
 function productSummary(s) {
  const items=Array.isArray(s.items)?s.items:[];
@@ -158,7 +165,7 @@ function clearPrivateWorkspace() {
  closeSelectControls();app.innerHTML='<main class="loading" role="status">Carregando sua conta…</main>';
  working=null;workingDirty=false;pendingDiscardTarget=null;detailId=null;detailSale=null;productHistory=null;
  pendingWorks.clear();pendingOwner='';pickerUnits=[];productCreateContext=null;machineDraft=null;machineDraftDirty=false;machineBrandSelections.clear();
- catalogQueries={customers:'',products:''};catalogOwner='';stockSearch='';stockSearchOwner='';view='dashboard';renderedView=null;
+ catalogQueries={customers:'',products:''};catalogOwner='';stockSearch='';stockSearchOwner='';rankingTab='sellers';rankingMetric='revenue';view='dashboard';renderedView=null;
  filter=todayFilter();salesFilters.clear();salesMutationRefreshPending=false;salesRefreshPending=false;cancellationRefreshPending=false;mutationRefreshPending='';
  for(const dialog of document.querySelectorAll('dialog')){if(dialog.open)dialog.close();dialog.replaceChildren();}
  financeUI.reset();stockUI.reset();calculatorUI.reset();mobileNavigation.reset();pageHistory.reset();
@@ -186,7 +193,7 @@ async function finishMutation(message) {
   app.querySelector('.auth-card')?.insertAdjacentHTML('afterbegin',`<div class="alert warn saved-refresh-warning" role="status"><strong>${esc(message)}</strong><p>A gravação foi concluída, mas a atualização da tela falhou. Entre novamente para conferir os dados e não repita o cadastro.</p></div>`);
  }
 }
-const navs=[['dashboard','grid','Dashboard'],['new-sale','plus','Vender'],['sales','bag','Vendas'],['calculator','calculator','Calculadora'],['registry-menu','users','Cadastro'],['customers','users','Clientes','registry-menu'],['products','box','Produtos','registry-menu'],['suppliers','stock','Fornecedores','registry-menu'],['card-machines','money','Máquinas de cartão','registry-menu'],['sellers','users','Vendedores','registry-menu'],['stock','stock','Estoque'],['expense-menu','money','Despesas'],['expenses','grid','Dashboard','expense-menu','Dashboard de despesas'],['expenses-fixed','clock','Fixas','expense-menu','Despesas fixas'],['expenses-variable','money','Variáveis','expense-menu','Despesas variáveis'],['expenses-catalogs','settings','Cadastros','expense-menu','Cadastros de despesas'],['closing','trend','Fechamento'],['settings','settings','Configurações']];
+const navs=[['dashboard','grid','Dashboard'],['new-sale','plus','Vender'],['sales','bag','Vendas'],['calculator','calculator','Calculadora'],['registry-menu','users','Cadastro'],['customers','users','Clientes','registry-menu'],['products','box','Produtos','registry-menu'],['suppliers','stock','Fornecedores','registry-menu'],['card-machines','money','Máquinas de cartão','registry-menu'],['sellers','users','Vendedores','registry-menu'],['stock','stock','Estoque'],['expense-menu','money','Despesas'],['expenses','grid','Dashboard','expense-menu','Dashboard de despesas'],['expenses-fixed','clock','Fixas','expense-menu','Despesas fixas'],['expenses-variable','money','Variáveis','expense-menu','Despesas variáveis'],['expenses-catalogs','settings','Cadastros','expense-menu','Cadastros de despesas'],['closing','trend','Fechamento'],['settings','settings','Configurações'],['ranking','trophy','Ranking','sidebar-bottom']];
 const navAllowed=v=>(v!=='calculator'||can('costs.view')||can('settings.manage'))&&(v!=='sellers'||can('users.manage'))&&(v!=='new-sale'||can('sales.create'))&&(!['expense-menu','expenses','expenses-fixed','expenses-variable','expenses-catalogs'].includes(v)||can('expenses.view'))&&(v!=='closing'||can('finance.view'));
 function navigation() {
  const renderButton=([v,i,label,parent])=>{const active=view===v||(v==='new-sale'&&view==='editor')||(v==='sales'&&view==='detail')||(view==='product-detail'&&v===productDetailReturnView)||(view==='stock-report'&&v==='stock');return `<button ${v==='new-sale'?'data-action="new-sale"':`data-view="${v}"`} class="${active?'active':''} ${parent?'nav-child':''}" ${active?'aria-current="page"':''}>${icon(i)}${label}</button>`;};
@@ -221,7 +228,7 @@ function sidebarMarkup() {
  return `<aside class="sidebar" id="app-navigation" aria-label="Menu da loja">
   <div class="sidebar-heading"><div class="brand"><div class="brand-logo-frame"><img src="/gamecell-logo.png" width="640" height="640" alt="Gamecell — games, celulares e informática" decoding="async"></div></div><div class="mobile-drawer-heading"><button type="button" class="subtle mobile-close" data-mobile-close aria-label="Fechar menu">${icon('x')}</button></div></div>
   <nav class="nav" aria-label="Navegação principal">${navigation()}</nav>
-  <div class="sidebar-bottom"><button class="subtle" data-action="logout">Sair da conta ${icon('arrow')}</button></div>
+  <div class="sidebar-bottom"><button type="button" class="ranking-nav ${view==='ranking'?'active':''}" data-view="ranking" ${view==='ranking'?'aria-current="page"':''}>${icon('trophy')}<span>Ranking</span></button><button class="subtle" data-action="logout">Sair da conta ${icon('arrow')}</button></div>
  </aside>`;
 }
 function render() {
@@ -238,7 +245,7 @@ function render() {
  if(mutationRefreshPending){page(heading('Registro salvo','A atualização da tela não foi concluída.')+`<div class="alert"><p>${esc(mutationRefreshPending)} Não cadastre novamente. Consulte os dados atualizados para continuar.</p><button type="button" class="primary" data-action="refresh-after-save">Atualizar dados</button></div>`);return;}
  if(cancellationRefreshPending){showCancellationRefresh();return;}
  if(salesMutationRefreshPending){page(heading('Alteração salva','Precisamos atualizar os dados antes de mostrar os totais.')+'<div class="alert"><p>A alteração da venda foi salva, mas a consulta falhou. Atualize para continuar; não é necessário salvar novamente.</p><button type="button" class="primary" data-action="refresh-sales">Atualizar dados</button></div>');return;}
- if(view==='dashboard') renderDashboard(); else if(view==='sales') renderSales();else if(view==='calculator')calculatorUI.render(); else if(view==='editor') renderEditor(); else if(view==='detail') renderDetail(); else if(view==='products') renderProducts(); else if(view==='product-detail') renderProductDetail(); else if(view==='customers') renderCustomers(); else if(view==='stock') renderStock();else if(view==='stock-report')stockUI.reportPage();else if(view==='suppliers')page(heading('Fornecedores','Cadastros para identificar as compras e entradas da loja.')+supplierCatalogPanel());else if(view==='card-machines')page(heading('Máquinas de cartão','Máquina, bandeiras e taxas por parcela em um só cadastro.')+cardMachinesPanel());else if(view==='sellers')renderSellers(); else if(view==='expenses')financeUI.expensesPage('');else if(view==='expenses-fixed')financeUI.expensesPage('fixed');else if(view==='expenses-variable')financeUI.expensesPage('variable');else if(view==='expenses-catalogs')financeUI.expensesPage('catalogs');else if(view==='closing')financeUI.closingPage();else renderSettings();
+ if(view==='dashboard') renderDashboard(); else if(view==='sales') renderSales();else if(view==='ranking')renderRanking();else if(view==='calculator')calculatorUI.render(); else if(view==='editor') renderEditor(); else if(view==='detail') renderDetail(); else if(view==='products') renderProducts(); else if(view==='product-detail') renderProductDetail(); else if(view==='customers') renderCustomers(); else if(view==='stock') renderStock();else if(view==='stock-report')stockUI.reportPage();else if(view==='suppliers')page(heading('Fornecedores','Cadastros para identificar as compras e entradas da loja.')+supplierCatalogPanel());else if(view==='card-machines')page(heading('Máquinas de cartão','Máquina, bandeiras e taxas por parcela em um só cadastro.')+cardMachinesPanel());else if(view==='sellers')renderSellers(); else if(view==='expenses')financeUI.expensesPage('');else if(view==='expenses-fixed')financeUI.expensesPage('fixed');else if(view==='expenses-variable')financeUI.expensesPage('variable');else if(view==='expenses-catalogs')financeUI.expensesPage('catalogs');else if(view==='closing')financeUI.closingPage();else renderSettings();
  if(navigationWasOpen||routeChanged){document.querySelector('#main-content')?.focus({preventScroll:true});window.scrollTo({top:0,left:0,behavior:'instant'});}
 }
 const page = html => {const target=document.querySelector('#page');target.dataset.screen=view;target.innerHTML=html;applyColorStyles(target);enhanceSelects(target);enhanceMobileTables(target);compactMobilePage(target,view);};
@@ -257,14 +264,23 @@ function filters() {
  ${field('Status',`<select name="operational_status_id" aria-label="Filtrar status operacional">${option('','Todos os status',filter.operational_status_id)}${saleStatuses().map(s=>option(s.id,s.name,filter.operational_status_id)).join('')}</select>`)}
  ${field('Conferência',`<select name="review" aria-label="Filtrar vendas a conferir">${option('','Todas',filter.review)}${option('required','A conferir',filter.review)}${option('clear','Sem pendências',filter.review)}</select>`)}
  ${field('Situação',`<select name="status" aria-label="Filtrar situação da venda">${option('','Todas as situações',filter.status)}${option('confirmed','Confirmadas',filter.status)}${option('draft','Rascunhos',filter.status)}${option('cancelled','Canceladas',filter.status)}</select>`)}
- <button class="small" type="submit">Buscar</button><button class="small subtle" type="button" data-action="clear-filters">Limpar</button><p class="error sales-filter-error" role="alert"></p></form>
+ <button class="small subtle" type="button" data-action="clear-filters">Limpar</button><p class="error sales-filter-error" role="alert"></p></form>
  <p class="applied-sales-period" role="status">Período aplicado: ${esc(summary)} · ${esc(typeLabel)} · ${esc(reviewLabel)} · ${state.sales.length} ${state.sales.length===1?'registro encontrado':'registros encontrados'}${filter.q?` · Busca: “${esc(filter.q)}”`:''}</p>`;
 }
 function empty(title, description) {return `<div class="empty">${icon('bag')}<h3>${title}</h3><p>${description}</p></div>`;}
+function saleListStatus(s) {
+ return s.status==='cancelled'?statusBadge(s):operationalStatusControl(s,'lista de vendas');
+}
+function saleListAlerts(s) {
+ const alerts=[];
+ if(s.status==='draft')alerts.push(statusBadge(s));
+ if(s.status!=='cancelled'&&s.reconciliation?.state&&s.reconciliation.state!=='matched')alerts.push(paymentBadge(s));
+ return alerts.length?`<div class="sale-list-alerts" aria-label="Avisos da venda">${alerts.join('')}</div>`:'<span class="muted sale-list-no-alerts">Sem avisos</span>';
+}
 function saleTable(sales, compact=false) {
  if(!sales.length)return empty('Nenhuma venda por aqui','Crie uma venda ou ajuste os filtros para começar.');
- if(compact)return `<div class="table-wrap"><table class="sales-table sales-table-compact"><thead><tr><th>Venda / cliente</th><th>Status</th><th>Situação</th><th class="num">Valor</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${sales.map(s=>`<tr><td class="sale-identity"><strong>#${String(s.number).padStart(4,'0')}</strong><span>${esc(s.customer_name??'Cliente a definir')}</span><small>${date(s.business_date?`${s.business_date}T12:00:00-03:00`:s.created_at)}</small></td><td>${operationalBadge(s.operational_status)}${reviewBadge(s)}</td><td>${statusBadge(s)}</td><td class="num strong">${money(s.total_cents)}</td><td><button class="small subtle" data-action="open-sale" data-id="${s.id}" aria-label="Abrir venda #${String(s.number).padStart(4,'0')}">Abrir ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>`;
- return `<div class="table-wrap" tabindex="0" role="region" aria-label="Histórico de vendas"><table class="sales-table sales-table-full"><thead><tr><th>Venda / cliente</th><th>Produto(s)</th><th class="num">Quantidade</th><th class="num">Valor total</th><th>Status operacional</th><th>Situação da venda</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${sales.map(s=>`<tr><td class="sale-identity"><strong>#${String(s.number).padStart(4,'0')}</strong><span>${esc(s.customer_name??'Cliente a definir')}</span><small>${esc(s.seller_name??'Vendedor a definir')} · ${date(s.business_date?`${s.business_date}T12:00:00-03:00`:s.created_at)}</small></td><td>${productSummary(s)}</td><td class="num strong">${totalQuantity(s)} un.</td><td class="num strong">${money(s.total_cents)}</td><td>${operationalStatusControl(s)}</td><td><div class="technical-state">${statusBadge(s)}${paymentBadge(s)}</div></td><td><button class="small subtle" data-action="open-sale" data-id="${s.id}" aria-label="Abrir venda #${String(s.number).padStart(4,'0')}">Abrir ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>`;
+ if(compact)return `<div class="table-wrap"><table class="sales-table sales-table-compact"><thead><tr><th>Venda / cliente</th><th>Status</th><th>Avisos</th><th class="num">Valor</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${sales.map(s=>`<tr><td class="sale-identity"><strong>#${String(s.number).padStart(4,'0')}</strong><span>${esc(s.customer_name??'Cliente a definir')}</span>${wholesaleBadge(s)}${saleTiming(s,{esc,date,time})}</td><td>${saleListStatus(s)}</td><td>${saleListAlerts(s)}</td><td class="num strong">${money(s.total_cents)}</td><td><button class="small subtle" data-action="open-sale" data-id="${esc(s.id)}" aria-label="Abrir venda #${String(s.number).padStart(4,'0')}">Abrir ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>`;
+ return `<div class="table-wrap" tabindex="0" role="region" aria-label="Histórico de vendas"><table class="sales-table sales-table-full"><thead><tr><th>Venda / cliente</th><th>Produto(s)</th><th class="num">Quantidade</th><th class="num">Valor total</th><th>Status</th><th>Avisos</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${sales.map(s=>`<tr><td class="sale-identity"><strong>#${String(s.number).padStart(4,'0')}</strong><span>${esc(s.customer_name??'Cliente a definir')}</span><small class="sale-list-seller">${esc(s.seller_name??'Vendedor a definir')}</small>${wholesaleBadge(s)}${saleTiming(s,{esc,date,time})}</td><td>${productSummary(s)}</td><td class="num strong">${totalQuantity(s)} un.</td><td class="num strong">${money(s.total_cents)}</td><td>${saleListStatus(s)}</td><td>${saleListAlerts(s)}</td><td><button class="small subtle" data-action="open-sale" data-id="${esc(s.id)}" aria-label="Abrir venda #${String(s.number).padStart(4,'0')}">Abrir ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>`;
 }
 function statusCatalogPanel() {
  const statuses=saleStatuses(), manage=can('settings.manage');
@@ -274,14 +290,18 @@ function metric(label,v,note,i,featured=false) {return `<div class="metric ${fea
 function reviewMetric(value) {return `<button type="button" class="metric metric-action" data-action="show-review-sales"><span class="metric-label">Vendas para conferir${icon('bag')}</span><span class="metric-value">${value}</span><span class="metric-foot">Pendência automática ou marcação manual · abrir vendas</span></button>`;}
 function renderDashboard() {
  const d=state.dashboard, c=state.sales.filter(s=>s.status==='confirmed');
- page(heading('Sua operação, em dia.','Acompanhe as vendas e o resultado real de cada operação.')+filters()+refundReminders(state.refunds_pending,{esc,money})+
+ page(heading('Sua operação, em dia.','Acompanhe as vendas e o resultado real de cada operação.')+filters()+
  `<div class="metric-grid">${metric('Faturamento',money(d.revenue_cents),`${d.sales_count} ${d.sales_count===1?'venda confirmada':'vendas confirmadas'} no filtro`,'money')}${can('profit.view')?metric('Lucro apurado',money(d.profit_cents),'Somente vendas conferidas e com custo completo','trend',true):metric('Pagamentos registrados',money(d.gross_cents),'Valores brutos, antes das taxas','money',true)}${metric('A receber',money(d.pending_cents),'Diferença entre a venda e os pagamentos','clock')}${reviewMetric(String(d.incomplete_sales))}</div>
  ${financeUI.remindersPanel(state.expense_reminders,true)}<div class="panel"><div class="panel-header"><div><h2>Vendas recentes</h2><p>Rascunhos e vendas confirmadas, sem perder o histórico.</p></div><button class="small subtle" data-view="sales">Ver todas ${icon('arrow')}</button></div>${saleTable(state.sales.slice(0,5),true)}</div>
  <div class="two-col"><div class="panel"><div class="panel-header"><h2>Conferência dos pagamentos</h2><span class="badge">Valores brutos</span></div><div class="panel-body"><div class="row-stat"><span>Conferidos com o total da venda</span><span class="badge good">${c.filter(s=>s.reconciliation.state==='matched').length} ${c.filter(s=>s.reconciliation.state==='matched').length===1?'venda':'vendas'}</span></div><div class="row-stat"><span>Pagamento abaixo do total</span><strong>${money(d.pending_cents)}</strong></div><div class="row-stat"><span>Pagamento acima do total</span><strong class="${d.excess_cents?'negative':''}">${money(d.excess_cents)}</strong></div><p class="stat-note">As taxas de cartão não geram saldo a receber. Valores informados a mais não são somados ao faturamento.</p></div></div><div class="panel"><div class="panel-header"><h2>Atenção ao estoque</h2><span class="badge">Loja inteira</span></div><div class="panel-body">${state.products.filter(p=>p.stock<0).slice(0,4).map(p=>`<div class="row-stat"><span>${esc(p.name)}</span><span class="badge bad">${p.stock} un.</span></div>`).join('')||'<p class="muted">Nenhum produto com saldo negativo.</p>'}<p class="stat-note">Vendas sem saldo são permitidas. A entrada posterior resolve o custo pendente pelo FIFO, com histórico.</p><button class="small subtle" data-view="stock">Consultar estoque ${icon('arrow')}</button></div></div></div>`);
 }
 function renderSales() {
- page(heading('Vendas','Consulte e gerencie cada venda do período selecionado.')+filters()+refundReminders(state.refunds_pending,{esc,money})+
- salesRecords(state.sales,{esc,money,date,can,statusBadge,paymentBadge,operationalStatusControl,reviewControl:saleReviewControl,empty}));
+ page(heading('Vendas','Consulte e gerencie cada venda do período selecionado.')+filters()+
+ salesRecords(state.sales,{esc,money,date,time,can,statusBadge,paymentBadge,operationalStatusControl,empty}));
+}
+function renderRanking() {
+ const filtersMarkup=filters();
+ page(rankingView(state.sales,{active:rankingTab,metric:rankingMetric,canViewProfit:can('profit.view'),esc,money,day:filterDateLabel,filtersMarkup}));
 }
 const productNameButton = (product,origin) => `<button class="link-button" data-action="open-product" data-id="${product.id}" data-origin="${origin}" aria-label="Abrir histórico do produto ${esc(product.name)}">${esc(product.name)}</button>`;
 function catalogSearch(kind,label,placeholder) {
@@ -311,7 +331,7 @@ function renderStock() {
 }
 function stockBalanceMarkup() {
  const costs=can('costs.view'),products=state.products.filter(p=>matchesStockProduct(p,stockSearch));
- return `<p class="stock-result-count" role="status">${products.length} de ${state.products.length} produtos${stockSearch.trim()?' · busca no saldo':''}</p>`+(products.length?`<div class="table-wrap"><table class="product-table compact-stock-table"><thead><tr><th>Produto</th><th class="num">Saldo</th><th>Situação</th>${costs?'<th class="num">Custo FIFO</th><th class="num">Último custo</th>':''}</tr></thead><tbody>${products.map(p=>`<tr><td class="strong">${productNameButton(p,'stock')}${p.sku?`<small class="stock-sku">SKU: ${esc(p.sku)}</small>`:''}</td><td class="num">${p.stock} un.</td><td><span class="badge ${p.stock<0?'bad':p.stock>0?'good':''}">${p.stock<0?'Entrada e custo pendentes':p.stock>0?'Disponível':'Sem saldo'}</span></td>${costs?`<td class="num">${costValue(p.fifo_cost_cents)}</td><td class="num">${costValue(p.last_cost_cents)}</td>`:''}</tr>`).join('')}</tbody></table></div>`:state.products.length?empty('Nenhum produto encontrado','Tente outro nome ou código, ou limpe a busca.'):empty('Nenhum produto cadastrado','Cadastre um produto para registrar sua primeira entrada.'));
+ return `<p class="stock-result-count" role="status">${products.length} de ${state.products.length} produtos${stockSearch.trim()?' · busca no saldo':''}</p>`+(products.length?`<div class="table-wrap"><table class="product-table compact-stock-table"><thead><tr><th>Produto</th><th class="num">Estoque</th>${costs?'<th class="num">Custo FIFO</th><th class="num">Último custo</th>':''}</tr></thead><tbody>${products.map(p=>`<tr><td class="strong">${productNameButton(p,'stock')}${p.sku?`<small class="stock-sku">SKU: ${esc(p.sku)}</small>`:''}</td><td class="num stock-balance-cell"><strong class="stock-balance-value ${p.stock<0?'negative':p.stock===0?'muted':''}">${p.stock} un.</strong>${p.stock<0?'<small class="stock-balance-alert negative">Entrada e custo pendentes</small>':p.stock===0?'<small class="stock-balance-alert muted">Sem saldo</small>':''}</td>${costs?`<td class="num stock-cost-cell">${costValue(p.fifo_cost_cents)}</td><td class="num stock-cost-cell">${costValue(p.last_cost_cents)}</td>`:''}</tr>`).join('')}</tbody></table></div>`:state.products.length?empty('Nenhum produto encontrado','Tente outro nome ou código, ou limpe a busca.'):empty('Nenhum produto cadastrado','Cadastre um produto para registrar sua primeira entrada.'));
 }
 function updateStockResults() {
  const target=document.querySelector('#stock-results');if(!target)return;
@@ -347,7 +367,7 @@ function renderProductDetail() {
  page(heading(esc(product.name),`${product.sku?`SKU ${esc(product.sku)} · `:''}Histórico de entradas e vendas.`,`<div class="actions"><button data-action="product-back">Voltar para ${backLabel}</button>${can('products.manage')?`<button data-action="edit-product" data-id="${product.id}">Editar produto</button>`:''}</div>`)+
  `<div class="detail-grid product-detail-metrics ${product.serial_tracked?'serial-product-metrics':''}">${metric('Preço sugerido',money(product.price_cents),'Valor atual do cadastro','money')}${metric('Saldo atual',`${product.stock} un.`,product.stock<0?'Entrada pendente':'Estoque disponível','box')}${costs?metric('Custo FIFO',costValue(product.fifo_cost_cents),'Próximo lote disponível','stock'):metric('Movimentações',String(entries.length+sales.length),'Entradas e vendas registradas','clock')}${costs?metric('Último custo',costValue(product.last_cost_cents),'Entrada mais recente','trend'):''}</div>
  ${product.serial_tracked?serialProductPanel(history):''}<section class="panel"><div class="panel-header"><div><h2>Histórico de entradas</h2><p>Custos e unidades recebidas.</p></div><span class="badge">${entries.length} registros</span></div>${entries.length?`<div class="table-wrap"><table class="history-table"><thead><tr><th>Recebida em</th><th>Fornecedor</th><th class="num">Quantidade</th><th class="num">Restante</th>${costs?'<th class="num">Custo unitário</th>':''}</tr></thead><tbody>${entries.map(entry=>`<tr><td>${date(entry.received_at)}${entry.voided_at?'<small class="negative">Entrada excluída</small>':''}</td><td class="strong">${esc(entry.supplier_name||'Sem fornecedor')}</td><td class="num">${entry.quantity_initial} un.</td><td class="num">${entry.quantity_remaining} un.${can('stock.correct')&&can('stock.receive')&&can('costs.enter')&&!entry.voided_at?`<button class="small" data-action="stock-entry-edit" data-id="${entry.id}">Editar entrada</button>`:''}</td>${costs?`<td class="num">${costValue(entry.unit_cost_cents)}</td>`:''}</tr>`).join('')}</tbody></table></div>`:empty('Nenhuma entrada registrada','Quando houver uma entrada, ela aparecerá aqui com quantidade e fornecedor.')}</section>
- <section class="panel"><div class="panel-header"><div><h2>Vendas deste produto</h2><p>Vendas confirmadas que seu usuário pode consultar.</p></div><span class="badge">${sales.length} registros</span></div>${sales.length?`<div class="table-wrap"><table class="history-table"><thead><tr><th>Venda</th><th>Cliente</th><th>Vendedor</th><th>Data</th><th class="num">Quantidade</th><th class="num">Preço unit.</th><th class="num">Total</th><th>Situação</th></tr></thead><tbody>${sales.map(s=>`<tr><td class="strong">#${String(s.number).padStart(4,'0')}</td><td>${esc(s.customer_name||'Cliente a definir')}</td><td>${esc(s.seller_name||'Vendedor a definir')}</td><td>${s.business_date?filterDateLabel(s.business_date):date(s.created_at)}</td><td class="num">${s.quantity} un.</td><td class="num">${money(s.unit_price_cents)}</td><td class="num strong">${money(s.total_cents)}</td><td><span class="badge good">Confirmada</span></td></tr>`).join('')}</tbody></table></div>`:empty('Nenhuma venda confirmada deste produto','Abra Vender no menu lateral para iniciar uma venda.')}</section>`);if(product.serial_tracked)filterUnitRows(document.querySelector('#page'),'','available');
+ <section class="panel"><div class="panel-header"><div><h2>Vendas deste produto</h2><p>Vendas confirmadas que seu usuário pode consultar.</p></div><span class="badge">${sales.length} registros</span></div>${sales.length?`<div class="table-wrap"><table class="history-table"><thead><tr><th>Venda</th><th>Cliente</th><th>Vendedor</th><th>Data e hora</th><th class="num">Quantidade</th><th class="num">Preço unit.</th><th class="num">Total</th><th>Situação</th></tr></thead><tbody>${sales.map(s=>`<tr><td class="strong">#${String(s.number).padStart(4,'0')}</td><td>${esc(s.customer_name||'Cliente a definir')}</td><td>${esc(s.seller_name||'Vendedor a definir')}</td><td>${saleTiming(s,{esc,date,time})}</td><td class="num">${s.quantity} un.</td><td class="num">${money(s.unit_price_cents)}</td><td class="num strong">${money(s.total_cents)}</td><td><span class="badge good">Confirmada</span></td></tr>`).join('')}</tbody></table></div>`:empty('Nenhuma venda confirmada deste produto','Abra Vender no menu lateral para iniciar uma venda.')}</section>`);if(product.serial_tracked)filterUnitRows(document.querySelector('#page'),'','available');
 }
 function productForm(product={},saleIndex=null) {
  productCreateContext=saleIndex===null?null:{work:working,item:working.items[saleIndex],owner:state.user.id};
@@ -382,7 +402,7 @@ async function openUnitPicker(index) {
 function makeWorking(s=null) {
  const operationalStatusId=s?.operational_status?.id??'';
  return {server_base:s?JSON.parse(JSON.stringify(s)):null,server_conflict:false,updated_at:s?.updated_at,id:s?.id??null,created_by:s?.created_by??state.user.id,status:s?.status??'draft',number:s?.number,edit_token:s?.edit_token,draft_token:s?.draft_token,correction_request_id:crypto.randomUUID(),reason:'',business_date:brazilianDate(s?.business_date??saoPauloToday()),entry_costs:{},customer_id:s?.customer_id??'',seller_id:s?.seller_id??state.user.id,original_seller_id:s?.seller_id??null,original_seller_name:s?.seller_name??'',
- is_wholesale:!!s?.is_wholesale,original_is_wholesale:!!s?.is_wholesale,review_manual:!!s?.review?.manual,original_review_manual:!!s?.review?.manual,review_automatic:!!s?.review?.automatic,review_required:!!s?.review?.required,operational_status_id:operationalStatusId,original_operational_status_id:operationalStatusId,
+ is_wholesale:!!s?.is_wholesale,original_is_wholesale:!!s?.is_wholesale,review_manual:s?!!s.review?.manual:true,original_review_manual:!!s?.review?.manual,review_automatic:!!s?.review?.automatic,review_required:s?!!s.review?.required:true,operational_status_id:operationalStatusId,original_operational_status_id:operationalStatusId,
  freight:s?.freight_cents!==undefined?value(s.freight_cents):'0,00', public_notes:s?.public_notes??'',
  original_unit_ids:s?s.items.flatMap(i=>i.unit_ids??[]):[],
  items:s?s.items.map(i=>({...i,original_unit_ids:[...(i.unit_ids??[])],price:value(i.unit_price_cents),cost:i.manual_cost_cents!=null?value(i.manual_cost_cents):'',manual_cost_known:'manual_cost_cents' in i})):[],
@@ -459,8 +479,8 @@ function normalizeCardSelection(payment) {
  if(!machines.some(machine=>machine.id===payment.machine_id))payment.machine_id=machines.length===1?machines[0].id:'';
  const brands=(machines.find(machine=>machine.id===payment.machine_id)?.brands??[]).filter(brand=>rates.some(r=>r.machine_id===payment.machine_id&&r.brand_id===brand.id));
  if(!brands.some(brand=>brand.id===payment.brand_id))payment.brand_id=brands.length===1?brands[0].id:'';
- const brandRates=rates.filter(r=>r.machine_id===payment.machine_id&&r.brand_id===payment.brand_id),modes=['debit','credit'].filter(mode=>brandRates.some(r=>r.mode===mode));
- if(!modes.includes(payment.mode))payment.mode=modes.length===1?modes[0]:'';
+ const brandRates=rates.filter(r=>r.machine_id===payment.machine_id&&r.brand_id===payment.brand_id),modes=['credit','debit'].filter(mode=>brandRates.some(r=>r.mode===mode));
+ if(!modes.includes(payment.mode))payment.mode=modes.includes('credit')?'credit':modes[0]??'';
  const available=brandRates.filter(r=>r.mode===payment.mode).sort((a,b)=>a.installments-b.installments);
  if(!available.some(r=>r.id===payment.rate_id))payment.rate_id=available.length===1?available[0].id:'';
  return {machines,brands,modes,available};
@@ -499,6 +519,7 @@ function paymentEditable(payment){return !payment.saved||working.status==='confi
 function changePaymentMethod(payment,method){
  payment.method=method;payment.keep_card_rate=payment.saved&&method==='card'&&payment.original_method==='card';payment.rate_id='';
  if(method==='pix'&&!(payment.saved&&payment.original_method==='pix'))payment.pix_account_id=defaultPixAccountId(payment.pix_account_id);
+ if(method==='card')payment.mode='credit';
 }
 function editorSellerOptions(w){
  const original=w.original_seller_id,missing=original&&!state.users.some(u=>u.id===original);
@@ -517,14 +538,17 @@ function itemDetailsFields(item,index) {
  return `<button type="button" class="small item-details-toggle" data-action="item-details" data-index="${index}" aria-expanded="${open}" aria-controls="item-details-${index}">${icon('plus')} IMEI / SN e detalhes <span class="badge">Opcional</span></button><div id="item-details-${index}" class="item-details-fields" ${open?'':'hidden'}><div class="fields">${field('IMEI ou número de série (SN)',`<textarea rows="2" data-item="${index}" data-key="serial_number" maxlength="1000" ${trackedItem(item)?'readonly':''} placeholder="Digite ou cole a identificação. Para mais de uma unidade, use uma linha por aparelho.">${esc(item.serial_number??'')}</textarea>`)}${field('Detalhes do produto',`<textarea rows="2" data-item="${index}" data-key="details" maxlength="2000" placeholder="Ex.: cor, armazenamento, condição ou acessórios.">${esc(item.details??'')}</textarea>`)}</div><label class="check-field"><input type="checkbox" data-item="${index}" data-key="share_details" ${item.share_details?'checked':''}> Mostrar a identificação e os detalhes no pedido do cliente</label><p class="footer-note">Sem marcar, estas informações ficam apenas no sistema. ${trackedItem(item)?'A saída usa os aparelhos selecionados e seus respectivos custos.':'Este campo é uma observação e não altera o estoque.'}</p></div>`;
 }
 function editorSaleDate(w) {
- return field('Data da venda',`<input data-bind="business_date" data-date-kind="date" inputmode="numeric" maxlength="10" placeholder="DD/MM/AAAA" autocomplete="off" required data-max-date="${saoPauloToday()}" aria-label="Data da venda (DD/MM/AAAA)" aria-describedby="sale-date-hint" value="${esc(w.business_date)}"><small id="sale-date-hint">Hoje por padrão. Altere para registrar em outro dia.</small>`,true);
+ return `<label class="field sale-editor-date"><span>Data da venda</span><input data-bind="business_date" data-date-kind="date" inputmode="numeric" maxlength="10" placeholder="DD/MM/AAAA" autocomplete="off" required data-max-date="${saoPauloToday()}" aria-label="Data da venda (DD/MM/AAAA)" aria-describedby="sale-date-hint" value="${esc(w.business_date)}"><small id="sale-date-hint">Hoje por padrão. Altere para registrar em outro dia.</small></label>`;
 }
 function editorCustomerField(w) {
- return `<div class="field full editor-customer-field"><div class="customer-field-heading"><label for="sale-customer">Cliente</label><span class="customer-create-slot">${can('customers.manage')?'<button type="button" class="small customer-create" data-action="modal-customer">+ Novo cliente</button>':''}</span></div><select id="sale-customer" data-bind="customer_id">${option('','Selecione o cliente',w.customer_id)}${state.customers.map(c=>option(c.id,c.name,w.customer_id)).join('')}</select></div>`;
+ const customerAction=can('customers.manage')?'<button type="button" class="small customer-create" data-action="modal-customer">+ Novo cliente</button>':'';
+ return `<div class="field full editor-customer-field"><div class="customer-field-heading"><label for="sale-customer">Cliente</label><span class="customer-create-slot">${customerAction}</span></div><select id="sale-customer" data-bind="customer_id" data-search="customer" aria-label="Buscar e alterar cliente">${option('','Selecione o cliente',w.customer_id)}${state.customers.map(c=>option(c.id,c.name,w.customer_id)).join('')}</select></div>`;
 }
 function editorSaleStatusField(w) {
- const operational=can('sales.change_status')?`<select data-bind="operational_status_id" aria-labelledby="editor-status-label" aria-describedby="editor-status-hint">${operationalOptions(w.operational_status_id)}</select>`:operationalBadge(saleStatuses().find(s=>s.id===w.operational_status_id));
- return `<div class="field sale-editor-status-field"><span id="editor-status-label">Status da venda</span><div class="sale-editor-status-line">${operational}${saleReviewEditor(w)}</div><small id="editor-status-hint">O status operacional acompanha o andamento. “A conferir” apenas sinaliza uma revisão e não muda a confirmação.</small></div>`;
+ const selected=w.review_manual||w.review_automatic?reviewStatusValue:w.operational_status_id;
+ const selectedStatus=saleStatuses().find(s=>s.id===w.operational_status_id);
+ const status=can('sales.change_status')?`<select class="status-select${selected===reviewStatusValue?' is-review':''}" ${selected!==reviewStatusValue&&selectedStatus?`data-status-color="${statusHex(selectedStatus.color)}"`:''} data-editor-sale-status aria-labelledby="editor-status-label">${unifiedStatusOptions(selected)}</select>`:selected===reviewStatusValue?'<span class="operational-badge status-review"><span class="status-dot" aria-hidden="true"></span>A conferir</span>':operationalBadge(selectedStatus);
+ return `<div class="field sale-editor-status-field"><span id="editor-status-label">Status</span><div class="sale-editor-status-line">${status}</div></div>`;
 }
 async function saveCustomerForm(data,form) {
  const key=form?.dataset.id;
@@ -542,10 +566,9 @@ function moneyInput(html) { return `<span class="money-input"><span aria-hidden=
 function saleItemMarkup(i,n) {
  const product=i.product_id,tracked=trackedItem(i),nameId='sale-item-name-'+n;
  return `<div class="sale-item"><div class="item-row">
- <div class="field item-product"><div class="product-field-heading"><label for="sale-product-${n}">Produto</label>${can('products.manage')?`<button type="button" class="small subtle" data-action="create-sale-product" data-index="${n}">+ Cadastrar novo produto</button>`:''}</div>
+ <div class="field item-product"><div class="product-field-heading"><label for="sale-product-${n}">Produto desta venda</label></div>
  <select id="sale-product-${n}" data-item="${n}" data-key="product_id" data-search="product" aria-label="Buscar produto no estoque">${option('','Produto avulso — sem cadastro',product??'')}${state.products.map(p=>option(p.id,p.name+(p.sku?' · '+p.sku:'')+' · saldo '+p.stock,product)).join('')}</select>
- <label class="item-name-label" for="${nameId}">${product?'Descrição nesta venda':'Nome do produto avulso'}</label><input id="${nameId}" class="avulso-field" aria-label="${product?'Descrição nesta venda':'Nome do produto avulso'}" data-item="${n}" data-key="description" maxlength="200" value="${esc(i.description)}">
- ${product?'':'<small>Só nesta venda. Para incluir no catálogo, use Cadastrar novo produto.</small>'}${serialSaleField(i,n)}</div>
+ ${product?'':`<label class="item-name-label" for="${nameId}">Nome do produto avulso</label><input id="${nameId}" class="avulso-field" aria-label="Nome do produto avulso" data-item="${n}" data-key="description" maxlength="200" value="${esc(i.description)}"><small>Este item será usado somente nesta venda.</small>`}${serialSaleField(i,n)}</div>
  <div class="item-values"><label class="field item-quantity"><span>Qtd.</span><input type="number" min="1" step="1" data-item="${n}" data-key="quantity" value="${i.quantity}" ${tracked?'readonly aria-label="Quantidade de aparelhos selecionados"':''}></label>
  <label class="field item-price"><span>Preço unitário</span>${moneyInput(`<input aria-label="Preço unitário em reais" inputmode="decimal" data-item="${n}" data-key="price" value="${esc(i.price)}">`)}</label>
  <label class="field item-cost"><span>Custo interno</span>${product?`<input disabled value="${tracked?'Por SN':'FIFO'}">`:can('costs.enter')?moneyInput(`<input aria-label="Custo interno em reais" inputmode="decimal" placeholder="Pendente" data-item="${n}" data-key="cost" value="${esc(i.cost)}">`):'<input disabled value="Restrito">'}</label></div>
@@ -568,9 +591,9 @@ async function saveProductForm(data,form) {
 }
 function renderEditor() {
  const w=working;
-page(workingConflictNotice(w)+heading(w.status==='confirmed'?`Editar venda #${String(w.number).padStart(4,'0')}`:w.id?'Editar rascunho':'Nova venda','Preço da venda e pagamentos são informados separadamente.',`<div class="actions"><button data-view="sales">Voltar</button>${cancelSaleButton(w,{esc,can})}</div>`)+`<div class="sale-editor"><div><section class="panel"><div class="panel-body"><div class="section-title"><h2><span class="step">1</span>Cliente, vendedor e status</h2></div><div class="sale-editor-flags">${wholesaleEditor(w.is_wholesale)}</div><div class="fields">${editorSaleDate(w)}${editorCustomerField(w)}${field('Vendedor',`<select data-bind="seller_id">${editorSellerOptions(w)}</select>`)}${editorSaleStatusField(w)}</div></div></section>
- <section class="panel"><div class="panel-body"><div class="section-title"><div><h2><span class="step">2</span>Produtos da venda</h2><p>Selecione um produto cadastrado ou adicione um avulso.</p></div></div><div>${w.items.map(saleItemMarkup).join('')||`<p class="muted payment-hint">${w.status==='confirmed'?'Adicione pelo menos um produto para salvar a correção.':'Ainda não há produtos. O rascunho pode ser salvo assim.'}</p>`}</div><button class="small" data-action="add-item">${icon('plus')} Adicionar produto</button></div></section>
- <section class="panel"><div class="panel-body"><div class="section-title"><div><h2><span class="step">3</span>Pagamentos</h2><p>Confira os valores brutos, contas e cartões utilizados.</p></div></div><div id="payment-alert" role="status" aria-live="polite"></div>${paymentEditorRows()}${can('payments.record')?'<button class="small" data-action="add-payment">+ Adicionar pagamento</button>':''}${w.status==='confirmed'?'<p class="footer-note">Correções e remoções só serão gravadas em Salvar alterações, com histórico. Não há cobrança nem estorno bancário automático.</p>':''}</div></section>
+page(workingConflictNotice(w)+heading(w.status==='confirmed'?`Editar venda #${String(w.number).padStart(4,'0')}`:w.id?'Editar rascunho':'Nova venda','Preço da venda e pagamentos são informados separadamente.',`<div class="actions sale-editor-heading-actions"><button class="sale-editor-back" data-view="sales">Voltar</button>${cancelSaleButton(w,{esc,can})}</div>`)+`<div class="sale-editor"><div><section class="panel"><div class="panel-body"><div class="section-title"><h2><span class="step">1</span>Cliente, vendedor e status</h2></div><div class="fields sale-editor-core-fields">${editorSaleDate(w)}${wholesaleEditor(w.is_wholesale)}${editorCustomerField(w)}${field('Vendedor',`<select data-bind="seller_id">${editorSellerOptions(w)}</select>`)}${editorSaleStatusField(w)}</div></div></section>
+ <section class="panel"><div class="panel-body"><div class="section-title"><div><h2><span class="step">2</span>Produtos da venda</h2><p>Selecione um produto cadastrado ou use um produto avulso.</p></div></div><div>${w.items.map(saleItemMarkup).join('')||`<p class="muted payment-hint">${w.status==='confirmed'?'Adicione pelo menos um produto para salvar a correção.':'Ainda não há produtos. O rascunho pode ser salvo assim.'}</p>`}</div><button class="small" data-action="add-item">${icon('plus')} ${w.items.length?'Adicionar outro produto':'Adicionar produto'}</button></div></section>
+ <section class="panel"><div class="panel-body"><div class="section-title"><div><h2><span class="step">3</span>Pagamentos</h2><p>Confira os valores brutos, contas e cartões utilizados.</p></div></div><div id="payment-alert" role="status" aria-live="polite"></div>${paymentEditorRows()}${can('payments.record')?'<button class="small" data-action="add-payment">+ Adicionar pagamento</button>':''}${w.status==='confirmed'?'<p class="footer-note">Correções e remoções são gravadas em Salvar alterações, mantendo o histórico.</p>':''}</div></section>
  ${can('costs.view')?`<section class="panel"><div class="panel-body"><div class="section-title"><div><h2>Frete e outras despesas</h2><p>Somente despesas da loja. Não aparecem para o cliente.</p></div></div><div class="fields">${field('Frete pago pela loja',`<input data-bind="freight" inputmode="decimal" value="${esc(w.freight)}" ${can('costs.enter')?'':'disabled'}>`)}</div>${w.expenses.map((e,n)=>`<div class="payment-row expense-row"><label class="field payment-rate">Descrição<input data-expense="${n}" data-key="description" value="${esc(e.description)}" ${can('costs.enter')?'':'disabled'}></label><label class="field payment-value">Valor<input inputmode="decimal" data-expense="${n}" data-key="amount" value="${esc(e.amount)}" ${can('costs.enter')?'':'disabled'}></label>${can('costs.enter')?`<button class="subtle danger delete" data-action="remove-expense" data-index="${n}" aria-label="Remover despesa">${icon('x')}</button>`:''}</div>`).join('')}${can('costs.enter')?'<button class="small subtle" data-action="add-expense">+ Outra despesa</button>':'<p class="footer-note">Seu usuário pode consultar estas despesas, mas não alterá-las.</p>'}</div></section>`:''}
  <section class="panel"><div class="panel-body">${field('Observação para o cliente',`<textarea rows="3" data-bind="public_notes" maxlength="2000">${esc(w.public_notes)}</textarea>`)}<p class="footer-note">Este campo aparece no compartilhamento. Não inclua custos ou informações internas.</p></div></section></div>
  <aside class="panel summary"><div class="panel-header"><h2>Resumo da venda</h2><span class="badge">${w.status==='confirmed'?'Correção':'Rascunho'}</span></div><div class="panel-body"><div id="editor-summary"></div><div class="summary-actions">${w.status==='confirmed'?`${field('Motivo da edição',`<textarea data-bind="reason" rows="3" maxlength="500" placeholder="Explique o que está corrigindo.">${esc(w.reason)}</textarea>`)}<button class="primary" data-action="save-correction">Salvar alterações</button><p class="footer-note">Produtos, datas, custos, despesas e pagamentos podem ser corrigidos conforme suas permissões. O histórico é preservado; estoque e lucro serão recalculados. Mudanças em meses fechados são bloqueadas.</p>`:`<button class="primary" data-action="confirm-draft" ${can('sales.confirm')?'':'disabled'}>${icon('check')} Confirmar venda</button><button data-action="save-draft">Salvar rascunho</button>`}</div><p class="footer-note" ${w.status==='confirmed'?'hidden':''}>Rascunhos não baixam estoque. Pagamentos novos são registrados ao salvar. Após confirmar, podem ser corrigidos pela edição da venda. A confirmação permite pagamento pendente e estoque negativo, com aviso.</p><p class="error" id="editor-error" role="alert"></p></div></aside></div>`);
@@ -589,13 +612,8 @@ function updateSummary() {
 }
 function renderDetail() {
  const s=detailSale?.id===detailId?detailSale:state.sales.find(s=>s.id===detailId); if(!s){view='sales';render();return;}
- if(s.status==='cancelled'){page(heading(`Venda #${String(s.number).padStart(4,'0')} · Cancelada`,'Histórico preservado. Não entra nos totais de vendas ou lucro.',`<button data-view="sales">Voltar às vendas</button>`)+cancelledRecord(s,{esc,money,date,statusBadge,showDetails:false})+refundManagement(s,{esc,money,date,can})+cancellationPayments(s,{esc,money})+`<section class="panel"><div class="panel-body"><h2>Cancelamento</h2><p>${date(s.cancellation.created_at)} · ${esc(s.cancellation.author)}</p><p class="preserve">${esc(s.cancellation.reason)}</p><p class="muted">Se havia baixa de estoque, ela foi desfeita. Rascunhos e produtos avulsos não movimentam estoque.</p><p class="muted">Confira taxas, frete e despesas não recuperados do pedido cancelado antes do fechamento.</p></div></section>`);return;}
- page(heading(`Venda #${String(s.number).padStart(4,'0')}`,`${esc(s.customer_name??'Cliente a definir')} · ${esc(s.seller_name??'Vendedor a definir')} · ${date(s.business_date?`${s.business_date}T12:00:00-03:00`:s.created_at)}`,`<div class="actions"><button data-view="sales">Voltar às vendas</button>${cancelSaleButton(s,{esc,can})}${((s.status==='draft'&&can('sales.edit_draft'))||(s.status==='confirmed'&&can('sales.edit_confirmed')))?`<button data-action="edit-sale" data-id="${s.id}">Editar venda</button>`:''}${can('sales.share')?`<button class="primary" data-action="share-sale" data-id="${s.id}">${icon('share')} Compartilhar</button>`:''}</div>`)+
- `<div class="sale-state-strip" role="group" aria-label="Status da venda"><div class="sale-state-field"><span>Status operacional</span>${operationalStatusControl(s,'detalhe')}</div><div class="sale-state-field sale-state-summary"><span>Status da venda</span><div class="sale-state-values">${statusBadge(s)}${paymentBadge(s)}${saleReviewControl(s,'detalhe')}</div></div></div><div class="actions detail-badges">${wholesaleControl(s,{esc,can})}<span class="badge ${s.profit_state==='complete'?'good':'warn'}">${s.profit_state==='complete'?'Resultado completo':s.profit_state==='pending_cost'?'Custo pendente':s.profit_state==='draft'?'Ainda não confirmada':'Resultado provisório'}</span></div><br>
- <div class="detail-grid">${metric('Total vendido',money(s.total_cents),'Preço informado na venda','money')}${metric('Pagamento bruto',money(s.reconciliation.gross_cents),'Antes das taxas','money')}${can('profit.view')?metric('Lucro apurado',s.profit_cents===null?'Pendente':money(s.profit_cents),s.provisional_profit_cents!==null&&s.profit_cents===null?`Provisório: ${money(s.provisional_profit_cents)}`:'Frete, despesas e taxas descontados','trend',true):metric('Saldo pendente',money(s.reconciliation.pending_cents),'Diferença de pagamentos','clock')}</div>
- <div class="panel"><div class="panel-header"><h2>Produtos vendidos</h2></div><div class="table-wrap"><table><thead><tr><th>Produto</th><th class="num">Quantidade</th><th class="num">Preço unit.</th><th class="num">Total</th>${can('costs.view')?'<th class="num">Custo do item</th>':''}</tr></thead><tbody>${s.items.map(i=>`<tr><td class="strong">${((s.status==='confirmed'&&can('sales.edit_confirmed'))||(s.status==='draft'&&can('sales.edit_draft')))?`<button class="link-button" data-action="edit-sale" data-id="${s.id}" data-item-id="${i.id}" aria-label="Editar produto ${esc(i.description)}">${esc(i.description)}</button>`:esc(i.description)}<small>${i.product_id?(i.tracks_serials?'Produto cadastrado · custo por aparelho':'Produto cadastrado · FIFO'):'Avulso · sem movimentação de estoque'}</small>${i.serial_number?`<small class="preserve">IMEI / SN: ${esc(i.serial_number)}</small>`:''}${i.details?`<small class="preserve">${esc(i.details)}</small>`:''}${i.serial_number||i.details?`<small>${i.share_details?'Incluído no pedido do cliente':'Somente no sistema'}</small>`:''}</td><td class="num">${i.quantity}</td><td class="num">${money(i.unit_price_cents)}</td><td class="num">${money(i.quantity*i.unit_price_cents)}</td>${can('costs.view')?`<td class="num">${i.pending_cost_quantity?'Pendente':money(i.cost_cents)}</td>`:''}</tr>`).join('')}</tbody></table></div></div>
- <div class="panel"><div class="panel-header"><h2>Pagamentos registrados</h2>${can('payments.record')?`<button class="small" data-action="modal-payment" data-id="${s.id}">+ Registrar pagamento</button>`:''}</div>${s.payments.length?`<div class="table-wrap"><table><thead><tr><th>Forma</th><th>Detalhes</th><th class="num">Valor bruto</th>${can('costs.view')?'<th class="num">Taxa</th><th class="num">Líquido</th>':''}</tr></thead><tbody>${s.payments.map(p=>`<tr><td class="strong">${methods[p.method]}</td><td>${p.method==='card'?esc(`${p.machine} · ${p.brand} · ${p.installments}x`):p.method==='pix'?esc(pixAccountSnapshot(p)):'—'}</td><td class="num">${money(p.amount_cents)}</td>${can('costs.view')?`<td class="num">${money(p.fee_cents)}</td><td class="num">${money(p.amount_cents-p.fee_cents)}</td>`:''}</tr>`).join('')}</tbody></table></div>`:empty('Nenhum pagamento registrado','A venda pode continuar pendente e receber pagamentos depois.')}</div>
- ${can('costs.view')?`<div class="panel"><div class="panel-body"><div class="row-stat"><span>Frete pago pela loja</span><strong>${money(s.freight_cents)}</strong></div>${s.expenses.map(e=>`<div class="row-stat"><span>${esc(e.description)}</span><strong>${money(e.amount_cents)}</strong></div>`).join('')}</div></div>`:''}<div class="panel"><div class="panel-body"><h3>Observação para o cliente</h3><p class="preserve muted">${esc(s.public_notes||'Nenhuma observação.')}</p></div></div>${s.corrections?.length?`<section class="panel"><div class="panel-header"><h2>Histórico de correções</h2></div><div class="panel-body">${s.corrections.map(c=>`<div class="correction-record"><strong>${date(c.created_at)} · ${esc(c.author)}</strong><p>${esc(c.reason)}</p></div>`).join('')}</div></section>`:''}<p class="footer-note">A edição permite corrigir os lançamentos, sem cobrar ou estornar no banco. Para cancelar, use Cancelar venda e confirme o retorno dos produtos. O sistema não realiza estorno bancário.</p>`);
+ if(s.status==='cancelled'){page(`<div class="sale-detail-page sale-cancelled-detail">${cancelledSaleDetailView(s,{esc,money,date,time,icon})}</div>`);return;}
+ page(saleDetailView(s,{esc,money,date,time,can,icon,statusBadge,operationalStatusControl}));
 }
 function showCancellationRefresh() {
  page(heading('Venda cancelada','O cancelamento foi registrado. Atualize os dados para continuar.',`<button data-action="refresh-after-cancellation">Atualizar dados</button>`));
@@ -603,7 +621,7 @@ function showCancellationRefresh() {
 async function submitSaleCancellation(form,data) {
  const fields=new FormData(form),key=form.dataset.id;
  if(form.dataset.unsaved==='true'&&!fields.has('acknowledge_unsaved_changes'))throw Error('Confirme que as alterações não salvas não serão aplicadas.');
- await api(`/sales/${key}/cancel`,{request_id:data.request_id,edit_token:data.edit_token,reason:data.reason,acknowledge_stock_return:new FormData(form).has('acknowledge_stock_return'),acknowledge_refund_pending:new FormData(form).has('acknowledge_refund_pending')});
+ await api(`/sales/${key}/cancel`,{request_id:data.request_id,edit_token:data.edit_token,reason:data.reason,acknowledge_stock_return:new FormData(form).has('acknowledge_stock_return')});
  // Preserve the draft on dismissal or request failure; clear it only after success.
  for(const [pendingKey,entry] of pendingWorks)if(entry.id===key)pendingWorks.delete(pendingKey);
  if(working?.id===key){working=null;workingDirty=false;}
@@ -611,43 +629,20 @@ async function submitSaleCancellation(form,data) {
  page(heading('Venda cancelada','O cancelamento foi registrado. Atualizando o histórico…'));
  try{await load();cancellationRefreshPending=false;render();}
  catch(error){if(state){cancellationRefreshPending=true;showCancellationRefresh();}throw error;}
- toast('Venda cancelada. Histórico preservado e estoque atualizado.');
+ toast('Venda cancelada. Estoque e valores atualizados.');
 }
 
 async function openCancelSale(key) {
  if(!can('sales.cancel'))throw Error('Você não tem permissão para cancelar vendas.');
  const s=await api(`/sales/${key}`);
  if(s.status==='cancelled')throw Error('Esta venda já está cancelada.');
- const refund=s.reconciliation.gross_cents;
  const unsaved=(view==='editor'&&working?.id===key&&workingDirty)||pendingWorks.has('sale:'+key);
- showModal(`Cancelar venda #${String(s.number).padStart(4,'0')}`,`<p><strong>${esc(s.customer_name||'Cliente a definir')} · ${money(s.total_cents)}</strong></p>${unsaved?'<label class="check-field cancellation-ack"><input type="checkbox" name="acknowledge_unsaved_changes" required>Entendi que minhas alterações não salvas não serão aplicadas. Vou cancelar a venda já registrada.</label>':''}<p>A venda ficará no histórico como <strong>Cancelada</strong>, fora dos totais de vendas e lucro. Se havia baixa de estoque, ela será desfeita. Rascunhos e produtos avulsos não movimentam estoque. Esta ação não pode ser desfeita.</p>${refund>0?`<div class="refund-cancel-notice"><strong>Devolução pendente: ${money(refund)}</strong><p>Todo o valor recebido ficará a devolver ao cliente, sem descontar taxas. Não haverá estorno bancário automático.</p></div><label class="check-field cancellation-ack"><input type="checkbox" name="acknowledge_refund_pending" required>Entendi que ${money(refund)} ficará como devolução pendente.</label>`:''}<input type="hidden" name="request_id" value="${paymentRequestId()}"><input type="hidden" name="edit_token" value="${esc(s.edit_token)}">${field('Motivo do cancelamento','<textarea name="reason" required maxlength="500" rows="3" placeholder="Ex.: cliente desistiu da compra"></textarea>',true)}<label class="check-field cancellation-ack"><input type="checkbox" name="acknowledge_stock_return" required>Confirmo que os produtos não saíram da loja ou já foram devolvidos. Se a venda é avulsa, não há movimentação de estoque.</label>`,'cancel-sale-form',`data-id="${esc(key)}" data-unsaved="${unsaved}"`);
+ showModal(`Cancelar venda #${String(s.number).padStart(4,'0')}`,`<p><strong>${esc(s.customer_name||'Cliente a definir')} · ${money(s.total_cents)}</strong></p>${unsaved?'<label class="check-field cancellation-ack"><input type="checkbox" name="acknowledge_unsaved_changes" required>Entendi que minhas alterações não salvas não serão aplicadas. Vou cancelar a venda já registrada.</label>':''}<p>A venda ficará como <strong>Cancelada</strong> e sairá dos totais. O estoque e os valores recebidos serão estornados no sistema. Esta ação não pode ser desfeita.</p><input type="hidden" name="request_id" value="${paymentRequestId()}"><input type="hidden" name="edit_token" value="${esc(s.edit_token)}">${field('Motivo do cancelamento','<textarea name="reason" required maxlength="500" rows="3" placeholder="Ex.: cliente desistiu da compra"></textarea>',true)}<label class="check-field cancellation-ack"><input type="checkbox" name="acknowledge_stock_return" required>Confirmo o cancelamento e a devolução dos produtos ao estoque, quando aplicável.</label>`,'cancel-sale-form',`data-id="${esc(key)}" data-unsaved="${unsaved}"`);
  const submit=modal.querySelector('[type="submit"]');submit.textContent='Confirmar cancelamento';submit.className='danger';modal.querySelector('form [data-action="close-modal"]').textContent='Voltar';
-}
-async function openRefundModal(key) {
- if(!can('sales.refund'))throw Error('Você não tem permissão para registrar devoluções.');
- const s=await api(`/sales/${key}`),cancellation=s.cancellation;
- if(s.status!=='cancelled'||!cancellation)throw Error('Somente uma venda cancelada pode registrar devolução.');
- if(cancellation.refund_pending_cents<=0)throw Error('Esta devolução já foi concluída.');
- const today=saoPauloToday(),cancelledOn=saoPauloToday(new Date(cancellation.created_at));
- showModal('Registrar devolução realizada',`<div class="refund-modal-balance"><span>Falta devolver ao cliente</span><strong>${money(cancellation.refund_pending_cents)}</strong></div><p class="refund-modal-guidance">Use esta tela <strong>depois</strong> que o dinheiro tiver sido devolvido ao cliente. O sistema apenas registra a baixa; ele não faz Pix nem estorno no cartão.</p><input type="hidden" name="request_id" value="${paymentRequestId()}"><input type="hidden" name="refund_token" value="${esc(cancellation.refund_token)}"><div class="fields">${field('Valor que já foi devolvido',`<span class="money-input"><span>R$</span><input name="amount" value="${esc(value(cancellation.refund_pending_cents))}" inputmode="decimal" autocomplete="off" required></span>`,true)}${field('Meio usado',`<select name="method">${refundMethodOptions('pix',esc)}</select>`)}${field('Data da devolução',input('refunded_date',today,`type="date" required min="${cancelledOn}" max="${today}"`))}${field('Observação (opcional)','<textarea name="notes" maxlength="1000" rows="2" placeholder="Ex.: devolvido para a mesma conta Pix"></textarea>',true)}</div><label class="check-field cancellation-ack"><input type="checkbox" name="acknowledge_refund_completed" required>Confirmo que este valor já foi realmente devolvido ao cliente fora do sistema.</label>`,'refund-form',`data-id="${esc(key)}"`);
- const submit=modal.querySelector('[type="submit"]');submit.textContent='Registrar como devolvido';
- modal.querySelector('form [data-action="close-modal"]').textContent='Voltar';
-}
-async function openRefundCorrectionModal(key,refundKey) {
- if(!can('sales.refund_correct'))throw Error('Você não tem permissão para corrigir baixas de devolução.');
- const s=await api(`/sales/${key}`),cancellation=s.cancellation;
- if(s.status!=='cancelled'||!cancellation)throw Error('Somente uma venda cancelada pode corrigir uma devolução.');
- const refund=cancellation.refunds?.find(item=>item.id===refundKey);
- if(!refund)throw Error('Baixa de devolução não encontrada.');
- if(refund.reversed)throw Error('Esta baixa já foi corrigida.');
- const today=saoPauloToday();
- showModal('Corrigir baixa de devolução',`<div class="refund-modal-balance"><span>Valor que voltará a ficar pendente</span><strong>${money(refund.amount_cents)}</strong></div><p class="refund-modal-guidance">Use somente quando a baixa tiver sido <strong>lançada por engano</strong>. A correção mantém o histórico e faz o valor voltar a aparecer como pendente. Ela não cobra o cliente, não recupera um Pix e não desfaz estorno de cartão.</p><input type="hidden" name="request_id" value="${paymentRequestId()}"><input type="hidden" name="refund_token" value="${esc(cancellation.refund_token)}"><div class="fields">${field('Data da correção',input('reversed_date',today,`type="date" required min="${esc(refund.refunded_date)}" max="${today}"`))}${field('Motivo da correção','<textarea name="reason" maxlength="500" rows="3" required placeholder="Ex.: baixa registrada no pedido errado"></textarea>',true)}</div><label class="check-field cancellation-ack"><input type="checkbox" name="acknowledge_refund_reversal" required>Confirmo que estou corrigindo somente o registro. O valor voltará a ficar pendente neste pedido.</label>`,'refund-reversal-form',`data-id="${esc(key)}" data-refund-id="${esc(refundKey)}"`);
- const submit=modal.querySelector('[type="submit"]');submit.textContent='Confirmar correção';submit.className='danger';
- modal.querySelector('form [data-action="close-modal"]').textContent='Voltar';
 }
 function showModal(title, contents, formId='generic-form', formData='') {
  modal.classList.toggle('machine-modal',formId==='card-machine-form');
- modal.classList.toggle('compact-dialog',['discard-form','pending-sales-form','pending-conflict-form','share-create-form','share-form','refund-form','refund-reversal-form'].includes(formId));
+ modal.classList.toggle('compact-dialog',['discard-form','pending-sales-form','pending-conflict-form','share-create-form','share-form'].includes(formId));
  modal.innerHTML=`<div class="modal-header"><h2 id="modal-title">${title}</h2><button class="subtle small" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></div><form id="${formId}" ${formData} class="modal-content">${contents}<p class="error" id="modal-error" role="alert"></p><div class="actions"><button type="button" data-action="close-modal">Cancelar</button><button class="primary" type="submit">Salvar</button></div></form>`;
  applyColorStyles(modal);
  enhanceSelects(modal);
@@ -700,12 +695,13 @@ function requestModalClose() {
  modal.close();
 }
 function openPaymentModal(key,values={}) {
- const method=values.method??'pix', requestId=values.request_id??paymentRequestId(), amount=values.amount??'', accounts=activePixAccounts(), pixAccountId=defaultPixAccountId(values.pix_account_id);
+ const method=values.method??preferredPaymentMethod(), requestId=values.request_id??paymentRequestId(), amount=values.amount??'', accounts=activePixAccounts(), pixAccountId=defaultPixAccountId(values.pix_account_id);
+ if(method==='card'&&!values.mode)values.mode='credit';
  let conditional='';
  if(method==='pix')conditional=field('Conta Pix',accounts.length?`<select name="pix_account_id" required>${pixAccountOptions(pixAccountId)}</select>`:`<select disabled><option>Cadastre uma conta Pix em Configurações</option></select><small class="field-guidance">Nenhuma conta Pix ativa. Cadastre uma em Configurações antes de salvar este pagamento.</small>`,true);
  if(method==='card')conditional=cardPaymentFields(values);
  if(method==='cash')conditional='<div class="alert good full-field">Dinheiro não precisa de conta ou taxa.</div>';
- showModal('Registrar pagamento',`<input type="hidden" name="request_id" value="${esc(requestId)}"><div class="fields">${field('Forma',`<select name="method" data-modal-payment-method>${Object.entries(methods).map(([code,label])=>option(code,label,method)).join('')}</select>`)}${field('Valor bruto pago',input('amount',amount,'required inputmode="decimal"'))}${conditional}</div><p class="footer-note">Este registro informa um pagamento já recebido; não efetua cobranças. Correções podem ser feitas em Editar venda, conforme as permissões do usuário. Não realiza estorno bancário.</p>`,'payment-form',`data-id="${key}"`);
+ showModal('Registrar pagamento',`<input type="hidden" name="request_id" value="${esc(requestId)}"><div class="fields">${field('Forma',`<select name="method" data-modal-payment-method>${Object.entries(methods).map(([code,label])=>option(code,label,method)).join('')}</select>`)}${field('Valor bruto pago',input('amount',amount,'required inputmode="decimal"'))}${conditional}</div><p class="footer-note">Este registro informa um pagamento já recebido. Correções podem ser feitas em Editar venda, conforme as permissões do usuário.</p>`,'payment-form',`data-id="${key}"`);
  if(method==='pix'&&!accounts.length)modal.querySelector('[type="submit"]').disabled=true;
 }
 function customerFormFields(customer={}) {
@@ -804,11 +800,20 @@ modal.addEventListener('close',()=>{productCreateContext=null;machineDraft=null;
 document.addEventListener('input', e=>{
  const el=e.target;
  if(calculatorUI.input(el))return;
+ if(el.form?.dataset.expenseListFilter!==undefined&&el.name==='search'){
+  expenseFilters.request(el.form,{delay:280,focusName:el.name});
+  return;
+ }
  if(el.closest?.('[data-catalog-search]')){updateCatalogResults();return;}
  if(el.id==='unit-query'){filterUnitRows(modal,el.value);return;}
  if(el.id==='product-unit-query'){filterUnitRows(document.querySelector('#page'),el.value,document.querySelector('#product-unit-status').value);return;}
  if(el.form?.id==='sale-units-form'){modal.querySelector('[data-unit-count]').textContent=`${modal.querySelectorAll('[name="unit_ids"]:checked').length} selecionado(s)`;return;}
  if(el.form?.id==='stock-search-form'){stockSearch=el.value;updateStockResults();return;}
+ if(el.form?.id==='filter-form'&&el.name==='q'){
+  el.form.dataset.filterFocus=el.name;
+  salesFilters.request(el.form,{automatic:true,delay:300});
+  return;
+ }
  const kind=numericInputKind(el);
  if(kind){if(!numericTextAllowed(kind,el.value)){el.value=el.dataset.numericPrevious??'';toast('O campo aceita somente números.');return;}if(kind==='cpf'){const digits=el.value.replace(/\D/g,'').slice(0,11);el.value=digits.replace(/^(\d{3})(\d)/,'$1.$2').replace(/^(\d{3})\.(\d{3})(\d)/,'$1.$2.$3').replace(/(\d{3})\.(\d{3})\.(\d{3})(\d)/,'$1.$2.$3-$4');}el.dataset.numericPrevious=el.value;}
  financeUI.input(el);stockUI.input(el);
@@ -846,7 +851,18 @@ document.addEventListener('change',async e=>{
  const el=e.target;
  if(el.id==='product-unit-status'){filterUnitRows(document.querySelector('#page'),document.querySelector('#product-unit-query').value,el.value);return;}
  if(calculatorUI.change(el)){const control=document.querySelector(`#calculator-form [name="${el.name}"]`);(control?.closest('.select-control')?.querySelector('button')??control)?.focus();return;}
- if(el.matches('[data-expense-period]')){const group=el.form.querySelector('.period-month'),custom=el.value==='month',input=group.querySelector('input');group.hidden=!custom;input.disabled=!custom;input.setCustomValidity('');if(custom)input.focus();return;}
+ if(el.matches('[data-expense-period]')){
+  const group=el.form.querySelector('.period-month'),custom=el.value==='month',input=group.querySelector('input');
+  group.hidden=!custom;input.disabled=!custom;input.setCustomValidity('');
+  if(custom){input.focus();return;}
+  expenseFilters.request(el.form,{focusName:el.name});return;
+ }
+ if(el.form?.dataset.expensePeriodForm!==undefined&&el.name==='month'){
+  expenseFilters.request(el.form,{focusName:el.name});return;
+ }
+ if(el.form?.dataset.expenseListFilter!==undefined&&el.matches('select')){
+  expenseFilters.request(el.form,{focusName:el.name});return;
+ }
  if(stockUI.change(el)){enhanceSelects(modal);return;}
  const classification=financeUI.change(el);if(classification){enhanceSelects(modal);const next=classification.scope.querySelector(`[name="${classification.name}"]`);(next?.closest('.select-control')?.querySelector('button')??next)?.focus();return;}
  if(el.dataset.datePreset!==undefined){
@@ -865,6 +881,15 @@ document.addEventListener('change',async e=>{
  if(el.dataset.machineEditBrand!==undefined){machineDraft.selected=Number(el.value);renderMachineModal();modal.querySelector('[data-machine-edit-brand]').focus();return;}
  if(el.dataset.modalCard!==undefined){const form=el.form,values=Object.fromEntries(new FormData(form)),key=el.dataset.modalCard;changeCardSelection(values,key,el.value);openPaymentModal(form.dataset.id,values);modal.querySelector(`[data-modal-card="${key}"]`)?.focus();return;}
  if(el.dataset.modalPaymentMethod!==undefined){const form=el.form,values=Object.fromEntries(new FormData(form));openPaymentModal(form.dataset.id,{...values,method:el.value});modal.querySelector('[name="method"]')?.focus();return;}
+ if(el.dataset.editorSaleStatus!==undefined){
+  if(view!=='editor'||!working)return;
+ const review=el.value===reviewStatusValue;
+ working.review_manual=review;
+ if(!review)working.operational_status_id=el.value||'';
+  workingDirty=true;updateSummary();
+  if(!review&&working.review_automatic)toast('Andamento escolhido; a venda continua A conferir até resolver os avisos.');
+  return;
+ }
  if(el.dataset.saleWholesale!==undefined){
   const previous=el.dataset.previous==='true',key=el.dataset.saleWholesale;
   if(busy){el.checked=previous;return;}
@@ -886,8 +911,10 @@ document.addEventListener('change',async e=>{
  }
  if(el.dataset.saleStatus!==undefined){
   if(busy){el.value=el.dataset.previous??'';return;}
-  let saved=false;busy=true;el.disabled=true;
-  try{await api(`/sales/${el.dataset.saleStatus}/status`,{operational_status_id:el.value||null},'PUT');saved=true;el.dataset.previous=el.value;await load();render();toast('Status da venda atualizado.');}
+  const key=el.dataset.saleStatus,sale=view==='detail'&&detailSale?.id===key?detailSale:state.sales.find(item=>item.id===key);
+  if(!sale){el.value=el.dataset.previous??'';toast('Atualize a lista de vendas.');return;}
+  const review=el.value===reviewStatusValue,remainsAutomatic=!review&&!!sale.review?.automatic;let saved=false;busy=true;el.disabled=true;
+  try{await api(`/sales/${key}/status`,{operational_status_id:review?null:el.value||null,review_manual:review,edit_token:sale.edit_token},'PUT');saved=true;el.dataset.previous=el.value;await load();render();toast(review?'Venda marcada para conferir.':remainsAutomatic?'Andamento salvo; continua A conferir até resolver os avisos.':'Status da venda atualizado.');}
   catch(err){
    el.value=el.dataset.previous??'';
    if(saved&&state){salesMutationRefreshPending=true;salesFilters.clear();render();toast('Status salvo. Atualize os dados para conferir os totais.');}
@@ -922,13 +949,21 @@ function confirmAction(message,cancelLabel='Voltar e conferir') {
  });
 }
 document.addEventListener('click',async e=>{
+ const rankingButton=e.target.closest('[data-ranking-tab],[data-ranking-metric]');
+ if(rankingButton&&!busy){
+  if(rankingButton.dataset.rankingTab)rankingTab=rankingButton.dataset.rankingTab;
+  if(rankingButton.dataset.rankingMetric)rankingMetric=rankingButton.dataset.rankingMetric;
+  renderRanking();
+  const selector=rankingButton.dataset.rankingTab?`#ranking-tab-${rankingTab}`:`[data-ranking-metric="${rankingMetric}"]`;
+  document.querySelector(selector)?.focus({preventScroll:true});return;
+ }
  const button=e.target.closest('[data-action],[data-view]');if(!button||busy)return;
  if(mutationRefreshPending&&!['refresh-after-save','logout','close-modal'].includes(button.dataset.action)){toast('Registro salvo. Atualize os dados para continuar.');return;}
  if(cancellationRefreshPending&&button.dataset.action!=='refresh-after-cancellation'){toast('Atualize os dados para continuar. O cancelamento já foi registrado.');return;}
  if(salesMutationRefreshPending&&button.dataset.action!=='refresh-sales'&&button.dataset.action!=='logout'&&button.dataset.action!=='close-modal'){toast('A alteração já foi salva. Atualize os dados para continuar.');return;}
  if(button.dataset.view){
   rememberWorking();
-  if(salesRefreshPending&&['dashboard','sales'].includes(button.dataset.view)){
+   if(salesRefreshPending&&['dashboard','sales','ranking'].includes(button.dataset.view)){
    busy=true;
    try{adoptState(await api('/state?'+new URLSearchParams(filter)));salesRefreshPending=false;}
    catch(err){toast(err.message);return;}
@@ -957,22 +992,20 @@ document.addEventListener('click',async e=>{
  else if(a==='toggle-registry'){registryMenuOpen=!registryMenuOpen;if(registryMenuOpen)expenseMenuOpen=false;document.querySelector('.nav').innerHTML=navigation();document.querySelector('[data-action="toggle-registry"]').focus();}
  else if(a==='toggle-expenses'){expenseMenuOpen=!expenseMenuOpen;if(expenseMenuOpen)registryMenuOpen=false;document.querySelector('.nav').innerHTML=navigation();document.querySelector('[data-action="toggle-expenses"]').focus();}
  else if(a.startsWith('stock-')){busy=true;const result=await stockUI.action(a,key,button);if(result?.view){view=result.view;render();}}
- else if(a.startsWith('fin-')){busy=true;const result=await financeUI.action(a,key,button);if(result?.view){view=result.view;expenseMenuOpen=true;render();}}
- else if(a==='logout'){if(workingDirty||pendingWorks.size){askToDiscard('logout');return;}salesFilters.clear();await api('/logout',{});salesMutationRefreshPending=false;salesRefreshPending=false;state=null;working=null;workingDirty=false;detailSale=null;detailId=null;productHistory=null;filter=todayFilter();render();}
+ else if(a.startsWith('fin-')){if(a==='fin-list-clear')expenseFilters.clear();busy=true;const result=await financeUI.action(a,key,button);if(result?.view){view=result.view;expenseMenuOpen=true;render();}}
+ else if(a==='logout'){if(workingDirty||pendingWorks.size){askToDiscard('logout');return;}salesFilters.clear();expenseFilters.clear();await api('/logout',{});salesMutationRefreshPending=false;salesRefreshPending=false;state=null;working=null;workingDirty=false;detailSale=null;detailId=null;productHistory=null;filter=todayFilter();render();}
  else if(a==='new-sale'){if(!can('sales.create'))return;startSale();}
  else if(a==='edit-customer'){busy=true;await openCustomerEditor(key);}
  else if(a==='open-product'){busy=true;button.disabled=true;productDetailReturnView=button.dataset.origin==='stock'?'stock':'products';productHistory=await api(`/products/${key}/history`);view='product-detail';render();if(productHistory.product.serial_tracked)filterUnitRows(document.querySelector('#page'),'','available');}
  else if(a==='product-back'){productHistory=null;view=productDetailReturnView;render();}
  else if(a==='open-sale'){busy=true;detailSale=await api(`/sales/${key}`);detailId=key;view='detail';render();}
  else if(a==='cancel-sale'){busy=true;await openCancelSale(key);}
- else if(a==='record-refund'){busy=true;await openRefundModal(key);}
- else if(a==='reverse-refund'){busy=true;await openRefundCorrectionModal(key,button.dataset.refundId);}
  else if(a==='edit-sale'){busy=true;rememberWorking();await load();const latest=await api(`/sales/${key}`);const cached=pendingWorks.get('sale:'+key);working=cached?await restoreWorking(cached,latest):makeWorking(latest);workingDirty=!!cached;view='editor';const index=working.items.findIndex(i=>i.id===button.dataset.itemId);if(index>=0)working.step='item-'+index;render();if(index>=0)document.querySelector(`[data-item="${index}"][data-key="description"]`)?.focus();}
  else if(a==='change-saved-card'){const p=working.payments[n];if(!paymentEditable(p))return;p.keep_card_rate=false;p.rate_id='';p.machine_id='';p.brand_id='';p.mode='';workingDirty=true;renderEditor();}
  else if(a==='add-item'){working.items.push({product_id:null,description:'',quantity:1,price:'0,00',cost:'',manual_cost_known:true});workingDirty=true;renderEditor();}
  else if(a==='item-details'){const item=working.items[n];item.details_open=!(item.details_open??!!(item.serial_number||item.details));renderEditor();document.querySelector(`[data-action="item-details"][data-index="${n}"]`)?.focus();}
  else if(a==='remove-item'){working.items.splice(n,1);workingDirty=true;renderEditor();}
- else if(a==='add-payment'){working.payments.push({request_id:paymentRequestId(),method:'pix',amount:'0,00',rate_id:'',pix_account_id:defaultPixAccountId(''),paid_date:brazilianDate(saoPauloToday())});workingDirty=true;renderEditor();}
+ else if(a==='add-payment'){const method=preferredPaymentMethod();working.payments.push({request_id:paymentRequestId(),method,mode:method==='card'?'credit':'',amount:'0,00',rate_id:'',pix_account_id:defaultPixAccountId(''),paid_date:brazilianDate(saoPauloToday())});workingDirty=true;renderEditor();}
  else if(a==='remove-payment'){if(!paymentEditable(working.payments[n]))return;working.payments.splice(n,1);workingDirty=true;renderEditor();}
  else if(a==='add-expense'){working.expenses.push({description:'',amount:'0,00'});workingDirty=true;renderEditor();}
  else if(a==='remove-expense'){working.expenses.splice(n,1);workingDirty=true;renderEditor();}
@@ -994,6 +1027,7 @@ document.addEventListener('submit',async e=>{
  if(e.target.id==='stock-search-form'){e.preventDefault();updateStockResults();return;}
  if(e.target.matches('[data-catalog-search]')){e.preventDefault();updateCatalogResults();return;}
  if(e.target.id==='filter-form'){e.preventDefault();salesFilters.request(e.target);return;}
+ if(e.target.dataset.expensePeriodForm!==undefined||e.target.dataset.expenseListFilter!==undefined){e.preventDefault();expenseFilters.request(e.target,{focusName:e.target.dataset.expenseListFilter!==undefined?'search':'period'});return;}
  e.preventDefault();if(busy)return;const form=e.target,d=Object.fromEntries(new FormData(form)),button=form.querySelector('[type="submit"]');busy=true;if(button)button.disabled=true;
  try{
  normalizeDateFields(form,d);
@@ -1001,16 +1035,6 @@ document.addEventListener('submit',async e=>{
  else if(form.id.startsWith('stock-')){const result=await stockUI.submit(form,d);await finishMutation(result.message);}
  else if(form.id.startsWith('fin-')){const result=await financeUI.submit(form,d);if(!result.local){if(result.view){view=result.view;if(view.startsWith('expenses'))expenseMenuOpen=true;}await finishMutation(result.message);}}
  else if(form.id==='cancel-sale-form'){await submitSaleCancellation(form,d);}
- else if(form.id==='refund-form'){
-  const result=await api(`/sales/${form.dataset.id}/refunds`,{request_id:d.request_id,refund_token:d.refund_token,amount_cents:cents(d.amount),method:d.method,refunded_date:d.refunded_date,notes:d.notes,acknowledge_refund_completed:new FormData(form).has('acknowledge_refund_completed')});
-  detailId=form.dataset.id;detailSale=null;view='detail';
-  await finishMutation(result.refund_pending_cents===0?'Devolução concluída. O histórico foi preservado.':`Devolução registrada. Ainda falta devolver ${money(result.refund_pending_cents)}.`);
- }
- else if(form.id==='refund-reversal-form'){
-  const result=await api(`/sales/${form.dataset.id}/refunds/${form.dataset.refundId}/reversal`,{request_id:d.request_id,refund_token:d.refund_token,reason:d.reason,reversed_date:d.reversed_date,acknowledge_refund_reversal:new FormData(form).has('acknowledge_refund_reversal')});
-  detailId=form.dataset.id;detailSale=null;view='detail';
-  await finishMutation(`Baixa corrigida. ${money(result.amount_cents)} voltou a aparecer como valor a devolver.`);
- }
  else if(form.id==='filter-form'){await applySalesFilters(d);}
  else if(form.id==='sale-units-form'){const item=working.items[Number(form.dataset.index)],ids=new FormData(form).getAll('unit_ids');if(!ids.length)throw Error('Selecione pelo menos um aparelho.');item.unit_ids=ids;item.tracks_serials=true;item.quantity=ids.length;item.serial_number=pickerUnits.filter(u=>ids.includes(u.id)).map(u=>u.serial_number).join('\n');workingDirty=true;modal.close();renderEditor();}
  else if(form.id==='customer-form'){await saveCustomerForm(d,form);}
@@ -1038,7 +1062,7 @@ window.addEventListener('beforeunload',e=>{if(workingDirty||pendingWorks.size||m
 window.matchMedia('(max-width: 700px)').addEventListener('change',event=>{if(view==='editor'&&working)renderEditor();const form=modal.querySelector('#stock-entry-form');if(event.matches&&form&&!form.classList.contains('mobile-flow'))stockMobileSteps(form);});
 const salesFilters=createSalesFilterController({
  apply:applySalesFilters,isBusy:()=>busy,setBusy:value=>{busy=value;},today:saoPauloToday,
- isCurrent:form=>!!state&&!salesMutationRefreshPending&&!cancellationRefreshPending&&form.dataset.filterOwner===state.user.id&&['dashboard','sales'].includes(view),
+ isCurrent:form=>!!state&&!salesMutationRefreshPending&&!cancellationRefreshPending&&form.dataset.filterOwner===state.user.id&&['dashboard','sales','ranking'].includes(view),
  onError:error=>{const target=document.querySelector('#filter-form .error');if(target)target.textContent=error.message;else toast(error.message);},
  onSuccess:form=>{
   salesRefreshPending=false;
@@ -1051,6 +1075,23 @@ const salesFilters=createSalesFilterController({
 const stockUI=createStockUI({api,getState:()=>state,can,page,heading,empty,field,input,option,esc,money,value,cents,date,showModal,modal,icon});
 const calculatorUI=createCalculatorUI({getState:()=>state,can,page,heading,empty,field,input,option,esc,money,cents,toast,showInfo:html=>{showModal('Detalhes do cálculo',html,'calculator-info-form');modal.querySelector('[type="submit"]').remove();}});
 const financeUI=createFinanceUI({api,getState:()=>state,can,page,heading,metric,empty,field,input,option,esc,money,value,cents,dateLabel:filterDateLabel,today:saoPauloToday,showModal,modal,icon});
+const expenseFilters=createExpenseFilterController({
+ apply:(form,data)=>financeUI.submit({id:form.id},data),isBusy:()=>busy,setBusy:value=>{busy=value;},
+ normalize:(form,data)=>{if(form.dataset.expensePeriodForm!==undefined)normalizeDateFields(form,data);},
+ isCurrent:form=>{
+  if(!state||form.dataset.expenseFilterOwner!==state.user.id)return false;
+  const section=form.dataset.expensePeriodForm??form.dataset.expenseListFilter;
+  return view===(section==='dashboard'?'expenses':`expenses-${section}`);
+ },
+ onError:error=>toast(error.message),
+ onSuccess:(_form,_data,focusName)=>{
+  if(!focusName)return;
+  const current=document.querySelector(`[data-expense-period-form] [name="${focusName}"], [data-expense-list-filter] [name="${focusName}"]`);
+  const target=current?.closest('.select-control')?.querySelector('button')??current;
+  target?.focus({preventScroll:true});
+  if(current?.setSelectionRange&&focusName==='search')current.setSelectionRange(current.value.length,current.value.length);
+ }
+});
 const pageHistory=createPageHistory({history:window.history,onNavigate:async route=>{busy=true;try{await navigateHistory(route);}finally{busy=false;}},
  isBlocked:()=>busy||modal.open,onBlocked:()=>{if(modal.open&&!busy)requestModalClose();},
  onError:error=>toast(error.message)});

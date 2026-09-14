@@ -19,7 +19,7 @@ try {
  console.log(JSON.stringify({original_tables:tables.length,changed_tables:changed,integrity,foreign_key_errors:foreignKeys.length}));
  if(changed.length||integrity!=='ok'||foreignKeys.length)throw Error('A conferência encontrou diferenças; não foi feita nenhuma restauração.');
 } finally {before.close();current.close();}
-const paths=['app.mjs','finance-ui.mjs','date-control.mjs','brand.css','receipt-view.mjs','stock-ui.mjs','sales-view.mjs'];
+const paths=['app.mjs','finance-ui.mjs','expense-filter-controller.mjs','ranking-ui.mjs','date-control.mjs','brand.css','receipt-view.mjs','stock-ui.mjs','sales-view.mjs'];
 for(const path of paths){
  const response=await fetch('http://127.0.0.1:3000/'+path),served=Buffer.from(await response.arrayBuffer());
  if(!response.ok||sha(served)!==sha(readFileSync(resolve(root,'public',path))))throw Error('Ativo local não corresponde: '+path);

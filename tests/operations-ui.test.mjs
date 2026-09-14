@@ -31,7 +31,7 @@ test('interface de entrada: custo restrito nunca vira zero ao editar; exclusão 
  const form={id:'stock-entry-form',dataset:{id:'entry',version:'2',requestId:'same-request'}};
  await x.ui.submit(form,{quantity:'2',cost:'',supplier_id:'',reason:'Conferir'});let sent=x.calls.at(-1);assert.equal(sent.data.unit_cost_cents,undefined);assert.equal(sent.data.supplier_id,null);assert.equal(sent.data.version,2);assert.equal(sent.method,'PUT');
  await x.ui.submit(form,{quantity:'2',cost:'0,00',supplier_id:'',reason:'Gratuito'});assert.equal(x.calls.at(-1).data.unit_cost_cents,0);
- await x.ui.action('stock-entry-void','entry');assert.doesNotMatch(x.dialog,/R\$|NaN/);assert.match(x.dialog,/name="acknowledge" required/);assert.match(x.dialog,/não faz estorno bancário/);
+ await x.ui.action('stock-entry-void','entry');assert.doesNotMatch(x.dialog,/R\$|NaN/);assert.doesNotMatch(x.dialog,/estorno bancário/i);assert.match(x.dialog,/name="acknowledge" required/);assert.match(x.dialog,/histórico é preservado[\s\S]*não exclui o produto nem suas vendas/i);
 });
 
 test('interface de entrada: cadastro atômico e reenvio usam a mesma solicitação',async()=>{
@@ -47,11 +47,19 @@ test('relatório de estoque: tela, download e impressão; custos seguem permiss�
  const css=readFileSync(new URL('../public/brand.css',import.meta.url),'utf8');assert.match(css,/\.entry-product-fields\[hidden\]\s*\{\s*display:\s*none !important/);assert.match(css,/body:has\(\.stock-report-page\) \.sidebar/);assert.match(css,/\.report-sheet thead \{ display: table-header-group/);assert.match(css,/--panel-inset/);
 });
 
-test('vendas: blocos separados, recebido e lucro por item, totais, edição e texto escapado',()=>{
- const item={description:'<Produto>',quantity:2,unit_price_cents:1000,total_cents:2000,received_cents:2000,pending_cents:0,profit_cents:800,serial_number:'<SN>'},sale={id:'sale',number:1,status:'confirmed',customer_name:'<Cliente>',seller_name:'Teste',items:[item],total_cents:2000,profit_cents:800,reconciliation:{gross_cents:2000,pending_cents:0,excess_cents:0}};
+test('vendas: card inteiro abre o pedido e reúne Venda, Custo e Lucro na mesma linha',()=>{
+ const item={description:'<Produto>',quantity:2,unit_price_cents:1000,total_cents:2000,received_cents:2000,pending_cents:0,profit_cents:800,serial_number:'<SN>'},sale={id:'sale',number:1,status:'confirmed',customer_name:'<Cliente>',seller_name:'Teste',items:[item],total_cents:2000,known_cost_cents:1200,profit_cents:800,reconciliation:{gross_cents:2000,pending_cents:0,excess_cents:0,fee_cents:0}};
  const helpers={esc,money,date:()=>'',can:()=>true,statusBadge:()=>'',paymentBadge:()=>'',operationalStatusControl:()=>'',empty:()=>''};
- const html=salesRecords([sale,{...sale,id:'s2',number:2,status:'draft',items:[]}],helpers);assert.equal((html.match(/<article class="sale-record"/g)||[]).length,2);assert.match(html,/Recebido/);assert.match(html,/Lucro do item/);assert.match(html,/Lucro da venda/);assert.match(html,/proporcionalmente/);assert.match(html,/data-action="edit-sale"/);assert.match(html,/&lt;Cliente&gt;/);assert.doesNotMatch(html,/<Produto>|<SN>|Recebido¹|item²/);
- const hidden=salesRecords([sale],{...helpers,can:()=>false});assert.doesNotMatch(hidden,/Lucro do item|Lucro da venda|R\$ 8.00|edit-sale/);assert.match(hidden,/Recebido/);
+ const html=salesRecords([sale,{...sale,id:'s2',number:2,status:'draft',items:[]}],helpers);
+ assert.equal((html.match(/<article class="sale-record sale-record-compact"/g)||[]).length,2);
+ assert.equal((html.match(/class="sale-record-open-button" data-action="open-sale"/g)||[]).length,2);
+ assert.equal((html.match(/class="sale-record-overview"/g)||[]).length,2);
+ assert.match(html,/class="sale-record-compact-values values-3"[\s\S]*?<small>Venda<\/small>[\s\S]*?<small>Custo total<\/small>[\s\S]*?<small>Lucro<\/small>/);
+ assert.match(html,/&lt;Cliente&gt;/);
+ assert.doesNotMatch(html,/<table|data-action="(?:edit-sale|cancel-sale)"|Lucro do item|proporcionalmente|<Produto>|<SN>|Recebido¹|item²/);
+ const hidden=salesRecords([sale],{...helpers,can:()=>false});
+ assert.match(hidden,/class="sale-record-compact-values values-1"[\s\S]*?<small>Venda<\/small>/);
+ assert.doesNotMatch(hidden,/Custo total|<small>Lucro<\/small>|R\$ 8.00|edit-sale/);
 });
 
 test('editor confirmado: preserva custo omitido e pagamentos; salva status na mesma operação',async()=>{

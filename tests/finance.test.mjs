@@ -46,8 +46,8 @@ test('financeiro: datas reais, meses e repetição mensal preservam o dia âncor
   assert.equal(shiftMonth('2025-12',1),'2026-01');
 });
 
-test('financeiro: parcelas mensais são persistentes, idempotentes e separadas da classificação',t=>{
-  const x=setup(t),payload={request_id:randomUUID(),description:'Serviço',kind:'variable',amount_cents:2500,reference_month:'2024-01',due_date:'2024-01-31',repeat_count:3,reminder_days:7};
+test('financeiro: parcelas fixas mensais são persistentes, idempotentes e separadas da classificação',t=>{
+  const x=setup(t),payload={request_id:randomUUID(),description:'Serviço',kind:'fixed',amount_cents:2500,reference_month:'2024-01',due_date:'2024-01-31',repeat_count:3,reminder_days:7};
   const a=x.f.saveExpense(x.actor,payload),b=x.f.saveExpense(x.actor,payload);
   assert.equal(a.expenses.length,3);assert.equal(b.replayed,true);assert.deepEqual(a.expenses.map(e=>e.id),b.expenses.map(e=>e.id));
   assert.deepEqual(a.expenses.map(e=>e.due_date),['2024-01-31','2024-02-29','2024-03-31']);
@@ -91,7 +91,7 @@ test('financeiro: editar protege versão, histórico pago, valores, datas e canc
 });
 
 test('financeiro: fórmula desconta custos e despesas uma única vez e divide reserva primeiro',t=>{
-  const x=setup(t);sale(x);expense(x);expense(x,{kind:'variable',description:'Energia',amount_cents:5000});partners(x);
+  const x=setup(t),category=x.f.saveCategory(x.actor,{name:'Compras'}),subcategory=x.f.saveSubcategory(x.actor,{category_id:category.id,name:'Energia'});sale(x);expense(x);expense(x,{kind:'variable',description:'Energia',amount_cents:5000,category_id:category.id,subcategory_id:subcategory.id});partners(x);
   const r=x.f.report(x.actor,month).result;
   assert.equal(r.sales_profit_cents,54500);assert.equal(r.expenses_cents,15000);assert.equal(r.result_cents,39500);
   assert.equal(r.reserve_cents,7900);assert.equal(r.distribution_cents,31600);
@@ -194,7 +194,7 @@ test('financeiro HTTP: rotas autenticadas, CSRF, persistência, edição, fecham
   const store=new Store(),origin='http://127.0.0.1:3999',{server}=application({store,origin});await new Promise(r=>server.listen(0,'127.0.0.1',r));
   t.after(async()=>{await new Promise(r=>server.close(r));store.close();});const base=`http://127.0.0.1:${server.address().port}`;
   assert.equal((await fetch(base+'/api/finance')).status,401);
-  for(const path of ['/finance-ui.mjs','/finance.css'])assert.equal((await fetch(base+path)).status,200);
+  for(const path of ['/finance-ui.mjs','/expense-filter-controller.mjs','/finance.css'])assert.equal((await fetch(base+path)).status,200);
   const registered=await fetch(base+'/api/register',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({name:'A',store_name:'Finance HTTP',email:'http-finance@example.test',password:'senha-ficticia-de-teste'})});
   const headers={Origin:origin,'Content-Type':'application/json',Cookie:registered.headers.get('set-cookie').split(';')[0]};
   const payload={request_id:randomUUID(),description:'Conta HTTP',kind:'fixed',amount_cents:2500,reference_month:month,due_date:`${month}-10`};

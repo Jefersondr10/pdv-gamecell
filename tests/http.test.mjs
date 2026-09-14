@@ -67,7 +67,7 @@ test('HTTP: cadastra, edita, atribui e filtra status operacional', async t => {
  assert.equal(sale.status,'draft');assert.equal(sale.operational_status_id,status.id);assert.equal(sale.operational_status.name,'Em separação');
 
  r=await fetch(base+`/api/state?operational_status_id=${status.id}`,{headers:{Cookie:cookie}});
- assert.equal(r.status,200);let state=await r.json();assert.equal(state.sales.length,1);assert.equal(state.sale_statuses.length,1);
+ assert.equal(r.status,200);let state=await r.json();assert.equal(state.sales.length,1);assert.equal(state.sale_statuses.length,2);
  r=await fetch(base+`/api/sale-statuses/${status.id}`,{method:'PUT',headers,body:JSON.stringify({name:'Pronto',color:'green'})});
  assert.equal(r.status,200);assert.equal((await r.json()).name,'Pronto');
  r=await fetch(base+`/api/sales/${saleId}`,{headers:{Cookie:cookie}});sale=await r.json();assert.equal(sale.operational_status.name,'Pronto');

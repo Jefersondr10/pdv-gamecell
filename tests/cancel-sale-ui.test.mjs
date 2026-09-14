@@ -16,7 +16,7 @@ test('cancelar: botão no cabeçalho da edição, só para registros salvos e au
 
 function context({dirty=true,postError,loadError,unsavedAck=true}={}){
  const draft={id:'test-sale',is_wholesale:true,public_notes:'Edição ainda não salva'};
- const calls=[],checks=new Set(['acknowledge_stock_return','acknowledge_refund_pending']);if(unsavedAck)checks.add('acknowledge_unsaved_changes');
+ const calls=[],checks=new Set(['acknowledge_stock_return']);if(unsavedAck)checks.add('acknowledge_unsaved_changes');
  const ctx={pendingWorks:new Map([['sale:test-sale',draft]]),working:draft,workingDirty:dirty,view:'editor',detailSale:{id:'antigo'},detailId:null,state:{},calls,
   FormData:class{has(key){return checks.has(key);}},
   api:async(path,data)=>{calls.push(['post',path,data]);if(postError)throw Error(postError);},
@@ -32,7 +32,7 @@ function context({dirty=true,postError,loadError,unsavedAck=true}={}){
 test('cancelar: erro no servidor preserva edição, motivo e confirmações',async()=>{
  const {ctx,draft,calls,run}=context({postError:'Venda mudou'});await assert.rejects(run(),/Venda mudou/);
  assert.equal(ctx.working,draft);assert.equal(ctx.workingDirty,true);assert.equal(ctx.view,'editor');assert.equal(calls.length,1);
- assert.equal(calls[0][2].acknowledge_stock_return,true);assert.equal(calls[0][2].acknowledge_refund_pending,true);assert.equal(calls[0][2].reason,'Teste fictício');
+ assert.equal(calls[0][2].acknowledge_stock_return,true);assert.equal(Object.hasOwn(calls[0][2],'acknowledge_refund_pending'),false);assert.equal(calls[0][2].reason,'Teste fictício');
  assert.equal(calls[0][2].public_notes,undefined);
 });
 test('cancelar: alterações não salvas exigem ciência sem gravar a edição',async()=>{

@@ -27,6 +27,41 @@ const stateOf = (row,today) => row.voided_at ? 'cancelled' : row.paid_date ? 'pa
 const validScope=value=>{check(['both','fixed','variable'].includes(value),'Selecione Fixas, Variáveis ou Ambas.');return value;};
 const scopeAccepts=(scope,kind)=>scope==='both'||scope===kind;
 const expenseTotal=values=>{const total=values.reduce((sum,v)=>sum+BigInt(v),0n);check(total<=BigInt(Number.MAX_SAFE_INTEGER),'Total de despesas fora do limite seguro.');return Number(total);};
+const variableDateKeys=['expense_date','date','paid_date','due_date'];
+// An omitted date means "today at the first successful request". Keep that intent stable in the
+// idempotency hash so a network retry after midnight returns the original row instead of conflicting.
+const variableHashRow=(row,input)=>variableDateKeys.some(key=>input[key]!==undefined)?row:{...row,reference_month:'<today>',due_date:'<today>',paid_date:'<today>'};
+// Keep this serializer byte-for-byte compatible with the variable-expense contract that preceded
+// expense_date. It is only used to recognize an already persisted request; new writes must still
+// pass cleanVariableExpense and its required category/subcategory validation.
+const cleanLegacyVariableExpense=data=>{
+  check(data&&typeof data==='object'&&!Array.isArray(data),'Despesa inválida.');
+  check(data.kind==='variable','Tipo de despesa inválido.');
+  check(data.category_id===undefined||data.category_id===null||data.category_id===''||typeof data.category_id==='string','Categoria inválida.');
+  check(data.subcategory_id===undefined||data.subcategory_id===null||data.subcategory_id===''||typeof data.subcategory_id==='string','Subcategoria inválida.');
+  return {description:text(data.description,'Descrição',200),kind:'variable',amount_cents:integer(data.amount_cents,'Valor',1),
+    reference_month:validMonth(data.reference_month),due_date:validDate(data.due_date),
+    category:text(data.category,'Categoria',100,false),payee:text(data.payee,'Favorecido',150,false),
+    notes:text(data.notes,'Observações',2000,false),reminder_days:integer(data.reminder_days??3,'Antecedência',0,30),
+    ...(data.category_id?{category_id:uuid(data.category_id)}:{}),...(data.subcategory_id?{subcategory_id:uuid(data.subcategory_id)}:{})};
+};
+const legacyVariableBatchHash=data=>{
+  check(Array.isArray(data.expenses)&&data.expenses.length>=1&&data.expenses.length<=50,'Informe de 1 a 50 despesas variáveis por vez.');
+  const rows=data.expenses.map((row,index)=>{
+    try {
+      check(row&&typeof row==='object'&&!Array.isArray(row),'Despesa inválida.');
+      check(row.kind===undefined||row.kind==='variable','O cadastro em lote aceita somente despesas variáveis.');
+      check(row.repeat_count===undefined||row.repeat_count===1,'Cada linha deve representar uma única conta, sem repetição mensal.');
+      return cleanLegacyVariableExpense({...row,kind:'variable'});
+    } catch(error) { check(false,`Linha ${index+1}: ${error.message}`,error.status??400); }
+  });
+  sumMoney(rows.map(row=>row.amount_cents));
+  return hash({operation:'variable_batch',rows});
+};
+const legacyVariableExpenseHash=data=>{
+  const clean=cleanLegacyVariableExpense(data),count=integer(data.repeat_count??1,'Meses',1,60);
+  return hash({clean,count});
+};
 
 export function distributeProfit(result, reserveBasisPoints, partners) {
   const positive = Math.max(0,result), retained = feeCents(positive,reserveBasisPoints), pool = positive - retained;
@@ -45,7 +80,7 @@ export class Finance {
   }
   expense(actor,key) {
     const row = this.store.get('SELECT e.*,l.category_id,sl.subcategory_id,sl.name AS subcategory FROM operating_expenses e LEFT JOIN expense_category_links l ON l.tenant_id=e.tenant_id AND l.expense_id=e.id LEFT JOIN expense_subcategory_links sl ON sl.tenant_id=e.tenant_id AND sl.expense_id=e.id WHERE e.tenant_id=? AND e.id=?',actor.tenant_id,key);
-    check(row,'Despesa não encontrada.',404); return row;
+    check(row,'Despesa não encontrada.',404); return {...row,...(row.kind==='variable'?{expense_date:row.paid_date??row.due_date}:{})};
   }
   categories(actor) {
     this.access(actor);
@@ -149,6 +184,7 @@ export class Finance {
   cleanExpense(data) {
     check(data && typeof data==='object' && !Array.isArray(data),'Despesa inválida.');
     check(['fixed','variable'].includes(data.kind),'Tipo de despesa inválido.');
+    if(data.kind==='variable')return this.cleanVariableExpense(data);
     check(data.category_id===undefined||data.category_id===null||data.category_id===''||typeof data.category_id==='string','Categoria inválida.');
     check(data.subcategory_id===undefined||data.subcategory_id===null||data.subcategory_id===''||typeof data.subcategory_id==='string','Subcategoria inválida.');
     return { description:text(data.description,'Descrição',200), kind:data.kind, amount_cents:integer(data.amount_cents,'Valor',1),
@@ -157,53 +193,118 @@ export class Finance {
       notes:text(data.notes,'Observações',2000,false), reminder_days:integer(data.reminder_days??3,'Antecedência',0,30),
       ...(data.category_id?{category_id:uuid(data.category_id)}:{}), ...(data.subcategory_id?{subcategory_id:uuid(data.subcategory_id)}:{}) };
   }
+  cleanVariableExpense(data,old=null) {
+    check(data && typeof data==='object' && !Array.isArray(data),'Despesa inválida.');
+    const suppliedDates=variableDateKeys.filter(key=>data[key]!==undefined).map(key=>validDate(data[key]));
+    check(new Set(suppliedDates).size<=1,'Informe somente uma data para a despesa variável.');
+    const expenseDate=suppliedDates[0]??validDate(old?.paid_date??old?.due_date??businessDate());
+    check(expenseDate<=businessDate(),'A data da despesa não pode estar no futuro.');
+    const categoryValue=data.category_id===undefined?old?.category_id:data.category_id;
+    const subcategoryValue=data.subcategory_id===undefined?old?.subcategory_id:data.subcategory_id;
+    check(typeof categoryValue==='string'&&categoryValue.trim(),'Selecione uma categoria.');
+    check(typeof subcategoryValue==='string'&&subcategoryValue.trim(),'Selecione uma subcategoria.');
+    return {description:text(data.description??old?.description??'','Descrição',200,false),kind:'variable',amount_cents:integer(data.amount_cents??old?.amount_cents,'Valor',1),
+      reference_month:expenseDate.slice(0,7),due_date:expenseDate,paid_date:expenseDate,category:'',payee:text(data.payee??old?.payee??'','Favorecido',150,false),
+      notes:text(data.notes??old?.notes??'','Observações',2000,false),reminder_days:0,category_id:uuid(categoryValue),subcategory_id:uuid(subcategoryValue)};
+  }
+  replayExpenseBatch(actor,requestId) {
+    return {expenses:this.store.all('SELECT id FROM operating_expenses WHERE tenant_id=? AND batch_id=? ORDER BY ordinal',actor.tenant_id,requestId).map(e=>this.expense(actor,e.id)),replayed:true};
+  }
   saveVariableBatch(actor,data) {
-    this.access(actor,true);const requestId=uuid(data.request_id);
-    check(Array.isArray(data.expenses)&&data.expenses.length>=1&&data.expenses.length<=50,'Informe de 1 a 50 despesas variáveis por vez.');
-    const rows=data.expenses.map((row,index)=>{
+    this.access(actor,true);check(data&&typeof data==='object'&&!Array.isArray(data),'Despesa inválida.');const requestId=uuid(data.request_id);
+    return this.store.transaction(()=>{
+      const previous=this.store.get('SELECT * FROM expense_batches WHERE tenant_id=? AND id=?',actor.tenant_id,requestId);
+      if(previous) {
+        let legacyPayloadHash=null;
+        try { legacyPayloadHash=legacyVariableBatchHash(data); } catch {}
+        if(previous.payload_hash===legacyPayloadHash)return this.replayExpenseBatch(actor,requestId);
+      }
+      let rows;
       try {
-        check(row&&typeof row==='object'&&!Array.isArray(row),'Despesa inválida.');
-        check(row.kind===undefined||row.kind==='variable','O cadastro em lote aceita somente despesas variáveis.');
-        check(row.repeat_count===undefined||row.repeat_count===1,'Cada linha deve representar uma única conta, sem repetição mensal.');
-        return this.cleanExpense({...row,kind:'variable'});
-      } catch(error) { check(false,`Linha ${index+1}: ${error.message}`,error.status??400); }
+        check(Array.isArray(data.expenses)&&data.expenses.length>=1&&data.expenses.length<=50,'Informe de 1 a 50 despesas variáveis por vez.');
+        rows=data.expenses.map((row,index)=>{
+          try {
+            check(row&&typeof row==='object'&&!Array.isArray(row),'Despesa inválida.');
+            check(row.kind===undefined||row.kind==='variable','O cadastro em lote aceita somente despesas variáveis.');
+            check(row.repeat_count===undefined||row.repeat_count===1,'Cada linha deve representar uma única conta, sem repetição mensal.');
+            return this.cleanVariableExpense(row);
+          } catch(error) { check(false,`Linha ${index+1}: ${error.message}`,error.status??400); }
+        });
+        sumMoney(rows.map(row=>row.amount_cents));
+      } catch(error) {
+        if(previous)check(false,'Solicitação já utilizada com outros valores.',409);
+        throw error;
+      }
+      const hashRows=rows.map((row,index)=>variableHashRow(row,data.expenses[index]));
+      return this.insertExpenseBatch(actor,requestId,hash({operation:'variable_batch',rows:hashRows}),rows);
     });
-    sumMoney(rows.map(row=>row.amount_cents));
-    return this.store.transaction(()=>this.insertExpenseBatch(actor,requestId,hash({operation:'variable_batch',rows}),rows));
   }
   // Called only inside the caller's transaction; either every row and audit is saved, or none is.
   insertExpenseBatch(actor,requestId,payloadHash,rows) {
     const previous=this.store.get('SELECT * FROM expense_batches WHERE tenant_id=? AND id=?',actor.tenant_id,requestId);
-    if(previous) {check(previous.payload_hash===payloadHash,'Solicitação já utilizada com outros valores.',409);return {expenses:this.store.all('SELECT id FROM operating_expenses WHERE tenant_id=? AND batch_id=? ORDER BY ordinal',actor.tenant_id,requestId).map(e=>this.expense(actor,e.id)),replayed:true};}
+    if(previous) {check(previous.payload_hash===payloadHash,'Solicitação já utilizada com outros valores.',409);return this.replayExpenseBatch(actor,requestId);}
     rows=rows.map((row,index)=>{try{return this.resolveExpenseCategory(actor,row);}catch(error){check(false,`Linha ${index+1}: ${error.message}`,error.status??400);}});
     rows.forEach((row,index)=>{
       try {this.openMonth(actor,row.reference_month);}catch(error){check(false,`Linha ${index+1}: ${error.message}`,error.status??400);}
     });
     const at=now();this.store.run('INSERT INTO expense_batches VALUES(?,?,?,?)',requestId,actor.tenant_id,payloadHash,at);
     const expenses=rows.map((row,i)=>{
-      const id=randomUUID();this.store.run(`INSERT INTO operating_expenses(id,tenant_id,batch_id,ordinal,description,kind,amount_cents,reference_month,due_date,category,payee,notes,reminder_days,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        id,actor.tenant_id,requestId,i,...['description','kind','amount_cents','reference_month','due_date','category','payee','notes','reminder_days'].map(k=>row[k]),at,at);
+      const id=randomUUID();this.store.run(`INSERT INTO operating_expenses(id,tenant_id,batch_id,ordinal,description,kind,amount_cents,reference_month,due_date,category,payee,notes,reminder_days,paid_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        id,actor.tenant_id,requestId,i,...['description','kind','amount_cents','reference_month','due_date','category','payee','notes','reminder_days'].map(k=>row[k]),row.paid_date??null,at,at);
       this.linkExpenseCategory(actor,id,row.category_id,row);
       this.store.audit(actor,'operating_expense',id,'created',row);return this.expense(actor,id);
     });
     return {expenses,replayed:false};
   }
   saveExpense(actor,data,key=null) {
-    this.access(actor,true); let clean=this.cleanExpense(data);const count=key?1:integer(data.repeat_count??1,'Meses',1,60), requestId=key?null:uuid(data.request_id), payloadHash=hash({clean,count});
+    this.access(actor,true);check(data&&typeof data==='object'&&!Array.isArray(data),'Despesa inválida.');
     return this.store.transaction(()=>{
       if(key) {
         const old=this.expense(actor,key); check(data.version===old.version,'Despesa alterada em outra tela. Atualize antes de salvar.',409);
-        check(!old.paid_date && !old.voided_at,'Estorne o pagamento antes de editar. Despesas canceladas não podem ser editadas.',409);
+        check(data.kind===undefined||data.kind===old.kind,'O tipo da despesa não pode ser alterado.');
+        check(!old.voided_at,'Despesas canceladas não podem ser editadas.',409);
+        check(old.kind==='variable'||!old.paid_date,'Estorne o pagamento antes de editar.',409);
+        let clean=old.kind==='variable'?this.cleanVariableExpense(data,old):this.cleanExpense({...data,kind:'fixed'});
         this.openMonth(actor,old.reference_month); this.openMonth(actor,clean.reference_month);
         if(data.category_id===undefined&&old.category_id)clean={...clean,category_id:old.category_id,category:old.category};
         if(data.subcategory_id===undefined&&old.subcategory_id&&clean.category_id===old.category_id)clean={...clean,subcategory_id:old.subcategory_id};
         clean=this.resolveExpenseCategory(actor,clean,old);
-        this.store.run(`UPDATE operating_expenses SET description=?,kind=?,amount_cents=?,reference_month=?,due_date=?,category=?,payee=?,notes=?,reminder_days=?,version=version+1,updated_at=? WHERE tenant_id=? AND id=?`,
-          ...['description','kind','amount_cents','reference_month','due_date','category','payee','notes','reminder_days'].map(k=>clean[k]),now(),actor.tenant_id,key);
+        this.store.run(`UPDATE operating_expenses SET description=?,kind=?,amount_cents=?,reference_month=?,due_date=?,category=?,payee=?,notes=?,reminder_days=?,paid_date=?,payment_note=?,version=version+1,updated_at=? WHERE tenant_id=? AND id=?`,
+          ...['description','kind','amount_cents','reference_month','due_date','category','payee','notes','reminder_days'].map(k=>clean[k]),clean.kind==='variable'?clean.paid_date:old.paid_date,clean.kind==='variable'?'':old.payment_note,now(),actor.tenant_id,key);
         this.linkExpenseCategory(actor,key,clean.category_id,clean);
         this.store.audit(actor,'operating_expense',key,'updated',{before:old,after:clean});
         return {expenses:[this.expense(actor,key)],replayed:false};
       }
+      const variable=data.expense_date!==undefined||data.date!==undefined||data.kind==='variable';
+      let requestId=null,previous=null;
+      if(variable) {
+        requestId=uuid(data.request_id);
+        previous=this.store.get('SELECT * FROM expense_batches WHERE tenant_id=? AND id=?',actor.tenant_id,requestId);
+      }
+      if(previous&&data.kind==='variable') {
+        let legacyPayloadHash=null;
+        try { legacyPayloadHash=legacyVariableExpenseHash(data); } catch {}
+        if(previous.payload_hash===legacyPayloadHash)return this.replayExpenseBatch(actor,requestId);
+      }
+      let clean,count;
+      try {
+        check(!variable||data.kind===undefined||data.kind==='variable','Tipo de despesa incompatível com a data informada.');
+        clean=variable?this.cleanVariableExpense(data):this.cleanExpense(data);
+        check(clean.kind!=='variable'||data.repeat_count===undefined||data.repeat_count===1,'Despesas variáveis não usam repetição mensal. Cadastre cada lançamento separadamente.');
+        count=integer(data.repeat_count??1,'Meses',1,60);
+      } catch(error) {
+        if(!previous&&!variable) {
+          try {
+            requestId=uuid(data.request_id);
+            previous=this.store.get('SELECT * FROM expense_batches WHERE tenant_id=? AND id=?',actor.tenant_id,requestId);
+          } catch {}
+        }
+        const existingKind=previous&&this.store.get('SELECT kind FROM operating_expenses WHERE tenant_id=? AND batch_id=? ORDER BY ordinal LIMIT 1',actor.tenant_id,requestId)?.kind;
+        if(existingKind==='variable')check(false,'Solicitação já utilizada com outros valores.',409);
+        throw error;
+      }
+      requestId??=uuid(data.request_id);
+      const payloadHash=hash({clean:clean.kind==='variable'?variableHashRow(clean,data):clean,count});
       const rows=Array.from({length:count},(_,i)=>({...clean,reference_month:shiftMonth(clean.reference_month,i),due_date:monthlyDue(clean.due_date,i)}));
       return this.insertExpenseBatch(actor,requestId,payloadHash,rows);
     });
@@ -212,6 +313,7 @@ export class Finance {
     this.access(actor,true); check(['pay','reopen','cancel'].includes(data.action),'Ação inválida.');
     return this.store.transaction(()=>{
       const old=this.expense(actor,key);
+      check(old.kind!=='variable'||!['pay','reopen'].includes(data.action),'Despesas variáveis já representam pagamentos realizados e não usam esta ação.',409);
       // Repeated acknowledgements return the same row, never another financial movement.
       if(data.action==='pay' && old.paid_date) {
         check(data.paid_date===old.paid_date && (data.notes??'').trim()===old.payment_note,'Pagamento já registrado com outros dados.',409);return old;
@@ -223,11 +325,12 @@ export class Finance {
         const date=validDate(data.paid_date);check(date<=businessDate(),'O pagamento não pode estar no futuro.');
         this.store.run('UPDATE operating_expenses SET paid_date=?,payment_note=?,version=version+1,updated_at=? WHERE tenant_id=? AND id=?',date,note,now(),actor.tenant_id,key);
       } else if(data.action==='reopen') {
+        check(old.kind!=='variable','Despesas variáveis são lançadas como já pagas e não podem ficar a pagar.',409);
         check(old.paid_date,'Esta despesa não foi paga.',409);
         this.store.run("UPDATE operating_expenses SET paid_date=NULL,payment_note='',version=version+1,updated_at=? WHERE tenant_id=? AND id=?",now(),actor.tenant_id,key);
       } else {
-        check(!old.paid_date,'Estorne o pagamento antes de cancelar.',409);this.openMonth(actor,old.reference_month);
-        this.store.run('UPDATE operating_expenses SET voided_at=?,version=version+1,updated_at=? WHERE tenant_id=? AND id=?',now(),now(),actor.tenant_id,key);
+        check(old.kind==='variable'||!old.paid_date,'Estorne o pagamento antes de cancelar.',409);this.openMonth(actor,old.reference_month);
+        this.store.run("UPDATE operating_expenses SET paid_date=NULL,payment_note='',voided_at=?,version=version+1,updated_at=? WHERE tenant_id=? AND id=?",now(),now(),actor.tenant_id,key);
       }
       this.store.audit(actor,'operating_expense',key,data.action,{before:old,note,paid_date:data.paid_date??null});return this.expense(actor,key);
     });
@@ -235,7 +338,7 @@ export class Finance {
   reminders(actor,today=businessDate()) {
     this.access(actor);validDate(today);
     const limit=new Date(`${today}T12:00:00Z`);limit.setUTCDate(limit.getUTCDate()+30);
-    const rows=this.store.all(`SELECT * FROM operating_expenses WHERE tenant_id=? AND paid_date IS NULL AND voided_at IS NULL AND due_date<=? ORDER BY due_date,description`,actor.tenant_id,limit.toISOString().slice(0,10))
+    const rows=this.store.all(`SELECT * FROM operating_expenses WHERE tenant_id=? AND kind='fixed' AND paid_date IS NULL AND voided_at IS NULL AND due_date<=? ORDER BY due_date,description`,actor.tenant_id,limit.toISOString().slice(0,10))
       .filter(e=>dayDistance(today,e.due_date)<=e.reminder_days).map(e=>({...e,state:stateOf(e,today),days_until_due:dayDistance(today,e.due_date)}));
     return {today,count:rows.length,overdue_count:rows.filter(e=>e.state==='overdue').length,total_cents:expenseTotal(rows.map(e=>e.amount_cents)),items:rows};
   }
@@ -243,7 +346,7 @@ export class Finance {
     this.access(actor);if(month!=='all')validMonth(month);const today=businessDate();
     const rows=this.store.all(`SELECT e.*,l.category_id,sl.subcategory_id,sl.name AS subcategory,EXISTS(SELECT 1 FROM finance_closures c WHERE c.tenant_id=e.tenant_id AND c.reference_month=e.reference_month) AS month_closed
       FROM operating_expenses e LEFT JOIN expense_category_links l ON l.tenant_id=e.tenant_id AND l.expense_id=e.id LEFT JOIN expense_subcategory_links sl ON sl.tenant_id=e.tenant_id AND sl.expense_id=e.id WHERE e.tenant_id=? ${month==='all'?'':'AND e.reference_month=?'} ORDER BY e.due_date,e.description,e.id`,...month==='all'?[actor.tenant_id]:[actor.tenant_id,month])
-      .map(e=>({...e,month_closed:!!e.month_closed,state:stateOf(e,today)})),valid=rows.filter(e=>!e.voided_at);
+      .map(e=>({...e,...(e.kind==='variable'?{expense_date:e.paid_date??e.due_date}:{}),month_closed:!!e.month_closed,state:stateOf(e,today)})),valid=rows.filter(e=>!e.voided_at);
     const total=predicate=>expenseTotal(valid.filter(predicate).map(e=>e.amount_cents));
     return {month,rows,closed:!!this.store.get('SELECT id FROM finance_closures WHERE tenant_id=? AND reference_month=?',actor.tenant_id,month),
       summary:{total_cents:total(()=>true),fixed_cents:total(e=>e.kind==='fixed'),variable_cents:total(e=>e.kind==='variable'),paid_cents:total(e=>!!e.paid_date),open_cents:total(e=>!e.paid_date),overdue_cents:total(e=>e.state==='overdue')},reminders:this.reminders(actor),categories:this.categories(actor),subcategories:this.subcategories(actor)};

@@ -142,16 +142,19 @@ test('HTTP atacado: salvar, marcar e editar usam o servidor e exigem sessão/ori
 });
 
 const esc=value=>String(value??'').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
-test('interface atacado: checkbox visível no editor e no cabeçalho, sem esconder no mobile',()=>{
+test('interface atacado: checkbox compacto acompanha a data e permanece acessível na lista',()=>{
  assert.match(wholesaleEditor(true),/type="checkbox" data-bind="is_wholesale" checked/);
  assert.doesNotMatch(wholesaleEditor(false),/checked/);assert.match(wholesaleEditor(false),/Venda de atacado/);
  const record={id:'venda',number:1,status:'draft',is_wholesale:true,items:[],reconciliation:{gross_cents:0,pending_cents:0}};
  assert.match(wholesaleControl(record,{esc,can:()=>true}),/aria-label="Venda de atacado — venda 1"/);
  assert.equal(wholesaleControl(record,{esc,can:()=>false}),wholesaleBadge(record));
- const html=salesRecords([record],{esc,money:String,date:String,can:()=>true,statusBadge:()=>'',paymentBadge:()=>'',operationalStatusControl:()=>'',empty:()=>''});
- assert.ok(html.indexOf('data-sale-wholesale')<html.indexOf('</header>'));
+ const html=salesRecords([record],{esc,money:String,date:String,time:()=>'',can:()=>true,statusBadge:()=>'',paymentBadge:()=>'',operationalStatusControl:()=>'',empty:()=>''});
+ assert.match(html,/sale-record-meta-line[^]*sale-timing[^]*data-sale-wholesale="venda"/);
+ assert.ok(html.indexOf('data-sale-wholesale="venda"')<html.indexOf('sale-record-compact-values'));
+ assert.doesNotMatch(html,/sale-record-compact-footer[^]*data-sale-wholesale/);
  const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
- assert.ok(app.indexOf('${wholesaleEditor(w.is_wholesale)}')<app.indexOf('${editorCustomerField(w)}',app.indexOf('function renderEditor')));
+ const editor=app.slice(app.indexOf('function renderEditor()'),app.indexOf('function updateSummary()'));
+ assert.match(editor,/sale-editor-core-fields[^]*\$\{editorSaleDate\(w\)\}\$\{wholesaleEditor\(w\.is_wholesale\)\}\$\{editorCustomerField\(w\)\}/);
  assert.match(app,/is_wholesale:w.is_wholesale,original_is_wholesale:w.original_is_wholesale/);
  assert.equal((app.match(/working\[el\.dataset\.bind\]=el\.type==='checkbox'\?el\.checked:el\.value/g)||[]).length,2);
  const mobile=readFileSync(new URL('../public/mobile-ui.mjs',import.meta.url),'utf8');assert.doesNotMatch(mobile,/sale-wholesale|data-sale-wholesale/);

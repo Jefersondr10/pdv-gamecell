@@ -39,6 +39,15 @@ test('filtro vendas: onchange consulta presets automaticamente e aguarda períod
  }
 });
 
+test('filtro vendas: texto consulta automaticamente sem botão Buscar',async()=>{
+ assert.doesNotMatch(app,/<button class="small" type="submit">Buscar<\/button>/);
+ const start=app.indexOf(" if(el.form?.id==='filter-form'&&el.name==='q')"),end=app.indexOf(' const kind=numericInputKind(el);',start);
+ assert.ok(start>=0&&end>start);const source=app.slice(start,end);let request;
+ const form={id:'filter-form',dataset:{}},el={name:'q',form};
+ await runInNewContext(`(async()=>{${source}})()`,{el,salesFilters:{request:(node,options)=>{request={node,options};}}});
+ assert.equal(request.node,form);assert.deepEqual(JSON.parse(JSON.stringify(request.options)),{automatic:true,delay:300});assert.equal(form.dataset.filterFocus,'q');
+});
+
 function context(api){
  const controls=[{disabled:false},{disabled:true}],state={marker:'anterior'},filter={from:'2026-09-08',to:'2026-09-08'};
  const ctx={document:{querySelectorAll:()=>controls},state,filter,salesFilterValues,saoPauloToday:()=> '2026-09-08',URLSearchParams,api,renders:0,render(){ctx.renders++;}};

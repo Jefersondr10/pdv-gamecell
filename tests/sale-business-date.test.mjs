@@ -152,7 +152,9 @@ test('interface da venda: data brasileira visível desde o início, hoje em São
  const w=ctx.makeWorking();assert.equal(w.business_date,'08/09/2026');
  assert.equal(ctx.makeWorking({business_date:'2026-08-15',items:[],payments:[]}).business_date,'15/08/2026');
  for(const status of ['draft','confirmed']){const html=ctx.editorSaleDate({...w,status});assert.match(html,/Data da venda/);assert.match(html,/required/);assert.match(html,/value="08\/09\/2026"/);assert.match(html,/data-max-date="2026-09-08"/);}
- assert.match(app,/\$\{editorSaleDate\(w\)\}\$\{editorCustomerField\(w\)\}/);
+ const editor=app.slice(app.indexOf('function renderEditor()'),app.indexOf('function updateSummary()'));
+ assert.match(editor,/sale-editor-core-fields/);
+ assert.match(editor,/\$\{editorSaleDate\(w\)\}\$\{wholesaleEditor\(w\.is_wholesale\)\}\$\{editorCustomerField\(w\)\}/);
  const timezone=app.slice(app.indexOf('function saoPauloToday('),app.indexOf('function todayFilter(')),zone={};runInNewContext(timezone,zone);
  assert.equal(zone.saoPauloToday(new Date('2026-09-09T01:30:00Z')),'2026-09-08');
 });

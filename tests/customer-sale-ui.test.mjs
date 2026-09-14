@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import {matchesSelectSearch} from '../public/select-control.mjs';
 const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
 const source=app.slice(app.indexOf('function editorCustomerField('),app.indexOf('function renderEditor('));
 function harness({allowed=true,fail=false,view='editor'}={}){
@@ -25,11 +26,26 @@ test('cliente na venda: erro não fecha o formulário nem altera a venda',async(
  const x=harness({fail:true});await assert.rejects(x.ctx.saveCustomerForm({name:'Teste'}),/Falha/);
  assert.equal(x.working.customer_id,'old');assert.equal(x.ctx.workingDirty,false);assert.equal(x.calls.length,1);assert.equal(x.ctx.state.customers.length,1);
 });
-test('cliente na venda: botão único junto ao campo e permissão preservada',()=>{
+test('busca de cliente encontra o nome digitado sem depender de acentos',()=>{
+ assert.equal(matchesSelectSearch('João da Silva','joao silva'),true);
+ assert.equal(matchesSelectSearch('Maria Oliveira','joao'),false);
+ const picker=readFileSync(new URL('../public/select-control.mjs',import.meta.url),'utf8');
+ assert.match(picker,/\['product','customer'\]\.includes\(select\.dataset\.search\)/);
+ assert.match(picker,/Buscar cliente pelo nome/);
+});
+test('cliente na venda: seleção pesquisável e novo cadastro continuam disponíveis na edição confirmada',()=>{
  const x=harness(),html=x.ctx.editorCustomerField(x.working);assert.equal((html.match(/data-action="modal-customer"/g)||[]).length,1);
- assert.match(html,/customer-field-heading/);assert.match(html,/type="button"/);assert.match(html,/for="sale-customer"/);
- const denied=harness({allowed:false});assert.doesNotMatch(denied.ctx.editorCustomerField(denied.working),/modal-customer/);
- const mobile=readFileSync(new URL('../public/mobile-ui.mjs',import.meta.url),'utf8');assert.match(mobile,/key==='people'\?customerSlot:root.querySelector\('\.flow-heading'\)/);assert.match(mobile,/onStep\(steps\[index\]\.key\)/);
+ assert.match(html,/customer-field-heading/);assert.match(html,/type="button"/);assert.match(html,/for="sale-customer"/);assert.match(html,/\+ Novo cliente/);
+ assert.match(html,/data-search="customer"/);assert.match(html,/aria-label="Buscar e alterar cliente"/);assert.doesNotMatch(html,/change-sale-customer/);
+ x.working.status='confirmed';const confirmed=x.ctx.editorCustomerField(x.working);
+ assert.match(confirmed,/data-action="modal-customer"/);assert.match(confirmed,/\+ Novo cliente/);assert.match(confirmed,/data-search="customer"/);
+ assert.doesNotMatch(confirmed,/change-sale-customer|>Alterar cliente</);
+ const denied=harness({allowed:false}),deniedHtml=denied.ctx.editorCustomerField(denied.working);
+ assert.doesNotMatch(deniedHtml,/modal-customer|Novo cliente/);assert.match(deniedHtml,/data-search="customer"/);
+ const mobile=readFileSync(new URL('../public/mobile-ui.mjs',import.meta.url),'utf8');
+ assert.match(mobile,/add\('people','Dados da venda',people\)/);assert.doesNotMatch(mobile,/customerSlot/);
+ assert.match(mobile,/onStep\(steps\[index\]\.key\)/);assert.match(mobile,/syncSaleMobileHeader\(root,key\)/);
+ assert.match(mobile,/cancelButton\.hidden=key!=='people'/);
 });
 test('cliente no cadastro comum: não muda rascunho fora da venda nem duplica o retorno',async()=>{
  const x=harness({view:'customers'});await x.ctx.saveCustomerForm({name:'Novo cliente'});await x.ctx.saveCustomerForm({name:'Novo cliente'});

@@ -24,15 +24,15 @@ export function refundManagement(sale,{esc,money,date,can}) {
   ? `<button type="button" class="primary small" data-action="record-refund" data-id="${esc(sale.id)}">Registrar devolução realizada</button>`
   : '';
  const guidance=pending>0
-  ? '<p class="refund-guidance">Depois de devolver o dinheiro ao cliente por fora do sistema, registre aqui para retirar a pendência. O sistema não faz Pix nem estorno automaticamente.</p>'
-  : '<p class="refund-guidance refund-complete-message">Todo o valor recebido neste pedido já foi marcado como devolvido.</p>';
+  ? '<p class="refund-guidance">Devolva ao cliente pelo meio combinado e depois registre aqui. O sistema não faz Pix nem estorno automaticamente.</p>'
+  : '<p class="refund-guidance refund-complete-message">Todo o valor recebido já foi marcado como devolvido.</p>';
  const records=history.length?`<details class="refund-history"><summary>Ver histórico · ${history.length}</summary><ul>${history.map(item=>{
   const reversed=item.reversed&&item.reversal,correction=reversed
    ? `<div class="refund-correction-note"><span class="badge">Baixa corrigida</span><small>${date(`${item.reversal.reversed_date}T12:00:00-03:00`)} · ${esc(item.reversal.reason)} · por ${esc(item.reversal.author??'Usuário')}</small></div>`
    : can('sales.refund_correct')?`<button type="button" class="small subtle refund-correct-button" data-action="reverse-refund" data-id="${esc(sale.id)}" data-refund-id="${esc(item.id)}">Corrigir registro</button>`:'';
   return `<li class="${reversed?'refund-history-reversed':''}"><div><strong>${esc(methodLabels[item.method]??'Outro meio')} · devolução informada em ${date(`${item.refunded_date}T12:00:00-03:00`)}</strong>${item.notes?`<small>${esc(item.notes)}</small>`:''}<small>Registrado em ${date(item.created_at)} por ${esc(item.author??'Usuário')}</small>${correction}</div><strong>${money(item.amount_cents)}</strong></li>`;
  }).join('')}</ul></details>`:'';
- return `<section class="panel refund-management" aria-label="Devolução ao cliente"><div class="panel-header"><div><h2>Devolução ao cliente</h2><p>Situação do valor recebido no pedido cancelado.</p></div><span class="badge ${state==='completed'?'good':'warn'}">${esc(refundLabels[state]??'Pendente')}</span></div><div class="panel-body"><div class="refund-summary"><div><span>Recebido</span><strong>${money(original)}</strong></div><div><span>Já devolvido</span><strong>${money(completed)}</strong></div><div class="${pending>0?'refund-due':'refund-done'}"><span>Falta devolver</span><strong>${money(pending)}</strong></div></div>${guidance}${action}${records}</div></section>`;
+ return `<section class="panel refund-management" aria-label="Devolução ao cliente"><div class="panel-header"><div><h2>Devolução ao cliente</h2></div><span class="badge ${state==='completed'?'good':'warn'}">${esc(refundLabels[state]??'Pendente')}</span></div><div class="panel-body"><div class="refund-summary"><div><span>Recebido</span><strong>${money(original)}</strong></div><div><span>Devolvido</span><strong>${money(completed)}</strong></div><div class="${pending>0?'refund-due':'refund-done'}"><span>A devolver</span><strong>${money(pending)}</strong></div></div>${guidance}${action}${records}</div></section>`;
 }
 
 export function refundMethodOptions(selected='pix',esc=value=>String(value??'')) {

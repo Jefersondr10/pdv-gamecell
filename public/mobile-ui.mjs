@@ -58,10 +58,14 @@ export function compactMobilePage(root,view){
   const more=disclosure(`Mais filtros${count?' · '+count+' ativo(s)':''}`,[extras],'compact-disclosure compact-filters');
   more.open=mobileFiltersExpanded??count>0;
   filters.append(more);
-  filters.querySelector('[type="submit"]').textContent='Buscar';
+  const submit=filters.querySelector('[type="submit"]');if(submit)submit.textContent='Buscar';
  }
  if(view==='sales')for(const record of root.querySelectorAll('.sale-record')){
-  const table=record.querySelector('.table-wrap'),count=[...table.querySelectorAll('tbody tr')].filter(row=>!row.querySelector('td[colspan]')).length;
+  // New compact sales are already the final mobile representation. The legacy
+  // table reflow below is kept only for any older record markup still rendered.
+  if(record.matches('.sale-record-compact'))continue;
+  const table=record.querySelector('.table-wrap');if(!table)continue;
+  const count=[...table.querySelectorAll('tbody tr')].filter(row=>!row.querySelector('td[colspan]')).length;
   const more=disclosure(`${count} ${count===1?'item':'itens'} · Ver produtos e valores`,[table],'compact-disclosure sale-items-disclosure');
   const key=record.querySelector('[data-action="open-sale"]')?.dataset.id;more.open=expandedSales.has(key);more.addEventListener('toggle',()=>{if(more.open)expandedSales.add(key);else expandedSales.delete(key);});
   record.querySelector('.sale-record-footer').before(more);
@@ -164,6 +168,10 @@ function setup(root,steps,state,validate=()=>{},onStep=()=>{}){
  show(index,false);
  return {show,check,steps,get index(){return index;}};
 }
+export function syncSaleMobileHeader(root,key){
+ const cancelButton=root?.ownerDocument?.querySelector('.sale-editor-heading-actions [data-action="cancel-sale"]');
+ if(cancelButton)cancelButton.hidden=key!=='people';
+}
 export function saleMobileSteps(root,w,{cents}){
  if(!root||!mobile())return;
  const panels=[...root.firstElementChild.children],summary=root.querySelector('.summary'),steps=[];
@@ -174,12 +182,10 @@ export function saleMobileSteps(root,w,{cents}){
  if(!items.length)add('products','Adicionar produto',products);
  for(const [n,item]of items.entries()){
   const basic=el('section','panel flow-item'),body=el('div','panel-body');basic.append(body);
-  body.append(item.querySelector('.item-row'));add('item-'+n,`Produto ${n+1} de ${items.length}`,basic);
+  // Keep the complete product together. Identification, optional details and
+  // entry-cost corrections belong to this product, not to a second step.
+  body.append(item);add('item-'+n,`Produto ${n+1} de ${items.length}`,basic);
   body.append(n===items.length-1?addItem:addItem.cloneNode(true));
-  const details=el('section','panel'),inner=el('div','panel-body');details.append(inner);
-  item.querySelector('.item-details-toggle')?.remove();const identification=item.querySelector('.item-details-fields');identification.hidden=false;inner.append(identification);
-  const costs=item.querySelector('.item-entry-costs');if(costs)inner.append(costs);
-  add('item-details-'+n,'IMEI / SN e detalhes',details,true);
  }
  const payments=panels.shift(),rows=[...payments.querySelectorAll('.editable-payment')],addPayment=payments.querySelector('[data-action="add-payment"]'),alert=payments.querySelector('#payment-alert');
  if(!rows.length)add('payments','Pagamentos',payments,true);
@@ -203,10 +209,9 @@ export function saleMobileSteps(root,w,{cents}){
  add('summary','Conferir e salvar',summary);
  // Remove emptied desktop containers; all original inputs remain in the steps above.
  root.firstElementChild.remove();
- const customerButton=people.querySelector('[data-action="modal-customer"]'),customerSlot=customerButton?.parentElement;
- const flow=setup(root,steps,w,step=>validateSaleStep(step.key,w,cents),key=>{
-  if(customerButton){(key==='people'?customerSlot:root.querySelector('.flow-heading')).append(customerButton);customerButton.classList.toggle('flow-customer',key!=='people');}
- });
+ // Customer actions stay beside the customer field on the first step. Moving
+ // them into the shared heading made them look like duplicated product actions.
+ const flow=setup(root,steps,w,step=>validateSaleStep(step.key,w,cents),key=>syncSaleMobileHeader(root,key));
  for(const button of summary.querySelectorAll('[data-action="save-draft"],[data-action="confirm-draft"],[data-action="save-correction"]'))button.addEventListener('click',event=>{
   const draft=button.dataset.action==='save-draft';
   for(const step of steps){if(step.key==='summary'||draft&&['people','products'].includes(step.key))continue;if(!flow.check(step)){event.stopPropagation();return;}}

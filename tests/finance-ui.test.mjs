@@ -21,17 +21,18 @@ test('subcategorias na interface: mudar tipo limpa classificação incompatível
  const target={outerHTML:''},values={kind:'variable',category_id:'cat',subcategory_id:'sub'};
  const form={id:'fin-expense-form',dataset:{id:''},querySelector:selector=>selector==='[data-expense-classification]'?target:{value:values[selector.match(/name="([^"]+)"/)[1]]}};
  const result=x.ui.change({name:'kind',form});
- assert.equal(result.scope,form);assert.equal(result.name,'kind');assert.doesNotMatch(target.outerHTML,/value="cat"|value="sub"/);assert.match(target.outerHTML,/name="subcategory_id" disabled/);assert.equal(x.ui.dirty(),true);
+ assert.equal(result.scope,form);assert.equal(result.name,'kind');assert.doesNotMatch(target.outerHTML,/value="cat"|value="sub"/);assert.match(target.outerHTML,/name="subcategory_id"[^>]+disabled/);assert.match(target.outerHTML,/Categoria \*|aria-required="true"/);assert.equal(x.ui.dirty(),true);
 });
 test('lote na interface: datas brasileiras e subcategorias são enviadas em ISO com IDs',async()=>{
  const x=harness();await x.ui.load();
- const data={description:'Compra',amount:'10.00',due_date:'07/09/2026',reference_month:'09/2026',category_id:'cat',subcategory_id:'sub',payee:'',notes:''};
- const row={querySelector:selector=>{const name=selector.match(/bulk_(\w+)/)[1];return {value:data[name],dataset:name==='due_date'?{dateKind:'date'}:name==='reference_month'?{dateKind:'month'}:{}};}};
- await x.ui.submit({id:'fin-bulk-form',dataset:{requestId:'id'},querySelectorAll:()=>[row]},{reminder_days:'3'});
- assert.equal(x.calls.at(-1).data.expenses[0].due_date,'2026-09-07');assert.equal(x.calls.at(-1).data.expenses[0].reference_month,'2026-09');assert.equal(x.calls.at(-1).data.expenses[0].subcategory_id,'sub');
+ const data={description:'Compra',amount:'10.00',expense_date:'07/09/2026',category_id:'cat',subcategory_id:'sub',payee:'',notes:''};
+ const row={querySelector:selector=>{const name=selector.match(/bulk_(\w+)/)[1];return {value:data[name],dataset:name==='expense_date'?{dateKind:'date'}:{}};}};
+ await x.ui.submit({id:'fin-bulk-form',dataset:{requestId:'id'},querySelectorAll:()=>[row]},{});
+ assert.equal(x.calls.at(-1).data.expenses[0].expense_date,'2026-09-07');assert.equal(x.calls.at(-1).data.expenses[0].subcategory_id,'sub');assert.equal(x.calls.at(-1).data.expenses[0].kind,'variable');
+ assert.equal('due_date' in x.calls.at(-1).data.expenses[0],false);assert.equal('reference_month' in x.calls.at(-1).data.expenses[0],false);assert.equal('reminder_days' in x.calls.at(-1).data.expenses[0],false);
 });
 
-function harness({apiOverride,permissions=['expenses.view','expenses.manage','finance.view','finance.manage'],closed=false,sourceChanged=false,rows=[],categories=[],subcategories=[],reminders={count:0,overdue_count:0,items:[]},modal={querySelector:()=>({textContent:''})}}={}) {
+function harness({apiOverride,permissions=['expenses.view','expenses.manage','finance.view','finance.manage'],closed=false,sourceChanged=false,rows=[],categories=[],subcategories=[],reminders={count:0,overdue_count:0,items:[]},modal={querySelector:()=>({textContent:''}),classList:{add(){},remove(){}}}}={}) {
   let html='',dialog='',calls=[];const session={store:{id:'store-test'},user:{id:'test',permissions:[...permissions]}};
   rows=rows.map(e=>({reference_month:'2026-09',...e}));
   const today=()=> '2026-09-06',money=n=>`R$ ${n/100}`,value=n=>(n/100).toFixed(2),esc=v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
@@ -64,12 +65,25 @@ test('interface financeira: telas com nomes claros, valores e fonte escapada, se
 
 test('período de despesas: seleção única, mês condicional e filtros independentes',async()=>{
  const x=harness({rows:[{id:'a',description:'Atual',kind:'fixed',amount_cents:1000,state:'open'},{id:'b',description:'Anterior',reference_month:'2026-08',kind:'fixed',amount_cents:2000,state:'open'}]});
- await x.ui.load();x.ui.expensesPage('fixed');assert.equal((x.html.match(/>Todos os meses</g)||[]).length,1);assert.doesNotMatch(x.html,/Competência \(opcional\)|Aplicar período/);
+ await x.ui.load();x.ui.expensesPage('fixed');assert.equal((x.html.match(/>Todos os meses</g)||[]).length,1);assert.doesNotMatch(x.html,/Competência \(opcional\)|Aplicar período|>Consultar<\/button>/);
+ assert.match(x.html,/data-expense-period-form="fixed" data-expense-filter-owner="test"/);
  await x.ui.submit({id:'fin-expense-list-period'},{period:'current'});assert.match(x.html,/Atual/);assert.doesNotMatch(x.html,/Anterior/);assert.match(x.html,/value="current" selected/);
  await x.ui.submit({id:'fin-expense-list-period'},{period:'month',month:'2026-08'});assert.match(x.html,/Anterior/);assert.doesNotMatch(x.html,/Atual/);assert.doesNotMatch(x.html,/class="period-month" hidden/);
  await assert.rejects(x.ui.submit({id:'fin-expense-list-period'},{period:'month',month:''}),/mês válido/);
  x.ui.expensesPage('variable');assert.match(x.html,/value="all" selected/);x.ui.closingPage();assert.match(x.html,/name="month" value="2026-09"/);
  await x.ui.submit({id:'fin-expenses-month'},{period:'all'});assert.match(x.html,/Total de despesas: R\$ 30/);await x.ui.submit({id:'fin-expenses-month'},{period:'current'});assert.match(x.html,/Total de despesas: R\$ 10/);
+});
+
+test('filtros de despesas: período, busca, categoria e situação são automáticos e só Limpar permanece',async()=>{
+ const x=harness();await x.ui.load();x.ui.expensesPage('fixed');
+ assert.match(x.html,/data-expense-list-filter="fixed" data-expense-filter-owner="test"/);
+ assert.match(x.html,/name="search"/);assert.match(x.html,/name="category"/);assert.match(x.html,/name="status"/);
+ assert.doesNotMatch(x.html,/>Filtrar<\/button>|>Consultar<\/button>/);assert.match(x.html,/>Limpar filtros<\/button>/);
+ x.ui.expensesPage('variable');assert.match(x.html,/data-expense-period-form="variable"/);assert.match(x.html,/data-expense-list-filter="variable"/);assert.doesNotMatch(x.html,/name="status"/);
+ x.ui.expensesPage('');assert.match(x.html,/data-expense-period-form="dashboard"/);assert.doesNotMatch(x.html,/>Consultar<\/button>/);
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ assert.match(app,/expenseFilters\.request\(el\.form,\{delay:280,focusName:el\.name\}\)/);
+ assert.match(app,/el\.form\?\.dataset\.expensePeriodForm/);assert.match(app,/el\.form\?\.dataset\.expenseListFilter/);
 });
 
 test('interface financeira: fechamento passado habilita conferência; fonte alterada não libera retirada',async()=>{
@@ -78,12 +92,50 @@ test('interface financeira: fechamento passado habilita conferência; fonte alte
 });
 
 test('interface financeira: listas de tipo/situação e cadastro usam o contrato esperado',async()=>{
-  const x=harness({rows:[{id:'e',description:'Energia',kind:'variable',amount_cents:1000,due_date:'2026-09-06',state:'open',notes:''}]});await x.ui.load();
+  const x=harness();await x.ui.load();
   x.ui.expensesPage('fixed');assert.match(x.html,/Nenhuma despesa nesta seleção/);
-  await x.ui.action('fin-new','');assert.match(x.dialog,/Mês de referência/);assert.match(x.dialog,/repeat_count/);assert.match(x.dialog,/data|Vencimento/);
-  const saved=await x.ui.submit({id:'fin-expense-form',dataset:{id:'e',version:'2',requestId:'req'}},{description:'Energia',amount:'25.50',reminder_days:'3',reference_month:'2026-09',due_date:'2026-09-10',kind:'variable'});
+  await x.ui.action('fin-new','');assert.match(x.dialog,/Mês de referência/);assert.match(x.dialog,/repeat_count/);assert.match(x.dialog,/data|Vencimento/);assert.doesNotMatch(x.dialog,/name="kind"/);
+  const saved=await x.ui.submit({id:'fin-expense-form',dataset:{id:'e',version:'2',requestId:'req',kind:'fixed'}},{description:'Energia',amount:'25.50',reminder_days:'3',reference_month:'2026-09',due_date:'2026-09-10',kind:'variable'});
   assert.match(saved.message,/salva/);
-  const sent=x.calls.at(-1);assert.equal(sent.path,'/expenses/e');assert.equal(sent.data.amount_cents,2550);assert.equal(sent.data.version,2);
+  const sent=x.calls.at(-1);assert.equal(sent.path,'/expenses/e');assert.equal(sent.data.amount_cents,2550);assert.equal(sent.data.version,2);assert.equal(sent.data.kind,'fixed');
+});
+
+test('despesa variável: formulário compacto mostra somente os campos pedidos e data de hoje',async()=>{
+ const categories=[{id:'cat',name:'Operação',active:true,applicability:'variable'}],subcategories=[{id:'sub',category_id:'cat',name:'Transporte',active:true,applicability:'variable'}];
+ const x=harness({categories,subcategories});await x.ui.load();x.ui.expensesPage('variable');await x.ui.action('fin-new');
+ for(const name of ['expense_date','description','amount','category_id','subcategory_id','payee','notes'])assert.match(x.dialog,new RegExp(`name="${name}"`),name);
+ for(const name of ['kind','reference_month','due_date','reminder_days','repeat_count','paid_date'])assert.doesNotMatch(x.dialog,new RegExp(`name="${name}"`),name);
+ assert.match(x.dialog,/name="expense_date" value="2026-09-06"[^>]+required[^>]+max="2026-09-06"/);
+ assert.match(x.dialog,/Categoria \*<select name="category_id" required/);assert.match(x.dialog,/Subcategoria \*<select name="subcategory_id" required/);
+ assert.match(x.dialog,/Descrição \(opcional\)/);assert.match(x.dialog,/Favorecido \(opcional\)/);assert.match(x.dialog,/Observação \(opcional\)/);
+ assert.doesNotMatch(x.dialog,/vencimento|lembrete|recorr|repetir/i);
+});
+
+test('despesa variável: envio mantém tipo implícito, opcionais vazios e nenhum campo de cobrança',async()=>{
+ const x=harness();await x.ui.load();
+ const result=await x.ui.submit({id:'fin-expense-form',dataset:{id:'',version:'0',requestId:'stable',kind:'variable'}},{expense_date:'2026-09-05',description:' ',amount:'47.90',category_id:'cat',subcategory_id:'sub',payee:' ',notes:' '});
+ assert.match(result.message,/variável/);const sent=x.calls.at(-1);assert.equal(sent.path,'/expenses');
+ assert.deepEqual(sent.data,{expense_date:'2026-09-05',description:'',amount_cents:4790,category_id:'cat',subcategory_id:'sub',payee:'',notes:'',kind:'variable',request_id:'stable',version:0});
+ await assert.rejects(x.ui.submit({id:'fin-expense-form',dataset:{id:'',version:'0',requestId:'second',kind:'variable'}},{expense_date:'2026-09-05',amount:'10',category_id:'cat',subcategory_id:''}),/categoria e subcategoria/);
+});
+
+test('despesa variável: lista compacta usa data, mantém edição e não oferece fluxo de conta a pagar',async()=>{
+ const rows=[
+  {id:'paid',description:'',kind:'variable',amount_cents:4590,expense_date:'2026-09-06',paid_date:'2026-09-06',category:'Operação',subcategory:'Transporte',payee:'Motorista',notes:'Entrega urgente',state:'paid',month_closed:false,version:1},
+  {id:'legacy',description:'',kind:'variable',amount_cents:1000,due_date:'2026-09-04',category:'',subcategory:'',payee:'',notes:'',state:'overdue',month_closed:false,version:1}
+ ];
+ const x=harness({rows});await x.ui.load();x.ui.expensesPage('variable');
+ assert.match(x.html,/Gastos que já foram pagos/);assert.match(x.html,/<strong>Transporte<\/strong>/);assert.match(x.html,/<dt>Data<\/dt><dd>2026-09-06<\/dd>/);assert.match(x.html,/Operação › Transporte/);assert.match(x.html,/Entrega urgente/);
+ assert.match(x.html,/Cadastro anterior · revisar/);assert.match(x.html,/data-action="fin-edit" data-id="paid"/);assert.match(x.html,/data-action="fin-cancel" data-id="paid"/);
+ assert.doesNotMatch(x.html,/data-action="fin-pay"|data-action="fin-reopen"|Vencimento|A pagar|Em atraso/);
+ await x.ui.action('fin-cancel','paid');assert.match(x.dialog,/<strong>Transporte<\/strong>/);assert.doesNotMatch(x.dialog,/<strong><\/strong>/);
+});
+
+test('despesa variável: estilos preservam duas colunas e modal compacto até 320 por 700',()=>{
+ const css=readFileSync(new URL('../public/finance.css',import.meta.url),'utf8');
+ assert.match(css,/dialog\.variable-expense-modal\{[^}]*height:fit-content[^}]*max-height:calc\(100dvh - 24px\)/);
+ assert.match(css,/@media\(max-width:700px\)[\s\S]*?\.variable-expense-fields\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+ assert.match(css,/@media\(max-width:360px\)[\s\S]*?dialog\.variable-expense-modal\{width:100%;max-width:100%;max-height:100dvh/);
 });
 
 test('interface financeira: mostra observação do pagamento sem executar conteúdo',async()=>{
@@ -108,21 +160,22 @@ test('interface despesas: submenus incluem todos os meses e filtros são indepen
 });
 
 test('interface despesas: novo cadastro respeita tipo do submenu e mês, sem afetar fechamento',async()=>{
- const x=harness();await x.ui.load();x.ui.expensesPage('variable');await x.ui.action('fin-new','');assert.match(x.dialog,/<option value="variable" selected>/);assert.doesNotMatch(x.dialog,/<option value="fixed" selected>/);
- await x.ui.submit({id:'fin-expense-list-period'},{month:'2026-08'});await x.ui.action('fin-new','');assert.match(x.dialog,/name="reference_month" value="2026-08"/);
- x.ui.expensesPage('fixed');await x.ui.action('fin-new','');assert.match(x.dialog,/<option value="fixed" selected>/);
+ const x=harness();await x.ui.load();x.ui.expensesPage('variable');await x.ui.action('fin-new','');assert.match(x.dialog,/name="expense_date" value="2026-09-06"/);assert.doesNotMatch(x.dialog,/name="kind"|name="reference_month"|name="due_date"|name="reminder_days"|name="repeat_count"/);
+ await x.ui.submit({id:'fin-expense-list-period'},{period:'month',month:'2026-08'});await x.ui.action('fin-new','');assert.match(x.dialog,/name="expense_date" value="2026-09-06"/);assert.doesNotMatch(x.dialog,/name="reference_month" value="2026-08"/);
+ x.ui.expensesPage('fixed');await x.ui.action('fin-new','');assert.match(x.dialog,/Nova despesa fixa|Mês de referência/);assert.doesNotMatch(x.dialog,/name="kind"|value="variable"/);
  x.ui.closingPage();assert.match(x.html,/name="month" value="2026-09"/);
 });
 
 test('interface despesas: lote envia linhas distintas e conserva UUID em reenvios',async()=>{
  const x=harness();await x.ui.load();
  const makeRow=values=>({querySelector:selector=>({value:values[selector.match(/bulk_(\w+)/)[1]]??''})});
- const values=[{description:'Limpeza',amount:'12.50',due_date:'2026-09-10',reference_month:'2026-09'},{description:'Conserto',amount:'35.75',due_date:'2026-10-05',reference_month:'2026-10',payee:'Oficina'}];
+ const values=[{description:'',amount:'12.50',expense_date:'2026-09-06',category_id:'cat',subcategory_id:'sub'},{description:'Conserto',amount:'35.75',expense_date:'2026-09-05',category_id:'cat',subcategory_id:'sub',payee:'Oficina'}];
  const form={id:'fin-bulk-form',dataset:{requestId:'stable-request'},querySelectorAll:()=>values.map(makeRow)};
- const result=await x.ui.submit(form,{reminder_days:'5'});assert.equal(result.view,'expenses-variable');
- const first=x.calls.at(-1);assert.equal(first.path,'/expenses/batch');assert.equal(first.data.request_id,'stable-request');assert.deepEqual(first.data.expenses.map(e=>e.amount_cents),[1250,3575]);assert.ok(first.data.expenses.every(e=>e.kind==='variable'&&e.reminder_days===5));assert.equal(first.data.expenses[1].reference_month,'2026-10');
- await x.ui.submit(form,{reminder_days:'5'});assert.equal(x.calls.at(-1).data.request_id,first.data.request_id);
- const callCount=x.calls.length;values[1].description='';await assert.rejects(()=>x.ui.submit(form,{reminder_days:'5'}),/Linha 2/);assert.equal(x.calls.length,callCount);
+ const result=await x.ui.submit(form,{});assert.equal(result.view,'expenses-variable');
+ const first=x.calls.at(-1);assert.equal(first.path,'/expenses/batch');assert.equal(first.data.request_id,'stable-request');assert.deepEqual(first.data.expenses.map(e=>e.amount_cents),[1250,3575]);
+ assert.ok(first.data.expenses.every(e=>e.kind==='variable'&&!('reminder_days' in e)&&!('reference_month' in e)&&!('due_date' in e)));assert.equal(first.data.expenses[1].expense_date,'2026-09-05');
+ await x.ui.submit(form,{});assert.equal(x.calls.at(-1).data.request_id,first.data.request_id);
+ const callCount=x.calls.length;values[1].subcategory_id='';await assert.rejects(()=>x.ui.submit(form,{}),/Linha 2.*subcategoria/);assert.equal(x.calls.length,callCount);
 });
 
 test('navegação: Despesas é um pai recolhível com quatro filhos e uma única página ativa',()=>{
@@ -202,15 +255,16 @@ test('cadastros de despesas: catálogo escapado, edição com versão, cor e sit
  const restricted=harness({permissions:['expenses.view'],categories:[c]});await restricted.ui.load();restricted.ui.expensesPage('catalogs');assert.doesNotMatch(restricted.html,/fin-category-new|fin-category-edit/);
 });
 
-test('categorias na interface: seletor ativo, filtro por ID e texto legado preservado',async()=>{
+test('categorias na interface: variável exige categoria e subcategoria ativas e filtra por ID',async()=>{
  const categories=[{id:'active',name:'Categoria atual',active:true,color:'#9756F4'},{id:'inactive',name:'Antiga',active:false,color:'#9756F4'}];
- const rows=[{id:'a',description:'Vinculada',category_id:'active',category:'Nome fotografado',kind:'variable',amount_cents:1000,state:'open'},{id:'b',description:'Sem vínculo',category:'Texto legado',kind:'variable',amount_cents:2000,state:'open'},{id:'c',description:'Categoria inativa',category_id:'inactive',category:'Antiga',kind:'variable',amount_cents:3000,state:'open'}];
- const x=harness({categories,rows});await x.ui.load();x.ui.expensesPage('variable');await x.ui.action('fin-new');assert.match(x.dialog,/value="active"/);assert.doesNotMatch(x.dialog,/value="inactive"/);
+ const subcategories=[{id:'sub-active',category_id:'active',name:'Subcategoria atual',active:true,applicability:'variable'},{id:'sub-inactive',category_id:'inactive',name:'Subcategoria antiga',active:false,applicability:'variable'}];
+ const rows=[{id:'a',description:'Vinculada',category_id:'active',category:'Nome fotografado',subcategory_id:'sub-active',subcategory:'Subcategoria atual',kind:'variable',amount_cents:1000,state:'paid',paid_date:'2026-09-06'},{id:'b',description:'Sem vínculo',category:'Texto legado',kind:'variable',amount_cents:2000,state:'open'},{id:'c',description:'Categoria inativa',category_id:'inactive',category:'Antiga',subcategory_id:'sub-inactive',subcategory:'Subcategoria antiga',kind:'variable',amount_cents:3000,state:'open'}];
+ const x=harness({categories,subcategories,rows});await x.ui.load();x.ui.expensesPage('variable');await x.ui.action('fin-new');assert.match(x.dialog,/value="active"/);assert.doesNotMatch(x.dialog,/value="inactive"/);assert.match(x.dialog,/Categoria \*/);assert.match(x.dialog,/Subcategoria \*/);
  await x.ui.action('fin-edit','c');assert.match(x.dialog,/value="inactive" selected/);
- await x.ui.submit({id:'fin-expense-list-filter'},{search:'',status:'',category:'active'});assert.match(x.html,/Vinculada/);assert.doesNotMatch(x.html,/<strong>Sem vínculo/);assert.match(x.html,/Total de variáveis: R\$ 10/);
+ await x.ui.submit({id:'fin-expense-list-filter'},{search:'',status:'',category:'active'});assert.match(x.html,/Vinculada/);assert.doesNotMatch(x.html,/<strong>Sem vínculo/);assert.match(x.html,/Total lançado: R\$ 10/);
  await x.ui.action('fin-list-clear');assert.match(x.html,/<strong>Sem vínculo/);
- await x.ui.action('fin-edit','b');assert.match(x.dialog,/value="legacy" selected/);
- await x.ui.submit({id:'fin-expense-form',dataset:{id:'b',version:'1'}},{description:'Sem vínculo',kind:'variable',amount:'20',reminder_days:'3',category_id:'legacy'});assert.equal(x.calls.at(-1).data.category,'Texto legado');assert.equal(x.calls.at(-1).data.category_id,null);
+ await x.ui.action('fin-edit','b');assert.doesNotMatch(x.dialog,/value="legacy"/);assert.match(x.dialog,/Selecione a categoria/);
+ await x.ui.submit({id:'fin-expense-form',dataset:{id:'b',version:'1',kind:'variable',requestId:'req'}},{expense_date:'2026-09-06',description:'Sem vínculo',amount:'20',category_id:'active',subcategory_id:'sub-active',payee:'',notes:''});assert.equal(x.calls.at(-1).data.category_id,'active');assert.equal(x.calls.at(-1).data.subcategory_id,'sub-active');assert.equal(x.calls.at(-1).data.kind,'variable');
 });
 
 test('dashboard agrupa uma categoria renomeada pelo ID sem dividir valores históricos',async()=>{

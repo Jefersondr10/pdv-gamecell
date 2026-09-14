@@ -44,16 +44,23 @@ test('mobile: CSS de reflow só em tela, 44px de toque e ações acessíveis',()
  assert.match(css,/@media screen and \(max-width: 700px\)/);assert.match(css,/\.table-wrap>\.mobile-records[^}]*min-width: 0/);assert.match(css,/\.sidebar \.nav[^}]*flex-direction: column/);assert.match(css,/min-height: 44px/);assert.match(app,/enhanceMobileTables\(target\)/);assert.match(server,/'\/mobile-ui.mjs'/);assert.match(picker,/event.target.closest\('\.select-mobile-heading'\)\) return/);assert.match(picker,/visualViewport\?\.addEventListener\('resize'/);
  assert.ok(picker.indexOf("event.key === 'Tab' && isOpen")<picker.indexOf("event.target.closest('.select-mobile-heading')"));
  assert.doesNotMatch(css,/transition: transform \.2s ease, visibility/);
- assert.match(app,/<button data-view="sales">Voltar às vendas<\/button>/);
+ assert.doesNotMatch(app,/<button data-view="sales">Voltar às vendas<\/button>/);
 });
 
-test('menu compacto: somente logo, navegação, fechar e sair; aviso de teste permanece fora da lateral',()=>{
+test('menu compacto: Ranking dourado fica no rodapé imediatamente antes de sair',()=>{
  const source=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
  const definition=source.slice(source.indexOf('function sidebarMarkup()'),source.indexOf('function render()'));
- const html=runInNewContext(`${definition};sidebarMarkup()`,{icon:()=>'',navigation:()=>'<button>Produtos</button>'});
+ const html=runInNewContext(`${definition};sidebarMarkup()`,{icon:()=>'',navigation:()=>'<button>Produtos</button>',view:'ranking'});
  assert.match(html,/gamecell-logo\.png/);assert.match(html,/aria-label="Fechar menu"/);assert.match(html,/aria-label="Navegação principal"/);assert.match(html,/Produtos/);assert.equal((html.match(/data-action="logout"/g)||[]).length,1);
+ assert.match(html,/class="[^"]*ranking-nav[^"]*"[^>]*data-view="ranking"[^>]*>[\s\S]*Ranking[\s\S]*<\/button>/);
+ assert.ok(html.indexOf('data-view="ranking"')<html.indexOf('data-action="logout"'));
+ assert.match(html,/<div class="sidebar-bottom">[\s\S]*data-view="ranking"[\s\S]*data-action="logout"/);
  assert.doesNotMatch(html,/Ambiente de teste|Sistema online|Loja independente|Gestão da loja|SUA OPERAÇÃO|sidebar-bottom[^]*<p>/);
  assert.match(source,/class="version-banner">Ambiente de teste/);
+ const css=readFileSync(new URL('../public/brand.css',import.meta.url),'utf8');
+ const rankingRule=css.match(/\.ranking-nav\s*\{([^}]*)\}/i);
+ assert.ok(rankingRule,'O botão Ranking precisa de estilo próprio');
+ assert.match(rankingRule[1],/color\s*:/i);assert.match(rankingRule[1],/(?:background|border(?:-color)?)\s*:/i);
 });
 test('menu compacto: abre um grupo por vez e não recria os campos da página',()=>{
  const source=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');

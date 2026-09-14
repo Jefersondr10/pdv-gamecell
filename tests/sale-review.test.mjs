@@ -37,9 +37,9 @@ function createSale(x, options = {}) {
     seller_id: options.seller_id ?? x.actor.id,
     business_date: options.business_date ?? businessDate(),
     is_wholesale: options.is_wholesale ?? false,
+    review_manual: options.review_manual ?? false,
     items
   };
-  if (options.review_manual !== undefined) payload.review_manual = options.review_manual;
   const id = x.db.saveDraft(x.actor, payload).id;
   const paid = options.paid === undefined ? price : options.paid;
   if (paid > 0) x.db.addPayment(x.actor, id, { method: 'cash', amount_cents: paid, request_id: randomUUID() });
@@ -115,7 +115,7 @@ test('rascunho e edição confirmada aceitam review_manual com permissão e pres
   const x = setup(t);
   const id = createSale(x, { confirmed: false, review_manual: true });
   let sale = x.db.sale(x.actor, id);
-  assert.deepEqual(sale.review, { manual: true, automatic: false, required: false, reasons: [] });
+  assert.deepEqual(sale.review, { manual: true, automatic: false, required: true, reasons: [] });
   const staleDraftToken = sale.draft_token;
   sale = x.db.setReviewManual(x.actor, id, { review_manual: false, edit_token: sale.edit_token });
   assert.throws(() => x.db.saveDraft(x.actor, {

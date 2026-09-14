@@ -22,6 +22,9 @@ const legacyPaymentPayloadHash = ({ saleId, method, amount, rateId }) => hash(JS
   sale_id: saleId, method, amount_cents: amount, rate_id: rateId
 }));
 const SALE_STATUS_COLORS = new Set(['neutral', 'blue', 'green', 'amber', 'red', 'purple']);
+const RECONCILED_STATUS_NAME = 'Conciliado';
+const isReconciledStatus = status => typeof status?.name === 'string'
+  && status.name.toLocaleLowerCase('pt-BR') === RECONCILED_STATUS_NAME.toLocaleLowerCase('pt-BR');
 function credentials(password) {
   check(typeof password === 'string' && password.length >= 12 && password.length <= 128,
     'Use uma senha com 12 a 128 caracteres.');
@@ -68,9 +71,15 @@ const safeUser = user => ({ id: user.id, name: user.name, email: user.email,
 const validStoredDate = value => {
   try { return validDate(value) === value; } catch { return false; }
 };
-function saleReview(row, items, payments, reconciliation, pendingQuantity) {
+function saleReview(row, items, payments, reconciliation, pendingQuantity, reconciled = false) {
   const manual = !!row.review_manual;
-  if (row.status !== 'confirmed') return { manual, automatic: false, required: false, reasons: [] };
+  if (reconciled) return { manual: false, automatic: false, required: false, reasons: [] };
+  if (row.status !== 'confirmed') return {
+    manual,
+    automatic: false,
+    required: row.status === 'draft' && manual,
+    reasons: []
+  };
   const reasons = [];
   if (reconciliation.state !== 'matched') reasons.push('payment_mismatch');
   if (pendingQuantity > 0) reasons.push('pending_cost');
@@ -83,6 +92,49 @@ function saleReview(row, items, payments, reconciliation, pendingQuantity) {
   if (payments.some(payment => payment.method === 'card' && (!payment.machine || !payment.brand || !['credit', 'debit'].includes(payment.mode) || !Number.isInteger(payment.installments) || payment.installments < 1))) reasons.push('missing_card_details');
   if (payments.some(payment => typeof payment.created_at !== 'string' || !Number.isFinite(new Date(payment.created_at).getTime()))) reasons.push('missing_payment_date');
   return { manual, automatic: reasons.length > 0, required: manual || reasons.length > 0, reasons };
+}
+
+function sellerRanking(actor, confirmedSales) {
+  const rows = new Map();
+  for (const sale of confirmedSales) {
+    const sellerId = sale.seller_id ?? null;
+    const key = sellerId ?? '__unassigned__';
+    const current = rows.get(key) ?? {
+      seller_id: sellerId,
+      seller_name: sale.seller_name || 'Sem vendedor',
+      sales_count: 0,
+      revenue_cents: 0,
+      gross_cents: 0,
+      pending_cents: 0,
+      excess_cents: 0,
+      incomplete_sales: 0,
+      ...(allowed(actor, 'profit.view') ? { profit_cents: 0 } : {}),
+      ...(allowed(actor, 'costs.view') ? { fees_cents: 0 } : {})
+    };
+    current.sales_count += 1;
+    current.revenue_cents += sale.total_cents;
+    current.gross_cents += sale.reconciliation.gross_cents;
+    current.pending_cents += sale.reconciliation.pending_cents;
+    current.excess_cents += sale.reconciliation.excess_cents;
+    current.incomplete_sales += Number(sale.review.required);
+    if (allowed(actor, 'profit.view')) current.profit_cents += sale.profit_cents ?? 0;
+    if (allowed(actor, 'costs.view')) current.fees_cents += sale.reconciliation.fee_cents;
+    rows.set(key, current);
+  }
+  const ordered = [...rows.values()].sort((left, right) =>
+    Number(left.seller_id === null) - Number(right.seller_id === null) ||
+    right.revenue_cents - left.revenue_cents ||
+    right.sales_count - left.sales_count ||
+    left.seller_name.localeCompare(right.seller_name, 'pt-BR', { sensitivity: 'base' }) ||
+    String(left.seller_id ?? '').localeCompare(String(right.seller_id ?? ''))
+  );
+  let previousRevenue = null, previousPosition = 0;
+  return ordered.map((row, index) => {
+    if (row.seller_id === null) return { position: null, ...row };
+    const position = previousRevenue === row.revenue_cents ? previousPosition : index + 1;
+    previousRevenue = row.revenue_cents; previousPosition = position;
+    return { position, ...row };
+  });
 }
 
 export class Store {
@@ -98,6 +150,7 @@ export class Store {
     migrateCancellationStatus(this);
     this.migrateLegacyBusinessDates();
     this.migrateSaleStatusColors();
+    this.ensureReconciledSaleStatuses();
     this.migrateCardHierarchy();
     this.installCatalogIntegrityTriggers();
     this.db.exec(readFileSync(new URL('./finance-schema.sql', import.meta.url), 'utf8'));
@@ -171,6 +224,22 @@ export class Store {
         check(this.all('PRAGMA foreign_key_check').length === 0, 'Falha de integridade na migração de cores.');
       });
     } finally { this.db.exec('PRAGMA foreign_keys=ON'); }
+  }
+  ensureReconciledSaleStatus(tenantId) {
+    const existing = this.get('SELECT id,name,color FROM sale_statuses WHERE tenant_id=? AND name=? COLLATE NOCASE',
+      tenantId, RECONCILED_STATUS_NAME);
+    if (existing) return existing;
+    const tenant = this.get('SELECT created_at FROM tenants WHERE id=?', tenantId);
+    check(tenant, 'Loja não encontrada para cadastrar o status Conciliado.', 500);
+    const statusId = id(), at = tenant.created_at || now();
+    this.run(`INSERT INTO sale_statuses(id,tenant_id,name,color,created_at,updated_at)
+      VALUES(?,?,?,?,?,?)`, statusId, tenantId, RECONCILED_STATUS_NAME, 'green', at, at);
+    return { id: statusId, name: RECONCILED_STATUS_NAME, color: 'green' };
+  }
+  ensureReconciledSaleStatuses() {
+    this.transaction(() => {
+      for (const tenant of this.all('SELECT id FROM tenants ORDER BY id')) this.ensureReconciledSaleStatus(tenant.id);
+    });
   }
   ensureCardGroup(tenantId, machineName, brandName) {
     const at = now();
@@ -262,6 +331,7 @@ export class Store {
     return this.transaction(() => {
       const tenantId = id(), userId = id();
       this.run('INSERT INTO tenants VALUES(?,?,?)', tenantId, storeName, now());
+      this.ensureReconciledSaleStatus(tenantId);
       this.run(`INSERT INTO users(id,tenant_id,name,email,salt,password_hash,permissions,is_owner,created_at)
         VALUES(?,?,?,?,?,?,?,1,?)`, userId, tenantId, name, email, auth.salt, auth.password_hash, '[]', now());
       const user = parseUser(this.get('SELECT * FROM users WHERE id=?', userId));
@@ -480,6 +550,8 @@ export class Store {
     requirePermission(actor, 'settings.manage');
     const existing = statusId ? this.scoped('sale_statuses', statusId, actor) : null;
     const name = text(data.name === undefined ? existing?.name : data.name, 'Nome do status', 60);
+    check(!existing || !isReconciledStatus(existing) || isReconciledStatus({ name }),
+      'O status Conciliado é padrão do sistema e não pode ser renomeado.', 409);
     const color = saleStatusColor(data.color, existing?.color ?? 'neutral');
     const duplicate = this.get(`SELECT id FROM sale_statuses
       WHERE tenant_id=? AND name=? COLLATE NOCASE AND id<>?`, actor.tenant_id, name, statusId ?? '');
@@ -656,10 +728,12 @@ export class Store {
     const existingItems = existingSale ? this.saleItems(actor, saleId) : [];
     const wholesale = data.is_wholesale === undefined ? !!existingSale?.is_wholesale : data.is_wholesale;
     check(typeof wholesale === 'boolean', 'Marcação de venda de atacado inválida.');
-    let reviewManual = !!existingSale?.review_manual;
+    let reviewManual = existingSale ? !!existingSale.review_manual : true;
     if (Object.hasOwn(data, 'review_manual')) {
       requirePermission(actor, 'sales.change_status');
       check(typeof data.review_manual === 'boolean', 'Marcação de conferência inválida.');
+      // A omissão usa o novo padrão A conferir. O campo explícito continua
+      // disponível para integrações autorizadas que já controlavam a revisão.
       reviewManual = data.review_manual;
     }
     if (existingSale && data.is_wholesale !== undefined && data.original_is_wholesale !== undefined) {
@@ -731,7 +805,7 @@ export class Store {
       this.audit(actor, 'sale', key, saleId ? 'draft_updated' : 'draft_created', {
         business_date_before: existingSale?.business_date ?? null, business_date: saleDate
       });
-      if (reviewManual !== !!existingSale?.review_manual) this.audit(actor, 'sale', key, 'review_manual_changed', {
+      if (existingSale && reviewManual !== !!existingSale.review_manual) this.audit(actor, 'sale', key, 'review_manual_changed', {
         review_manual_before: !!existingSale?.review_manual, review_manual_after: reviewManual
       });
       // The actor was authorized above. Reassignment may remove their future
@@ -836,32 +910,58 @@ export class Store {
   }
   setOperationalStatus(actor, saleId, data) {
     requirePermission(actor, 'sales.change_status');
+    check(data && typeof data === 'object' && !Array.isArray(data), 'Status da venda inválido.');
     check(this.saleAccess(actor, saleId).status!=='cancelled','O status de uma venda cancelada não pode ser alterado.',409);
     check(Object.hasOwn(data, 'operational_status_id'), 'Informe operational_status_id.');
+    const changesReview = Object.hasOwn(data, 'review_manual');
+    if (changesReview) {
+      check(typeof data.review_manual === 'boolean', 'Marcação de conferência inválida.');
+      check(typeof data.edit_token === 'string' && data.edit_token,
+        'Atualize e confira a venda antes de alterar o status.', 409);
+    }
     const rawStatusId = data.operational_status_id;
     check(rawStatusId === null || (typeof rawStatusId === 'string' && rawStatusId.trim()),
       'Status da venda inválido.');
     const statusId = rawStatusId === null ? null : rawStatusId.trim().toLowerCase();
-    if (statusId) this.scoped('sale_statuses', statusId, actor);
-    this.transaction(() => {
-      check(this.saleAccess(actor,saleId).status!=='cancelled','O status de uma venda cancelada não pode ser alterado.',409);
-      const previous = this.get(`SELECT status_id FROM sale_status_assignments
-        WHERE tenant_id=? AND sale_id=?`, actor.tenant_id, saleId);
-      const before = previous?.status_id ?? null;
-      if (before === statusId) return;
-      if (statusId === null) {
+    check(!changesReview || !data.review_manual || statusId === null,
+      'A opção A conferir não pode ser combinada com outro status.');
+    const selectedStatus = statusId ? this.scoped('sale_statuses', statusId, actor) : null;
+    const reconciled = isReconciledStatus(selectedStatus);
+    check(!reconciled || !changesReview || data.review_manual === false,
+      'O status Conciliado não pode ser combinado com A conferir.');
+    return this.transaction(() => {
+      const saleBefore = this.fullSale(actor, saleId);
+      check(saleBefore.status!=='cancelled','O status de uma venda cancelada não pode ser alterado.',409);
+      if (changesReview) check(data.edit_token === this.operations.editToken(saleBefore),
+        'A venda mudou em outra tela. Atualize antes de alterar o status.', 409);
+      const beforeStatus = saleBefore.operational_status_id;
+      // “A conferir” is the visible status while selected, but the last workflow
+      // status stays stored so it can reappear after the review is resolved.
+      const afterStatus = changesReview && data.review_manual
+        ? (saleBefore.is_reconciled ? null : beforeStatus)
+        : statusId;
+      if (beforeStatus !== afterStatus && afterStatus === null) {
         this.run('DELETE FROM sale_status_assignments WHERE tenant_id=? AND sale_id=?', actor.tenant_id, saleId);
-      } else {
+      } else if (beforeStatus !== afterStatus) {
         this.run(`INSERT INTO sale_status_assignments(tenant_id,sale_id,status_id,assigned_by,assigned_at)
           VALUES(?,?,?,?,?) ON CONFLICT(tenant_id,sale_id) DO UPDATE SET
           status_id=excluded.status_id,assigned_by=excluded.assigned_by,assigned_at=excluded.assigned_at`,
-          actor.tenant_id, saleId, statusId, actor.id, now());
+          actor.tenant_id, saleId, afterStatus, actor.id, now());
       }
-      this.audit(actor, 'sale', saleId, 'operational_status_changed', {
-        operational_status_id_before: before, operational_status_id_after: statusId
+      if (beforeStatus !== afterStatus) this.audit(actor, 'sale', saleId, 'operational_status_changed', {
+        operational_status_id_before: beforeStatus, operational_status_id_after: afterStatus
       });
+      const reviewAfter = reconciled ? false : changesReview ? data.review_manual : saleBefore.review.manual;
+      if ((changesReview || reconciled) && saleBefore.review.manual !== reviewAfter) {
+        this.run('UPDATE sales SET review_manual=?,updated_at=? WHERE tenant_id=? AND id=?',
+          Number(reviewAfter), now(), actor.tenant_id, saleId);
+        this.audit(actor, 'sale', saleId, 'review_manual_changed', {
+          review_manual_before: saleBefore.review.manual, review_manual_after: reviewAfter,
+          ...(reconciled ? { resolved_by_status: RECONCILED_STATUS_NAME } : {})
+        });
+      }
+      return this.sale(actor, saleId);
     });
-    return this.sale(actor, saleId);
   }
   setReviewManual(actor, saleId, data) {
     requirePermission(actor, 'sales.change_status');
@@ -876,6 +976,12 @@ export class Store {
       check(data.edit_token === this.operations.editToken(before),
         'A venda mudou em outra tela. Atualize antes de alterar a conferência.', 409);
       if (before.review.manual !== data.review_manual) {
+        if (data.review_manual && before.is_reconciled) {
+          this.run('DELETE FROM sale_status_assignments WHERE tenant_id=? AND sale_id=?', actor.tenant_id, saleId);
+          this.audit(actor, 'sale', saleId, 'operational_status_changed', {
+            operational_status_id_before: before.operational_status_id, operational_status_id_after: null
+          });
+        }
         this.run('UPDATE sales SET review_manual=?,updated_at=? WHERE tenant_id=? AND id=?',
           Number(data.review_manual), now(), actor.tenant_id, saleId);
         this.audit(actor, 'sale', saleId, 'review_manual_changed', {
@@ -912,7 +1018,7 @@ export class Store {
           LEFT JOIN users u ON u.tenant_id=rr.tenant_id AND u.id=rr.actor_id
           WHERE rr.tenant_id=? AND rr.sale_id=? ORDER BY rr.reversed_date,rr.created_at,rr.rowid`,actor.tenant_id,saleId),
        cancelled=cancelledSale(row,cancellation,refundRows,reversalRows);
-      return {...cancelled,review_manual:!!row.review_manual,
+      return {...cancelled,registered_at:row.created_at,review_manual:!!row.review_manual,
         review:{manual:!!row.review_manual,automatic:false,required:false,reasons:[]}};
     }
     const items = this.saleItems(actor, saleId);
@@ -937,9 +1043,11 @@ export class Store {
     }
     const expenses = JSON.parse(row.expenses_json), total = saleTotal(items), reconciliation = reconcile(total, payments);
     const provisionalProfit = pendingQuantity || row.status === 'draft' ? null : total - reconciliation.fee_cents - knownCost - row.freight_cents - sumMoney(expenses.map(e => e.amount_cents));
-    const review=saleReview(row,items,payments,reconciliation,pendingQuantity);
-    return { ...row, is_wholesale: !!row.is_wholesale, review_manual:review.manual, review, items:itemFinancials(items,reconciliation,row.freight_cents,sumMoney(expenses.map(e=>e.amount_cents)),provisionalProfit), payments, expenses, total_cents: total, reconciliation,
+    const reconciled = isReconciledStatus(operationalStatus);
+    const review=saleReview(row,items,payments,reconciliation,pendingQuantity,reconciled);
+    return { ...row, registered_at:row.created_at, is_wholesale: !!row.is_wholesale, review_manual:review.manual, review, items:itemFinancials(items,reconciliation,row.freight_cents,sumMoney(expenses.map(e=>e.amount_cents)),provisionalProfit), payments, expenses, total_cents: total, reconciliation,
       operational_status_id: operationalStatus?.id ?? null, operational_status: operationalStatus,
+      is_reconciled: reconciled,
       store_name: this.get('SELECT name FROM tenants WHERE id=?', actor.tenant_id).name,
       customer_name: row.customer_id ? this.scoped('customers', row.customer_id, actor).name : null,
       seller_name: row.seller_id ? this.scoped('users', row.seller_id, actor).name : null,
@@ -1062,8 +1170,9 @@ export class Store {
       pix_accounts: this.all('SELECT id,name,active FROM pix_accounts WHERE tenant_id=? ORDER BY name', actor.tenant_id)
         .map(account => ({ ...account, active: !!account.active })),
       suppliers: this.all('SELECT id,name,email,phone FROM suppliers WHERE tenant_id=? ORDER BY name', actor.tenant_id),
-      sale_statuses: this.all('SELECT id,name,color FROM sale_statuses WHERE tenant_id=? ORDER BY name', actor.tenant_id),
-      sales, dashboard,refunds_pending:pendingRefunds(this,actor),stock_entries:this.operations.entries(actor),
+      sale_statuses: this.all(`SELECT id,name,color FROM sale_statuses WHERE tenant_id=?
+        ORDER BY CASE WHEN name=? COLLATE NOCASE THEN 1 ELSE 0 END,name`, actor.tenant_id, RECONCILED_STATUS_NAME),
+      sales, dashboard,seller_ranking:sellerRanking(actor,confirmed),refunds_pending:pendingRefunds(this,actor),stock_entries:this.operations.entries(actor),
       ...(allowed(actor,'expenses.view') ? { expense_reminders:this.finance.reminders(actor) } : {}) };
   }
   share(actor, saleId) {

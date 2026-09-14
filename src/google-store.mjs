@@ -44,6 +44,7 @@ export function googleLogin(store, identity, storeName) {
       const tenantName = text(storeName, 'Nome da loja');
       const tenantId = randomUUID(), userId = randomUUID(), created = new Date().toISOString();
       store.run('INSERT INTO tenants VALUES(?,?,?)', tenantId, tenantName, created);
+      store.ensureReconciledSaleStatus(tenantId);
       store.run(`INSERT INTO users(id,tenant_id,name,email,salt,password_hash,permissions,is_owner,created_at,auth_kind)
         VALUES(?,?,?,?,?,?,?,1,?,'google')`, userId, tenantId, name, email, randomBytes(16).toString('hex'), randomBytes(64).toString('hex'), '[]', created);
       store.run('INSERT INTO google_identities VALUES(?,?,?,?)', identity.sub, tenantId, userId, created);
