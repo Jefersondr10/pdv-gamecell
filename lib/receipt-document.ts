@@ -12,6 +12,7 @@ export type ReceiptDocument = {
   payerBank: string | null;
   recipientName: string | null;
   recipientBank: string | null;
+  recipientAccount?: string | null;
   recipientDocument: string | null;
   transactionId: string | null;
   alternateTransactionId: string | null;
@@ -715,6 +716,18 @@ export function extractReceiptDocument(text: string) {
     payerBank: payer.bank,
     recipientName: recipient.name,
     recipientBank: recipient.bank,
+    recipientAccount: (() => {
+      const start = c6 ? recipientBankLine : to;
+      if (start < 0) return null;
+      const end = c6 ? originAccount : from > start ? from : lines.length;
+      const block = lines.slice(start, end).join('\n');
+      const accounts = [
+        ...block.matchAll(
+          /^conta(?:\s+corrente)?\s*:\s*([\d*•xX. -]{2,30})\s*$/gim,
+        ),
+      ].map((match) => match[1].trim());
+      return accounts.length === 1 ? accounts[0] : null;
+    })(),
     recipientDocument: recipient.document,
     transactionId: uniqueIds.length === 1 ? uniqueIds[0] : null,
     alternateTransactionId,
@@ -760,6 +773,7 @@ export function parseReceiptDocument(value: unknown): ReceiptDocument | null {
       'payerBank',
       'recipientName',
       'recipientBank',
+      'recipientAccount',
       'recipientDocument',
       'transactionId',
       'alternateTransactionId',
@@ -767,7 +781,8 @@ export function parseReceiptDocument(value: unknown): ReceiptDocument | null {
       'paidAtText',
     ] as const) {
       if (
-        (field === 'alternateTransactionId' ||
+        (field === 'recipientAccount' ||
+          field === 'alternateTransactionId' ||
           field === 'observedTransactionId') &&
         doc[field] === undefined
       ) {

@@ -233,9 +233,44 @@ db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
   identificationChecksum,
   '0015_receipt_identified_payments',
 );
+db.close();
+const migrateReports = () =>
+  execFileSync(
+    process.execPath,
+    [resolve('scripts/hostinger/apply-public-reports-migration.mjs'), path],
+    { stdio: 'pipe' },
+  );
+migrateReports();
+migrateReports();
+db = new DatabaseSync(path);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM pdv_release_migrations').get().n,
+  9,
+);
+assert.equal(db.prepare('SELECT count(*) AS n FROM report_shares').get().n, 0);
+assert.equal(
+  db.prepare('SELECT value FROM fixture_preservation').get().value,
+  'synthetic-record',
+);
+assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
+const reportChecksum = db
+  .prepare('SELECT checksum FROM pdv_release_migrations WHERE name=?')
+  .get('0017_public_report_links').checksum;
+db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
+  'changed',
+  '0017_public_report_links',
+);
+db.close();
+assert.throws(migrateReports, /Migration checksum mismatch/);
+db = new DatabaseSync(path);
+db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
+  reportChecksum,
+  '0017_public_report_links',
+);
 db.prepare('UPDATE pdv_release_migrations SET checksum=?').run('changed');
 db.close();
-assert.throws(migrate, /Migration checksum mismatch/);
+// The legacy 0009 runner rejects the newer reader_revision column added by 0016.
+assert.throws(migrate, /Unexpected receipt job schema/);
 assert.throws(migrateAlerts, /Migration checksum mismatch/);
 assert.throws(migratePermissions, /Migration checksum mismatch/);
 assert.throws(migrateClientIdentity, /Migration checksum mismatch/);

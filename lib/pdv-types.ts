@@ -141,6 +141,7 @@ export type SaleItemRecord = {
 };
 
 export type SalePaymentRecord = {
+  createdAt?: number;
   id: string;
   method: 'pix' | 'cash';
   pixAccountId: string | null;

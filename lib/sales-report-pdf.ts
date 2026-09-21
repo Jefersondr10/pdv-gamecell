@@ -13,6 +13,10 @@ import { summarizeSalesPayments } from './sales-payment-summary.ts';
 import { splitReceiptReadingNotices } from './receipt-reading-notices.ts';
 import { reportCard, reportColors, reportTones } from './report-pdf-theme.ts';
 import type { RGB } from 'pdf-lib';
+import {
+  summarizeFinancialReport,
+  type ReportDateBasis,
+} from './financial-report.ts';
 
 export type SalesPdfOptions = {
   storeName: string;
@@ -23,6 +27,10 @@ export type SalesPdfOptions = {
   singleSale?: boolean;
   includePhotos?: boolean;
   includeReceipts?: boolean;
+  kind?: 'sales' | 'financial';
+  dateBasis?: ReportDateBasis;
+  filters?: string;
+  receiptPdfMode?: 'original' | 'images';
 };
 type AssetLoader = (attachment: AttachmentRecord) => Promise<Uint8Array>;
 
@@ -546,7 +554,7 @@ function saleDetails(
     if (!receiptDrivenPayments(sale).length)
       layout.paragraph('Nenhum pagamento informado.');
   }
-  if (showFinancial && sale.receipts.length) {
+  if ((detailed || singleSale) && showFinancial && sale.receipts.length) {
     layout.title('Dados identificados nos comprovantes');
     for (const [index, receipt] of sale.receipts.entries()) {
       layout.row(
@@ -651,7 +659,7 @@ function saleDetails(
     layout.title('Conferência dos comprovantes');
     layout.paragraph(
       cashCents > 0
-        ? 'Compara comprovantes mais dinheiro com o preço da venda. Dinheiro informado manualmente; não confirma crédito bancário.'
+        ? 'Compara comprovantes mais dinheiro com o preço da venda; não confirma crédito bancário.'
         : 'Compara comprovantes com o preço da venda; não confirma crédito bancário.',
       { size: 9, muted: true },
     );
@@ -689,23 +697,44 @@ function saleDetails(
 export async function buildSalesReportPdf(
   options: SalesPdfOptions,
   loadAsset: AssetLoader = loadReportAsset,
+  renderPdf?: (bytes: Uint8Array) => AsyncIterable<Uint8Array>,
 ): Promise<Uint8Array> {
   const { storeName, level, singleSale = false } = options;
+  const financialOnly = options.kind === 'financial';
+  const financial = summarizeFinancialReport(
+    options.sales,
+    options.dateBasis,
+    options.filters,
+    options.generatedAt,
+  );
   const sales = [...options.sales].sort(
     (a, b) => b.createdAt - a.createdAt || b.number - a.number,
   );
   if (!sales.length) throw new Error('Não há vendas para exportar.');
-  if (sales.length > 250)
-    throw new Error('Selecione um período com até 250 vendas.');
+  if (sales.length > (financialOnly ? 2000 : 250))
+    throw new Error(
+      `Selecione um período com até ${financialOnly ? 2000 : 250} vendas.`,
+    );
   const photos = options.includePhotos ?? level === 'complete';
   const receipts = options.includeReceipts ?? level === 'complete';
   // Cancelled sales remain visible for audit, but period totals and media exclude them.
   const mediaSales = singleSale
     ? sales
-    : sales.filter((sale) => sale.status === 'completed');
+    : sales.filter(
+        (sale) =>
+          sale.status === 'completed' &&
+          (!financialOnly ||
+            financial.rows.some((row) => row.saleId === sale.id)),
+      );
+  const selectedReceipts = (sale: SaleRecord) =>
+    financialOnly
+      ? sale.receipts.filter((receipt) =>
+          financial.rows.some((row) => row.receiptId === receipt.id),
+        )
+      : sale.receipts;
   const assets = mediaSales.flatMap((sale) => [
     ...(photos ? sale.items.flatMap((item) => item.photos) : []),
-    ...(receipts ? sale.receipts : []),
+    ...(receipts ? selectedReceipts(sale) : []),
   ]);
   const mediaLimit = singleSale ? 60 : 40;
   const byteLimit = (singleSale ? 50 : 25) * 1024 * 1024;
@@ -721,7 +750,11 @@ export async function buildSalesReportPdf(
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const layout = new Layout(doc, regular, bold, storeName);
   doc.setTitle(
-    singleSale ? `Venda ${number(sales[0])}` : 'Relatório de vendas',
+    financialOnly
+      ? 'Relatório financeiro'
+      : singleSale
+        ? `Venda ${number(sales[0])}`
+        : 'Relatório de vendas',
   );
   doc.setAuthor(storeName);
   doc.setCreationDate(new Date(options.generatedAt ?? Date.now()));
@@ -735,9 +768,11 @@ export async function buildSalesReportPdf(
   const units = summarySales.reduce((sum, sale) => sum + sale.items.length, 0);
   layout.newPage(true);
   layout.paragraph(
-    singleSale
-      ? `Relatório da venda ${number(sales[0])}`
-      : 'Relatório de vendas',
+    financialOnly
+      ? 'Relatório financeiro'
+      : singleSale
+        ? `Relatório da venda ${number(sales[0])}`
+        : 'Relatório de vendas',
     { size: 21, bold: true },
   );
   layout.paragraph(
@@ -747,7 +782,100 @@ export async function buildSalesReportPdf(
   if (options.filterSummary)
     layout.paragraph(options.filterSummary, { size: 10 });
   layout.y += 12;
-  if (!singleSale) {
+  if (financialOnly) {
+    layout.context = 'Resumo financeiro';
+    layout.panel(
+      [
+        { text: 'TOTAL RECEBIDO', size: 10, bold: true },
+        { text: money(financial.totalCents), size: 24, bold: true },
+      ],
+      reportTones.success,
+    );
+    layout.row('Recebido em Pix', money(financial.pixCents));
+    layout.row('Recebido em dinheiro', money(financial.cashCents));
+    layout.paragraph(
+      options.dateBasis === 'receipt'
+        ? 'Período pela data identificada do recebimento. Dinheiro: data do registro no sistema.'
+        : 'Pagamentos das vendas do período, mesmo quando recebidos em outro dia.',
+      { size: 9, muted: true },
+    );
+    layout.paragraph(
+      'A leitura de comprovantes não confirma crédito no banco. Contas não identificadas são agrupadas por recebedor e banco.',
+      { size: 9, muted: true },
+    );
+    if (financial.undatedCount)
+      layout.paragraph(
+        `${financial.undatedCount} recebimento(s) sem data identificada: ${money(financial.undatedCents)}, fora do total do período.`,
+        { bold: true, size: 10 },
+      );
+    layout.title('Recebimentos por destino');
+    for (const group of financial.groups) {
+      layout.row(group.recipient, money(group.amountCents), {
+        bold: true,
+        fill: PALE,
+      });
+      layout.paragraph(
+        group.method === 'cash'
+          ? 'Dinheiro em caixa'
+          : `${group.bank} · ${group.account ? 'Conta ' + group.account : 'Conta não identificada'}`,
+        { size: 9, muted: true },
+      );
+      layout.y += 6;
+    }
+    if (level !== 'simple') {
+      layout.context = 'Extrato de recebimentos';
+      layout.newPage();
+      layout.title('Extrato de recebimentos');
+      for (const group of financial.saleGroups) {
+        layout.context = `Venda #${String(group.saleNumber).padStart(5, '0')} · Recebimentos`;
+        layout.ensure(170);
+        layout.row(
+          `Venda #${String(group.saleNumber).padStart(5, '0')}`,
+          money(group.amountCents),
+          { bold: true, fill: PALE },
+        );
+        layout.paragraph(
+          `${group.rows.length} recebimento(s) · Total recebido neste relatório`,
+          { size: 9, muted: true },
+        );
+        layout.y += 6;
+        for (const [index, row] of group.rows.entries()) {
+          layout.ensure(row.method === 'pix' ? 130 : 70);
+          layout.row(
+            `${index + 1}. ${row.method === 'pix' ? 'Pix' : 'Dinheiro'}`,
+            money(row.amountCents),
+            { bold: true, color: reportTones.success.ink },
+          );
+          layout.paragraph(
+            `${row.method === 'cash' ? 'Registro: ' : ''}${row.date || 'Data não identificada'} · ${row.time || 'Hora não identificada'}`,
+            { size: 9, muted: true },
+          );
+          if (row.method === 'pix') {
+            layout.paragraph(`Recebedor: ${row.recipient}`, {
+              size: 9,
+              bold: true,
+            });
+            layout.paragraph(
+              `Banco recebedor: ${row.bank} · ${row.account ? 'Conta ' + row.account : 'Conta não identificada'}`,
+              { size: 9 },
+            );
+            layout.paragraph(`Pagador: ${row.payer} · ${row.payerBank}`, {
+              size: 9,
+              muted: true,
+            });
+            if (level === 'complete')
+              layout.paragraph(
+                `Identificador: ${row.transactionId || 'Não identificado'}`,
+                { size: 8, muted: true },
+              );
+          }
+          layout.y += 6;
+          if (index < group.rows.length - 1) layout.rule();
+        }
+        layout.y += 14;
+      }
+    }
+  } else if (!singleSale) {
     layout.totals(
       singleSale ? 'VALOR DA VENDA' : 'MONTANTE VENDIDO',
       money(amount),
@@ -826,6 +954,7 @@ export async function buildSalesReportPdf(
   }
 
   let loadedBytes = 0;
+  let renderedBytes = 0;
   let attachmentPages = 0;
   async function attach(asset: AttachmentRecord, label: string) {
     try {
@@ -835,7 +964,44 @@ export async function buildSalesReportPdf(
         throw new Error(
           `Os anexos processados excedem ${byteLimit / 1024 / 1024} MB.`,
         );
-      if (asset.mimeType === 'application/pdf') {
+      if (
+        asset.mimeType === 'application/pdf' &&
+        options.receiptPdfMode === 'images'
+      ) {
+        const rasterize =
+          renderPdf ??
+          (await import('./report-receipt-images')).receiptPdfImages;
+        let index = 0;
+        for await (const image of rasterize(bytes)) {
+          renderedBytes += image.byteLength;
+          if (renderedBytes > byteLimit)
+            throw new Error(
+              'As imagens convertidas excedem o limite de tamanho. Reduza os anexos ou mantenha as páginas originais.',
+            );
+          if (++attachmentPages > 200)
+            throw new Error('Os anexos excedem 200 páginas.');
+          const embedded = await doc.embedJpg(image);
+          layout.newPage();
+          layout.paragraph(label, { size: 12, bold: true });
+          layout.paragraph(`${asset.name} · Página ${++index}`, {
+            size: 8,
+            muted: true,
+          });
+          layout.y += 10;
+          const scale = Math.min(
+            CONTENT / embedded.width,
+            (BOTTOM - layout.y) / embedded.height,
+          );
+          layout.page.drawImage(embedded, {
+            x: M + (CONTENT - embedded.width * scale) / 2,
+            y: H - layout.y - embedded.height * scale,
+            width: embedded.width * scale,
+            height: embedded.height * scale,
+          });
+          layout.y = BOTTOM;
+        }
+        if (!index) throw new Error('O PDF não contém páginas.');
+      } else if (asset.mimeType === 'application/pdf') {
         const source = await PDFDocument.load(bytes);
         attachmentPages += source.getPageCount();
         if (attachmentPages > 200)
@@ -913,32 +1079,38 @@ export async function buildSalesReportPdf(
     layout.context = `Venda ${number(sale)} · ${sale.customerName}`;
     // Complete reports give each sale its own starting page and keep its evidence together.
     if (
+      !financialOnly &&
       !singleSale &&
       (level === 'complete' || photos || receipts || sale === sales[0])
     )
       layout.newPage();
-    const measure = new Layout(doc, regular, bold, storeName, true);
-    measure.y = 0;
-    saleDetails(measure, sale, level, singleSale);
-    // Keep a sale whole when it fits a page; oversized sales continue with their header.
-    if (!singleSale) layout.ensure(Math.min(measure.y + 12, BOTTOM - 86));
-    saleDetails(layout, sale, level, singleSale);
+    if (!financialOnly) {
+      const measure = new Layout(doc, regular, bold, storeName, true);
+      measure.y = 0;
+      saleDetails(measure, sale, level, singleSale);
+      // Keep a sale whole when it fits a page; oversized sales continue with their header.
+      if (!singleSale) layout.ensure(Math.min(measure.y + 12, BOTTOM - 86));
+      saleDetails(layout, sale, level, singleSale);
+    }
     if (!mediaSales.includes(sale)) continue;
     if (photos)
       for (const item of sale.items) {
         for (const [index, photo] of item.photos.entries())
           await attach(
             photo,
-            `Foto ${index + 1} · ${item.productName} · ${item.productDetail} · SN ${item.serial}`,
+            `Foto ${index + 1} · Venda ${number(sale)} · ${item.productName} · ${item.productDetail} · SN ${item.serial}`,
           );
       }
     if (receipts)
-      for (const [index, receipt] of sale.receipts.entries()) {
+      for (const [index, receipt] of selectedReceipts(sale).entries()) {
         const amountLabel =
           receipt.receiptAmountCents === null
             ? 'valor pendente'
             : money(receipt.receiptAmountCents);
-        await attach(receipt, `Comprovante ${index + 1} · ${amountLabel}`);
+        await attach(
+          receipt,
+          `Comprovante ${index + 1} · Venda ${number(sale)} · ${amountLabel}`,
+        );
       }
   }
   const pages = doc.getPages();
@@ -951,13 +1123,16 @@ export async function buildSalesReportPdf(
       font: regular,
       color: MUTED,
     });
-    page.drawText('Relatório de vendas', {
-      x: M,
-      y: 23,
-      size: 8,
-      font: regular,
-      color: MUTED,
-    });
+    page.drawText(
+      financialOnly ? 'Relatório financeiro' : 'Relatório de vendas',
+      {
+        x: M,
+        y: 23,
+        size: 8,
+        font: regular,
+        color: MUTED,
+      },
+    );
   });
   return doc.save();
 }

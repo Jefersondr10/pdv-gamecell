@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   Banknote,
   CalendarDays,
+  ChevronDown,
   CircleAlert,
   FileText,
   Paperclip,
@@ -16,6 +17,12 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -50,10 +57,20 @@ export function SaleDetailsDialog({
   onClose,
   onReport,
   onEdit,
+  onEditInfo,
+  onEditPayments,
+  onEditReceipts,
+  onChangeDate,
   onCancel,
   canEdit,
   canCancel,
   canEditPrices,
+  canEditParticipants,
+  canEditStatus,
+  canEditPayments,
+  canEditReceipts,
+  canChangeDate,
+  suspended = false,
   csrfToken,
   onPricesChanged,
   onOpenSerial,
@@ -63,10 +80,20 @@ export function SaleDetailsDialog({
   onClose: (reason?: 'action') => void;
   onReport: (sale: SaleRecord) => void;
   onEdit: (sale: SaleRecord) => void;
+  onEditInfo: (sale: SaleRecord) => void;
+  onEditPayments: (sale: SaleRecord) => void;
+  onEditReceipts: (sale: SaleRecord) => void;
+  onChangeDate: (sale: SaleRecord) => void;
   onCancel: (sale: SaleRecord) => void;
   canEdit: boolean;
   canCancel: boolean;
   canEditPrices: boolean;
+  canEditParticipants: boolean;
+  canEditStatus: boolean;
+  canEditPayments: boolean;
+  canEditReceipts: boolean;
+  canChangeDate: boolean;
+  suspended?: boolean;
   csrfToken: string;
   onPricesChanged: (saleId: string, value: SalePrices) => void;
   onOpenSerial: (serial: string) => void;
@@ -78,18 +105,22 @@ export function SaleDetailsDialog({
   const showReceiptConference = Boolean(
     sale &&
     sale.status !== 'cancelled' &&
-    (sale.receipts.length > 0 || sale.reconciliation.status !== 'not_required'),
+    (sale.receipts.length > 0 ||
+      sale.reconciliation.status !== 'not_required' ||
+      canEditReceipts),
   );
   const [pricesBusy, setPricesBusy] = useState(false);
   const [pricesEditing, setPricesEditing] = useState(false);
   const [notice, setNotice] = useState('');
   const locked = pricesBusy || pricesEditing;
+  const editable = sale?.status === 'completed';
+  const canEditHeader = canEditParticipants || canEditStatus || canChangeDate;
 
   return (
     <Dialog
-      open={Boolean(sale)}
+      open={Boolean(sale) && !suspended}
       onOpenChange={(open) => {
-        if (!open && !locked) onClose();
+        if (!open && !locked && !suspended) onClose();
       }}
     >
       <DialogContent
@@ -100,14 +131,58 @@ export function SaleDetailsDialog({
           <>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <DialogHeader className="gap-2 border-b bg-card px-4 py-4 pr-12 text-left sm:px-7 sm:py-5 sm:pr-14">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  <span className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1 text-sm font-extrabold tabular-nums text-primary">
-                    <ReceiptText className="size-4" />
-                    Venda #{String(sale.number).padStart(5, '0')}
-                  </span>
-                  <SaleStatusBadge sale={sale} />
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1 text-sm font-extrabold tabular-nums text-primary">
+                      <ReceiptText className="size-4" />
+                      Venda #{String(sale.number).padStart(5, '0')}
+                    </span>
+                    <SaleStatusBadge sale={sale} />
+                  </div>
+                  {editable && canEditHeader && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        disabled={locked}
+                        render={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="shrink-0"
+                          />
+                        }
+                        aria-label="Editar dados da venda"
+                      >
+                        <Pencil className="size-4" />
+                        Editar
+                        <ChevronDown className="size-3.5" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="end"
+                        className="w-auto max-w-[calc(100vw-2rem)]"
+                      >
+                        {(canEditParticipants || canEditStatus) && (
+                          <DropdownMenuItem
+                            disabled={locked}
+                            onClick={() => onEditInfo(sale)}
+                          >
+                            <UserRound />
+                            Status, cliente e vendedor
+                          </DropdownMenuItem>
+                        )}
+                        {canChangeDate && (
+                          <DropdownMenuItem
+                            disabled={locked}
+                            onClick={() => onChangeDate(sale)}
+                          >
+                            <CalendarDays />
+                            Data e horário
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                 </div>
-                <DialogTitle className="break-words text-xl font-extrabold leading-tight tracking-tight sm:text-2xl">
+                <DialogTitle className="min-w-0 break-words text-xl font-extrabold leading-tight tracking-tight sm:text-2xl">
                   {sale.customerName}
                 </DialogTitle>
                 <DialogDescription className="sr-only">
@@ -123,7 +198,7 @@ export function SaleDetailsDialog({
                   <div className="flex items-center gap-1.5">
                     <UserRound className="size-3.5 shrink-0" />
                     <dt>Vendedor:</dt>
-                    <dd className="font-semibold">{sale.sellerName}</dd>
+                    <dd className="min-w-0 font-semibold">{sale.sellerName}</dd>
                   </div>
                 </dl>
               </DialogHeader>
@@ -366,6 +441,16 @@ export function SaleDetailsDialog({
                       icon={<WalletCards className="size-5" />}
                       title="Pagamentos recebidos"
                       description="Recebimentos desta venda"
+                      action={
+                        editable &&
+                        canEditPayments && (
+                          <DetailEditButton
+                            label="Editar pagamentos"
+                            disabled={locked}
+                            onClick={() => onEditPayments(sale)}
+                          />
+                        )
+                      }
                     />
                     {payments.length ? (
                       <div className="mt-4 divide-y rounded-lg border">
@@ -392,12 +477,12 @@ export function SaleDetailsDialog({
                                   {money(payment.amountCents)}
                                 </strong>
                               </div>
-                              <p className="mt-1 break-words text-sm font-medium text-muted-foreground">
-                                {payment.method === 'pix'
-                                  ? payment.recipientName ||
-                                    'Recebedor não identificado'
-                                  : 'Informado manualmente'}
-                              </p>
+                              {payment.method === 'pix' && (
+                                <p className="mt-1 break-words text-sm font-medium text-muted-foreground">
+                                  {payment.recipientName ||
+                                    'Recebedor não identificado'}
+                                </p>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -432,6 +517,16 @@ export function SaleDetailsDialog({
                     <SectionHeading
                       icon={<ReceiptText className="size-5" />}
                       title="Comprovantes de pagamento"
+                      action={
+                        editable &&
+                        canEditReceipts && (
+                          <DetailEditButton
+                            label="Editar comprovantes"
+                            disabled={locked}
+                            onClick={() => onEditReceipts(sale)}
+                          />
+                        )
+                      }
                       description={
                         sale.receipts.length +
                         (sale.receipts.length === 1
@@ -497,8 +592,9 @@ export function SaleDetailsDialog({
                             Nenhum comprovante anexado
                           </p>
                           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                            Anexe o documento em Pagamentos / preço de venda
-                            para identificar o Pix.
+                            {canEditReceipts
+                              ? 'Use Editar comprovantes para anexar o documento e identificar o Pix.'
+                              : 'O Pix será identificado após a leitura de um comprovante.'}
                           </p>
                         </div>
                       </div>
@@ -603,20 +699,51 @@ function SectionHeading({
   icon,
   title,
   description,
+  action,
 }: {
   icon: ReactNode;
   title: string;
   description: string;
+  action?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3">
-      <SectionIcon>{icon}</SectionIcon>
-      <div className="min-w-0">
-        <h3 className="text-base font-extrabold leading-snug">{title}</h3>
-        <p className="mt-0.5 text-sm font-medium text-muted-foreground">
-          {description}
-        </p>
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <SectionIcon>{icon}</SectionIcon>
+        <div className="min-w-0">
+          <h3 className="text-base font-extrabold leading-snug">{title}</h3>
+          <p className="mt-0.5 text-sm font-medium text-muted-foreground">
+            {description}
+          </p>
+        </div>
       </div>
+      {action}
     </div>
+  );
+}
+
+function DetailEditButton({
+  label,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="shrink-0 whitespace-nowrap"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <Pencil className="size-4" />
+      {label}
+    </Button>
   );
 }

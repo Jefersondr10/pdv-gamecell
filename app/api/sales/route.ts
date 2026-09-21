@@ -210,10 +210,7 @@ export async function GET(request: Request) {
         filterSql,
         bindings,
       );
-      const results = await db.batch([
-        ...aggregateStatements,
-        groupStatement,
-      ]);
+      const results = await db.batch([...aggregateStatements, groupStatement]);
       const aggregate = firstRow<SalesAggregateRow>(results[0]);
       const previousAggregate = comparison
         ? firstRow<SalesAggregateRow>(results[1])
@@ -264,10 +261,7 @@ export async function GET(request: Request) {
          ORDER BY s.created_at DESC, s.id DESC LIMIT ?`,
       )
       .bind(...pageBindings, pageSize + 1);
-    const baseResults = await db.batch([
-      ...aggregateStatements,
-      listStatement,
-    ]);
+    const baseResults = await db.batch([...aggregateStatements, listStatement]);
     const aggregate = firstRow<SalesAggregateRow>(baseResults[0]);
     const previousAggregate = comparison
       ? firstRow<SalesAggregateRow>(baseResults[1])
@@ -1680,7 +1674,7 @@ async function hydrateSales(
     db
       .prepare(
         `SELECT id, sale_id AS saleId, method, pix_account_id AS pixAccountId,
-                account_name AS accountName, amount_cents AS amountCents
+                account_name AS accountName, amount_cents AS amountCents, created_at AS createdAt
          FROM payments
          WHERE store_id = ? AND sale_id IN (${placeholders})
          ORDER BY created_at, id`,
@@ -1742,6 +1736,8 @@ async function hydrateSales(
       pixAccountId: payment.pixAccountId,
       accountName: payment.accountName,
       amountCents: Number(payment.amountCents),
+      createdAt:
+        payment.createdAt === undefined ? undefined : Number(payment.createdAt),
     });
     paymentsBySale.set(payment.saleId, payments);
   }

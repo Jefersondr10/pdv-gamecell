@@ -1192,9 +1192,7 @@ await call(`/api/sales/${saleId}/receipt-values`, {
   headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
   body: JSON.stringify({
     operationId: crypto.randomUUID(),
-    receipts: [
-      { id: saleReceipt.id, amountCents: 840_000, source: 'manual' },
-    ],
+    receipts: [{ id: saleReceipt.id, amountCents: 840_000, source: 'manual' }],
   }),
 });
 await call(`/api/sales/${saleId}/order-status`, {
@@ -2270,26 +2268,23 @@ await call(`/api/sales/${activeSaleId}/payments`, {
     ),
   }),
 });
-const mixedCashCorrection = await call(
-  `/api/sales/${activeSaleId}/payments`,
-  {
-    method: 'PATCH',
-    cookie: ownerCookie,
-    headers: {
-      'content-type': 'application/json',
-      'x-csrf-token': String(finalSession.body.csrfToken),
-    },
-    body: JSON.stringify({
-      operationId: crypto.randomUUID(),
-      expectedPayments: cashSnapshot,
-      payments: cashSnapshot.map((payment) =>
-        payment.id === cashPayment.id
-          ? { ...payment, amountCents: 100_000 }
-          : payment,
-      ),
-    }),
+const mixedCashCorrection = await call(`/api/sales/${activeSaleId}/payments`, {
+  method: 'PATCH',
+  cookie: ownerCookie,
+  headers: {
+    'content-type': 'application/json',
+    'x-csrf-token': String(finalSession.body.csrfToken),
   },
-);
+  body: JSON.stringify({
+    operationId: crypto.randomUUID(),
+    expectedPayments: cashSnapshot,
+    payments: cashSnapshot.map((payment) =>
+      payment.id === cashPayment.id
+        ? { ...payment, amountCents: 100_000 }
+        : payment,
+    ),
+  }),
+});
 const mixedPaymentSnapshot = (
   mixedCashCorrection.body.payments as EditablePayment[]
 ).map(({ id, method, pixAccountId, amountCents }) => ({
@@ -3806,9 +3801,8 @@ await call(`/api/sales/${attributionId}/receipt-values`, {
     })),
   }),
 });
-const saleAfterReceiptValues = (
-  await saleForCorrection()
-) as unknown as SaleRecord;
+const saleAfterReceiptValues =
+  (await saleForCorrection()) as unknown as SaleRecord;
 assert.equal(saleAfterReceiptValues.reconciliation.status, 'reconciled');
 assert.equal(saleAfterReceiptValues.receivedTotalCents, 128400);
 assert.equal(saleAfterReceiptValues.payments.length, 2);
@@ -4068,10 +4062,7 @@ for (const amountCents of [410000, 400000]) {
     mixedSale.reconciliation.status,
     amountCents === 410000 ? 'reconciled' : 'divergent',
   );
-  assert.equal(
-    mixedSale.reconciliation.differenceCents,
-    amountCents - 410000,
-  );
+  assert.equal(mixedSale.reconciliation.differenceCents, amountCents - 410000);
   assert.equal(mixedSale.receivedDifferenceCents, amountCents - 410000);
   assert.equal(
     automaticSaleStatus(mixedSale)?.key ?? null,
@@ -4232,8 +4223,7 @@ if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
     }),
   });
   assert.equal(
-    (editedCash.body.sale as { receivedTotalCents: number })
-      .receivedTotalCents,
+    (editedCash.body.sale as { receivedTotalCents: number }).receivedTotalCents,
     128300,
   );
   const normalizedDb = new DatabaseSync(
@@ -4279,5 +4269,18 @@ if (process.env.PDV_TEST_ISOLATED_DATA_DIR) {
     currentTotal,
   );
   checkDb.close();
+}
+if (
+  process.env.PDV_TEST_STANDALONE === '1' &&
+  process.env.PDV_TEST_ISOLATED_DATA_DIR
+) {
+  const { checkPublicReportsHttp } =
+    await import('./check-public-reports-http.ts');
+  await checkPublicReportsHttp(
+    baseUrl,
+    ownerCookie,
+    accessOwnerHeaders['x-csrf-token'],
+    process.env.PDV_TEST_ISOLATED_DATA_DIR,
+  );
 }
 console.log('Production integration flow passed.');

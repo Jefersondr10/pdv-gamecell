@@ -1,9 +1,11 @@
 #!/bin/sh
-# App-only release: no schema migration, no off-site backup, no OCR restart.
+# App-only release: optional additive report migration, no off-site backup or OCR restart.
 set -eu
 release=${1:?Provide tested application tag}
 previous=${2:?Provide expected live application tag}
 commit=${3:?Provide exact tested full source revision}
+migration=${4:-none}
+case "$migration" in none|public-reports) ;; *) exit 2;; esac
 case "$release:$previous" in *[!a-zA-Z0-9:._-]*) exit 2;; esac
 test "$release" != "$previous"
 test "${#commit}" = 40
@@ -60,9 +62,12 @@ try {
   if (snapshot.prepare('PRAGMA quick_check').get().quick_check !== 'ok') throw new Error('Snapshot integrity check failed.');
   if (snapshot.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Snapshot foreign key check failed.');
 } finally { snapshot.close(); }
-console.log('Recent scheduled backup verified; on-server safety snapshot checked. No migrations or external copies.');
+console.log('Recent scheduled backup verified; on-server safety snapshot checked. No external copies.');
 NODE
 cp -p .env ".env.pre-$release"
+if test "$migration" = public-reports; then
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-public-reports-migration.mjs /data/pdv.sqlite
+fi
 rollback_needed=1
 sed -i "s/^PDV_IMAGE=.*/PDV_IMAGE=atacadoapple:$release/" .env
 docker compose -p atacadoapple --env-file .env up -d --no-deps app

@@ -5,6 +5,10 @@ const sales = readFileSync(
   'components/pdv/views/sales-production-view.tsx',
   'utf8',
 );
+const saleDetails = readFileSync(
+  'components/pdv/sale-details-dialog.tsx',
+  'utf8',
+);
 const stock = readFileSync(
   'components/pdv/views/stock-production-view.tsx',
   'utf8',
@@ -151,7 +155,7 @@ assert.doesNotMatch(
 assert.doesNotMatch(editSaleDialog, /initialSection|scrollIntoView/);
 assert.match(
   sales,
-  /type SaleEditorMode = 'full' \| 'info' \| 'payments' \| 'photos';/,
+  /type SaleEditorMode =[\s\S]*?'full'[\s\S]*?'info'[\s\S]*?'payments'[\s\S]*?'cash'[\s\S]*?'receipts'[\s\S]*?'photos';/,
 );
 assert.match(
   editSaleDialog,
@@ -160,8 +164,17 @@ assert.match(
 );
 assert.match(
   editSaleDialog,
-  /const editsPayments = mode === 'full' \|\| mode === 'payments';/,
-  'the full and focused payments editors must share receipt polling and payment logic',
+  /const editsPayments =\s*mode === 'full' \|\| mode === 'payments' \|\| mode === 'cash';/,
+  'cash editing must stay scoped to the full, combined and cash editors',
+);
+assert.match(
+  editSaleDialog,
+  /const editsReceipts =\s*mode === 'full' \|\| mode === 'payments' \|\| mode === 'receipts';/,
+  'receipt editing must stay scoped to the full, combined and receipt editors',
+);
+assert.match(
+  editSaleDialog,
+  /editsPayments \|\| editsReceipts \? sale\?\.id : undefined/,
 );
 assert.match(
   editSaleDialog,
@@ -179,7 +192,7 @@ assert.match(
 );
 assert.match(
   editSaleDialog,
-  /\.\.\.\(editsPayments \? receiptFiles : \[\]\),[\s\S]*?\.\.\.\(editsPhotos \? selectedItemFiles : \[\]\)/,
+  /\.\.\.\(editsReceipts \? receiptFiles : \[\]\),[\s\S]*?\.\.\.\(editsPhotos \? selectedItemFiles : \[\]\)/,
   'the full editor must save receipt and device-photo attachments together',
 );
 assert.match(
@@ -200,6 +213,67 @@ assert.match(
 assert.match(saleDateDialog, /showCloseButton=\{!busy\}/);
 assert.match(saleDateDialog, /type="datetime-local"/);
 
+// Inline shortcuts must reuse the existing mutation paths, preserve the
+// viewed sale/report, and never bypass permissions or an active price draft.
+assert.match(saleDetails, /const editable = sale\?\.status === 'completed'/);
+assert.match(saleDetails, /const locked = pricesBusy \|\| pricesEditing/);
+for (const [permission, label, callback] of [
+  ['canEditPayments', 'Editar pagamentos', 'onEditPayments'],
+  ['canEditReceipts', 'Editar comprovantes', 'onEditReceipts'],
+]) {
+  assert.match(
+    saleDetails,
+    new RegExp(
+      `editable\\s*&&\\s*${permission}\\s*&&\\s*\\([\\s\\S]*?label="${label}"[\\s\\S]*?disabled=\\{locked\\}[\\s\\S]*?onClick=\\{\\(\\) => ${callback}\\(sale\\)\\}`,
+    ),
+  );
+}
+const detailsHeader = saleDetails.slice(
+  saleDetails.indexOf('<DialogHeader'),
+  saleDetails.indexOf('</DialogHeader>'),
+);
+assert.equal((detailsHeader.match(/<DropdownMenuTrigger/g) ?? []).length, 1);
+assert.doesNotMatch(
+  detailsHeader,
+  /<DetailEditButton/,
+  'the header must have one Editar button instead of an icon for each field',
+);
+assert.match(
+  saleDetails,
+  /const canEditHeader = canEditParticipants \|\| canEditStatus \|\| canChangeDate/,
+);
+assert.match(detailsHeader, /editable && canEditHeader/);
+assert.match(detailsHeader, /<DropdownMenuTrigger\s+disabled=\{locked\}/);
+assert.match(
+  detailsHeader,
+  /\(canEditParticipants \|\| canEditStatus\) &&[\s\S]*?onClick=\{\(\) => onEditInfo\(sale\)\}/,
+);
+assert.match(
+  detailsHeader,
+  /canChangeDate &&[\s\S]*?onClick=\{\(\) => onChangeDate\(sale\)\}/,
+);
+assert.match(
+  sales,
+  /onEditPayments=\{\(sale\) => \{\s*setEditSaleMode\('cash'\)/,
+);
+assert.match(
+  sales,
+  /onEditReceipts=\{\(sale\) => \{\s*setEditSaleMode\('receipts'\)/,
+);
+assert.match(sales, /suspended=\{Boolean\(editSale \|\| dateSale\)\}/);
+assert.match(saleDetails, /open=\{Boolean\(sale\) && !suspended\}/);
+assert.match(sales, /if \(returnToPeriodReport && !detailSale\)/);
+assert.match(
+  saleDetails,
+  /canEditReceipts\),/,
+  'cash-only sales must still expose the receipt section to authorized users',
+);
+
 console.log(
   'Exhaustive UI audit guards passed: navigation, single-flight mutations, protected reports, sale actions/date editing and automatic-only Pix receipt reading.',
+);
+assert.doesNotMatch(
+  saleDetails,
+  /Informado manualmente/,
+  'cash rows must show only Dinheiro and the amount, without a manual-entry label',
 );

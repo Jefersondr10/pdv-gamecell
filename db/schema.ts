@@ -468,7 +468,7 @@ export const attachments = sqliteTable(
       .notNull()
       .references(() => stores.id, { onDelete: 'cascade' }),
     kind: text('kind', {
-      enum: ['entry_photo', 'item_photo', 'receipt'],
+      enum: ['entry_photo', 'item_photo', 'receipt', 'report'],
     }).notNull(),
     entryId: text('entry_id').references(() => entries.id, {
       onDelete: 'cascade',
@@ -589,6 +589,36 @@ export const fileDeletionJobs = sqliteTable(
     createdAt: integer('created_at').notNull(),
   },
   (table) => [index('idx_file_deletion_ready').on(table.nextAttemptAt)],
+);
+
+export const reportShares = sqliteTable(
+  'report_shares',
+  {
+    id: text('id').primaryKey(),
+    storeId: text('store_id')
+      .notNull()
+      .references(() => stores.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => users.id),
+    tokenHash: text('token_hash').notNull().unique(),
+    attachmentId: text('attachment_id').references(() => attachments.id, {
+      onDelete: 'set null',
+    }),
+    title: text('title').notNull(),
+    createdAt: integer('created_at').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    revokedAt: integer('revoked_at'),
+    operationId: text('operation_id').notNull(),
+  },
+  (table) => [
+    uniqueIndex('uq_report_share_operation').on(
+      table.storeId,
+      table.operationId,
+    ),
+    index('idx_report_shares_expiry').on(table.expiresAt),
+    index('idx_report_shares_store').on(table.storeId, table.createdAt),
+  ],
 );
 
 export const guideReads = sqliteTable(

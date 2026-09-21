@@ -68,6 +68,7 @@ export function routePermissions(request: Request): Permission[] | null {
     throw new HttpError(400, 'Endereço inválido.', 'INVALID_PATH');
   }
   const read = request.method === 'GET';
+  if (path === '/api/report-shares') return ['sales'];
   if (path === '/api/sales')
     return read
       ? url.searchParams.get('customerId')?.trim()

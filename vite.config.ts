@@ -39,6 +39,8 @@ export default defineConfig(async () => {
   const vps = process.env.DEPLOY_TARGET === 'vps';
   if (vps)
     return {
+      cacheDir: 'node_modules/.vite-vps',
+      optimizeDeps: { include: ['pdf-lib', 'pdfjs-dist'] },
       css: { postcss: { plugins: [tailwindcss()] } },
       resolve: {
         alias: { '@pdv-runtime': resolve('lib/server/runtime-node.ts') },
@@ -55,6 +57,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    optimizeDeps: { include: ['pdf-lib', 'pdfjs-dist'] },
     resolve: {
       alias: { '@pdv-runtime': resolve('lib/server/runtime-cloudflare.ts') },
     },

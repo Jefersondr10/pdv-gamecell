@@ -1,6 +1,12 @@
 'use client';
 import { saleReceiptIncome, receiptDrivenPayments } from '@/lib/receipt-income';
 import { ReceiptPaymentDetails } from '@/components/pdv/receipt-payment-details';
+import { FinancialReportContent } from '@/components/pdv/financial-report-content';
+import { ReportPublicShare } from '@/components/pdv/report-public-share';
+import {
+  summarizeFinancialReport,
+  type ReportDateBasis,
+} from '@/lib/financial-report';
 
 /* oxlint-disable next/no-img-element, jsx-a11y/label-has-associated-control -- report media is authenticated and the custom textarea is wrapped by its label */
 
@@ -152,7 +158,13 @@ type Grouping = 'sale' | SalesGrouping;
 type ReportLevel = 'simple' | 'detailed' | 'complete';
 type SellerRanking = 'items' | 'value';
 type IssueFilter = 'all' | SaleIssueKey;
-type SaleEditorMode = 'full' | 'info' | 'payments' | 'photos';
+type SaleEditorMode =
+  | 'full'
+  | 'info'
+  | 'payments'
+  | 'cash'
+  | 'receipts'
+  | 'photos';
 const SALE_EDITOR_COPY: Record<
   SaleEditorMode,
   { description: string; saveLabel: string; title: string }
@@ -174,6 +186,18 @@ const SALE_EDITOR_COPY: Record<
     description:
       'Confira o Pix pelos comprovantes, corrija o dinheiro recebido ou altere os preços desta venda.',
     saveLabel: 'Salvar pagamentos',
+  },
+  cash: {
+    title: 'Pagamentos recebidos',
+    description:
+      'Adicione ou corrija o recebimento em dinheiro. Para alterar o Pix, use Editar comprovantes nos detalhes da venda.',
+    saveLabel: 'Salvar pagamentos',
+  },
+  receipts: {
+    title: 'Comprovantes de pagamento',
+    description:
+      'Anexe, releia ou remova comprovantes. O Pix é atualizado automaticamente pela leitura.',
+    saveLabel: 'Salvar comprovantes',
   },
   photos: {
     title: 'Fotos dos aparelhos',
@@ -1224,7 +1248,13 @@ export function SalesProductionView({
       <SaleDetailsDialog
         key={detailSale?.id ?? 'closed-sale-details'}
         sale={detailSale}
+        suspended={Boolean(editSale || dateSale)}
         canEditPrices={can(data.user, 'sales.prices')}
+        canEditParticipants={can(data.user, 'sales.participants')}
+        canEditStatus={can(data.user, 'sales.status')}
+        canEditPayments={canPayments}
+        canEditReceipts={canManageReceipts}
+        canChangeDate={canChangeDate}
         csrfToken={data.csrfToken}
         onPricesChanged={handlePricesChanged}
         onClose={(reason) => {
@@ -1241,6 +1271,19 @@ export function SalesProductionView({
           setEditSaleMode('full');
           setEditSale(sale);
         }}
+        onEditInfo={(sale) => {
+          setEditSaleMode('info');
+          setEditSale(sale);
+        }}
+        onEditPayments={(sale) => {
+          setEditSaleMode('cash');
+          setEditSale(sale);
+        }}
+        onEditReceipts={(sale) => {
+          setEditSaleMode('receipts');
+          setEditSale(sale);
+        }}
+        onChangeDate={setDateSale}
         onCancel={setCancelSale}
         canEdit={canEdit}
         canCancel={canCancel}
@@ -1270,6 +1313,7 @@ export function SalesProductionView({
         storeName={data.store.name}
       />
       <SalesPeriodReport
+        csrfToken={data.csrfToken}
         filterParams={filterParams}
         filterSummary={reportFilterSummary}
         onOpenChange={changePeriodReportOpen}
@@ -1332,7 +1376,7 @@ export function SalesProductionView({
           if (!open) {
             setEditSale(null);
             setEditSaleMode('full');
-            if (returnToPeriodReport) {
+            if (returnToPeriodReport && !detailSale) {
               setReturnToPeriodReport(false);
               setPeriodReportOpen(true);
             }
@@ -1823,7 +1867,10 @@ function EditSaleDialog({
   const canManageReceiptContent =
     canAttachments || canReceipts || canDeleteReceipts;
   const editsInfo = mode === 'full' || mode === 'info';
-  const editsPayments = mode === 'full' || mode === 'payments';
+  const editsPayments =
+    mode === 'full' || mode === 'payments' || mode === 'cash';
+  const editsReceipts =
+    mode === 'full' || mode === 'payments' || mode === 'receipts';
   const editsPhotos = mode === 'full' || mode === 'photos';
   const [priceEditorOpen, setPriceEditorOpen] = useState(false);
   const deletedReceiptIds = useRef(new Set<string>());
@@ -1865,7 +1912,7 @@ function EditSaleDialog({
   const dirtyReceiptIds = useRef(new Set<string>());
   const [dirtyReceipts, setDirtyReceipts] = useState(new Set<string>());
   const serverReceipts = useServerReceiptJobs(
-    editsPayments ? sale?.id : undefined,
+    editsPayments || editsReceipts ? sale?.id : undefined,
     (jobs) => {
       setSavedReceiptValues((current) => {
         const next = { ...current };
@@ -2165,16 +2212,15 @@ function EditSaleDialog({
 
   const hasInfoChanges =
     participants.dirty || selectedStatusId !== currentStatusId;
+  const hasReceiptChanges =
+    receiptFiles.length > 0 || changedSavedReceiptValues.length > 0;
   const hasPaymentChanges =
-    receiptFiles.length > 0 ||
-    changedSavedReceiptValues.length > 0 ||
-    hasPaymentCorrections ||
-    queuedPayments.length > 0 ||
-    paymentMethod !== '';
+    hasPaymentCorrections || queuedPayments.length > 0 || paymentMethod !== '';
   const hasPhotoChanges = selectedItemFiles.length > 0;
   const modeHasChanges =
     (editsInfo && hasInfoChanges) ||
     (editsPayments && hasPaymentChanges) ||
+    (editsReceipts && hasReceiptChanges) ||
     (editsPhotos && hasPhotoChanges);
   const modeHasInvalidChanges =
     editsPayments &&
@@ -2182,11 +2228,11 @@ function EditSaleDialog({
       queuedPaymentCents > pendingPaymentCents ||
       (remainingPaymentCents > 0 && paymentMethod !== '' && !paymentReady));
   const selectedAttachmentFiles = [
-    ...(editsPayments ? receiptFiles : []),
+    ...(editsReceipts ? receiptFiles : []),
     ...(editsPhotos ? selectedItemFiles : []),
   ];
   const savedAttachmentCount =
-    (editsPayments ? activeReceipts.length : 0) +
+    (editsReceipts ? activeReceipts.length : 0) +
     (editsPhotos
       ? (sale?.items ?? []).reduce(
           (total, item) => total + item.photos.length,
@@ -2195,11 +2241,12 @@ function EditSaleDialog({
       : 0);
   const showAttachmentSummary =
     mode === 'full' ||
-    (mode === 'payments' && canManageReceiptContent) ||
+    (editsReceipts && canManageReceiptContent) ||
     (editsPhotos && canAttachments);
   const showSaveButton =
     (editsInfo && (canParticipants || can(data.user, 'sales.status'))) ||
-    (editsPayments && (canPayments || canReceipts || canAttachments)) ||
+    (editsPayments && canPayments) ||
+    (editsReceipts && (canReceipts || canAttachments)) ||
     (editsPhotos && canAttachments);
 
   return (
@@ -2630,7 +2677,7 @@ function EditSaleDialog({
               )}
 
               {(mode === 'full' ||
-                (mode === 'payments' && canManageReceiptContent)) && (
+                (editsReceipts && canManageReceiptContent)) && (
                 <section className="rounded-2xl border p-4">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex items-start gap-3">
@@ -3045,7 +3092,7 @@ function EditSaleDialog({
                           setCurrentStatusId(selectedStatusId);
                         }
                         if (
-                          editsPayments &&
+                          editsReceipts &&
                           changedSavedReceiptValues.length > 0
                         ) {
                           await requestJson(
@@ -3069,7 +3116,7 @@ function EditSaleDialog({
                           setDirtyReceipts(new Set(dirtyReceiptIds.current));
                         }
                         const attachmentFiles = [
-                          ...(editsPayments ? receiptFiles : []),
+                          ...(editsReceipts ? receiptFiles : []),
                           ...(editsPhotos ? selectedItemFiles : []),
                         ];
                         if (attachmentFiles.length > 0) {
@@ -3078,7 +3125,7 @@ function EditSaleDialog({
                             'operationId',
                             attachmentOperationIdRef.current,
                           );
-                          if (editsPayments) {
+                          if (editsReceipts) {
                             receiptFiles.forEach((file) =>
                               form.append('receipts', file),
                             );
@@ -3113,7 +3160,7 @@ function EditSaleDialog({
                         await onChanged();
                         if (paymentSaved) setCashEditorOpen(false);
                         if (
-                          editsPayments &&
+                          editsReceipts &&
                           canPayments &&
                           canReceipts &&
                           (receiptFiles.length > 0 || receiptValuesSaved) &&
@@ -3165,8 +3212,10 @@ function EditSaleDialog({
                       <Pencil />
                     ) : mode === 'info' ? (
                       <UsersRound />
-                    ) : mode === 'payments' ? (
+                    ) : mode === 'payments' || mode === 'cash' ? (
                       <WalletCards />
+                    ) : mode === 'receipts' ? (
+                      <Paperclip />
                     ) : (
                       <ImagePlus />
                     )}
@@ -3300,6 +3349,9 @@ function SaleReport({
   const [level, setLevel] = useState<ReportLevel>('simple');
   const [includePhotos, setIncludePhotos] = useState(false);
   const [includeReceipts, setIncludeReceipts] = useState(false);
+  const [receiptPdfMode, setReceiptPdfMode] = useState<'images' | 'original'>(
+    'images',
+  );
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState('');
   const reportRef = useRef<HTMLElement | null>(null);
@@ -3343,10 +3395,6 @@ function SaleReport({
                     key={value}
                     onClick={() => {
                       setLevel(value);
-                      if (value === 'complete') {
-                        setIncludePhotos(true);
-                        setIncludeReceipts(true);
-                      }
                     }}
                     variant={level === value ? 'default' : 'outline'}
                   >
@@ -3376,6 +3424,22 @@ function SaleReport({
                   <FileCheck2 /> Comprovantes
                 </Button>
               </div>
+              {includeReceipts && (
+                <label className="mt-2 flex items-center gap-2 text-xs font-semibold">
+                  Comprovantes PDF
+                  <select
+                    className="min-w-0 flex-1 rounded border bg-background p-2"
+                    value={receiptPdfMode}
+                    disabled={pdfBusy}
+                    onChange={(e) =>
+                      setReceiptPdfMode(e.target.value as 'images' | 'original')
+                    }
+                  >
+                    <option value="images">Converter páginas em imagens</option>
+                    <option value="original">Manter páginas originais</option>
+                  </select>
+                </label>
+              )}
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto bg-muted/25 p-3 overscroll-contain sm:p-5">
               <article
@@ -3677,6 +3741,7 @@ function SaleReport({
                       singleSale: true,
                       includePhotos,
                       includeReceipts,
+                      receiptPdfMode,
                       fileName: `venda-${String(sale.number).padStart(5, '0')}-${dateKey(sale.createdAt)}`,
                     });
                   } catch (error) {
@@ -3703,6 +3768,7 @@ function SaleReport({
 
 function SalesPeriodReport({
   open,
+  csrfToken,
   storeName,
   filterParams,
   filterSummary,
@@ -3713,6 +3779,7 @@ function SalesPeriodReport({
   onOpenSale,
 }: {
   open: boolean;
+  csrfToken: string;
   storeName: string;
   filterParams: string;
   filterSummary: string;
@@ -3722,6 +3789,22 @@ function SalesPeriodReport({
   initialLevel?: ReportLevel;
   onOpenSale: (sale: SaleRecord) => void;
 }) {
+  const [kind, setKind] = useState<'sales' | 'financial'>('sales');
+  const [dateBasis, setDateBasis] = useState<ReportDateBasis>('sale');
+  const [includePhotos, setIncludePhotos] = useState(false);
+  const [includeReceipts, setIncludeReceipts] = useState(false);
+  const [receiptPdfMode, setReceiptPdfMode] = useState<'images' | 'original'>(
+    'images',
+  );
+  const effectiveFilters = useMemo(() => {
+    const filters = new URLSearchParams(filterParams);
+    if (kind === 'financial' && dateBasis === 'receipt') {
+      filters.set('period', 'all');
+      filters.delete('day');
+      filters.delete('month');
+    }
+    return filters.toString();
+  }, [filterParams, kind, dateBasis]);
   const [level, setLevel] = useState<ReportLevel>(initialLevel);
   const [link, setLink] = useState('');
   const [linkNotice, setLinkNotice] = useState('');
@@ -3750,7 +3833,10 @@ function SalesPeriodReport({
       setPdfError('');
       setSales([]);
       setGeneratedAt(Date.now());
-      void fetchSalesForPeriodReport(filterParams)
+      void fetchSalesForPeriodReport(
+        effectiveFilters,
+        kind === 'financial' ? 2000 : PERIOD_REPORT_SALES_LIMIT,
+      )
         .then((records) => {
           if (!ignore) setSales(records);
         })
@@ -3765,7 +3851,7 @@ function SalesPeriodReport({
       ignore = true;
       window.clearTimeout(timer);
     };
-  }, [filterParams, loadRevision, open]);
+  }, [effectiveFilters, kind, loadRevision, open]);
 
   const completedSales = useMemo(
     () => sales.filter((sale) => sale.status === 'completed'),
@@ -3789,29 +3875,61 @@ function SalesPeriodReport({
     (sale) => saleIssues(sale).length > 0,
   ).length;
   const cancelledCount = sales.length - completedSales.length;
+  const reportFinancial = useMemo(
+    () => summarizeFinancialReport(sales, dateBasis, filterParams, generatedAt),
+    [sales, dateBasis, filterParams, generatedAt],
+  );
   const completeMediaStats = useMemo(
     () =>
       completedSales.reduce(
         (total, sale) => {
-          sale.receipts.forEach((receipt) => {
-            total.count += 1;
-            total.bytes += receipt.sizeBytes;
-          });
-          sale.items.forEach((item) => {
-            item.photos.forEach((photo) => {
+          if (
+            kind === 'financial' &&
+            !reportFinancial.rows.some((row) => row.saleId === sale.id)
+          )
+            return total;
+          if (includeReceipts)
+            sale.receipts.forEach((receipt) => {
+              if (
+                kind === 'financial' &&
+                !reportFinancial.rows.some(
+                  (row) => row.receiptId === receipt.id,
+                )
+              )
+                return;
               total.count += 1;
-              total.bytes += photo.sizeBytes;
+              total.bytes += receipt.sizeBytes;
             });
-          });
+          if (includePhotos)
+            sale.items.forEach((item) => {
+              item.photos.forEach((photo) => {
+                total.count += 1;
+                total.bytes += photo.sizeBytes;
+              });
+            });
           return total;
         },
         { bytes: 0, count: 0 },
       ),
-    [completedSales],
+    [completedSales, includePhotos, includeReceipts, kind, reportFinancial],
   );
   const completeMediaTooLarge =
     completeMediaStats.count > PERIOD_REPORT_MEDIA_LIMIT ||
     completeMediaStats.bytes > PERIOD_REPORT_MEDIA_BYTES_LIMIT;
+
+  const pdfOptions = {
+    storeName,
+    sales,
+    level,
+    filterSummary,
+    generatedAt,
+    kind,
+    dateBasis,
+    filters: filterParams,
+    includePhotos,
+    includeReceipts,
+    receiptPdfMode,
+  };
 
   return (
     <Dialog
@@ -3829,7 +3947,7 @@ function SalesPeriodReport({
           className="shrink-0 border-b px-4 py-3 pr-12"
           data-report-controls
         >
-          <DialogTitle>Relatório de vendas</DialogTitle>
+          <DialogTitle>Relatórios de vendas e financeiro</DialogTitle>
           <DialogDescription>
             Conferência online ou PDF, com vendas e anexos identificados.
           </DialogDescription>
@@ -3838,6 +3956,22 @@ function SalesPeriodReport({
           className="shrink-0 border-b bg-muted/30 p-2 sm:p-3"
           data-report-controls
         >
+          <div className="mb-2 grid grid-cols-2 gap-2">
+            <Button
+              disabled={pdfBusy || loading}
+              variant={kind === 'sales' ? 'default' : 'outline'}
+              onClick={() => setKind('sales')}
+            >
+              Vendas
+            </Button>
+            <Button
+              disabled={pdfBusy || loading}
+              variant={kind === 'financial' ? 'default' : 'outline'}
+              onClick={() => setKind('financial')}
+            >
+              Só financeiro
+            </Button>
+          </div>
           <div className="grid grid-cols-3 gap-1">
             {(['simple', 'detailed', 'complete'] as const).map((value) => (
               <Button
@@ -3855,7 +3989,59 @@ function SalesPeriodReport({
               </Button>
             ))}
           </div>
-          <p className="mt-2 truncate px-1 text-xs font-semibold text-muted-foreground">
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs font-semibold">
+            {kind === 'financial' && (
+              <label className="flex items-center gap-2">
+                Período por
+                <select
+                  className="rounded border bg-background p-2"
+                  value={dateBasis}
+                  disabled={loading || pdfBusy}
+                  onChange={(e) =>
+                    setDateBasis(e.target.value as ReportDateBasis)
+                  }
+                >
+                  <option value="sale">Data da venda</option>
+                  <option value="receipt">Data do recebimento</option>
+                </select>
+              </label>
+            )}
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={includePhotos}
+                disabled={pdfBusy}
+                onChange={(e) => setIncludePhotos(e.target.checked)}
+              />
+              Fotos dos aparelhos
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={includeReceipts}
+                disabled={pdfBusy}
+                onChange={(e) => setIncludeReceipts(e.target.checked)}
+              />
+              Comprovantes no PDF
+            </label>
+            {includeReceipts && (
+              <label className="flex items-center gap-2">
+                Comprovantes PDF
+                <select
+                  className="rounded border bg-background p-2"
+                  value={receiptPdfMode}
+                  disabled={pdfBusy}
+                  onChange={(e) =>
+                    setReceiptPdfMode(e.target.value as 'images' | 'original')
+                  }
+                >
+                  <option value="images">Converter páginas em imagens</option>
+                  <option value="original">Manter páginas originais</option>
+                </select>
+              </label>
+            )}
+          </div>
+          <p className="mt-2 px-1 text-xs font-semibold text-muted-foreground">
             {filterSummary}
           </p>
         </div>
@@ -3895,7 +4081,10 @@ function SalesPeriodReport({
                   {storeName}
                 </p>
                 <h2 className="mt-1 text-xl font-extrabold">
-                  Relatório de vendas · {reportName(level)}
+                  {kind === 'financial'
+                    ? 'Relatório financeiro'
+                    : 'Relatório de vendas'}{' '}
+                  · {reportName(level)}
                 </h2>
                 <p className="mt-1 text-sm font-semibold text-slate-600">
                   {filterSummary}
@@ -3905,456 +4094,492 @@ function SalesPeriodReport({
                 </p>
               </header>
 
-              <dl className="report-section mt-4 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                <div className="col-span-3 overflow-hidden rounded-xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-cyan-600 p-4 text-white shadow-sm sm:col-span-2">
-                  <dt className="text-xs font-black uppercase tracking-[.1em] text-emerald-50/90">
-                    {reportAmountLabel(period)}
-                  </dt>
-                  <dd className="mt-1 text-2xl font-black tracking-[-.04em] sm:text-3xl">
-                    {formatMoney(amountCents)}
-                  </dd>
-                </div>
-                <ReportMetric
-                  label="Vendas concluídas"
-                  value={String(completedSales.length)}
+              {kind === 'financial' ? (
+                <FinancialReportContent
+                  sales={sales}
+                  basis={dateBasis}
+                  filters={filterParams}
+                  generatedAt={generatedAt}
+                  level={level}
+                  onOpenSale={onOpenSale}
                 />
-                <ReportMetric label="Aparelhos" value={String(itemCount)} />
-                <ReportMetric label="Avisos" value={String(alertCount)} />
-              </dl>
+              ) : (
+                <>
+                  <dl className="report-section mt-4 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                    <div className="col-span-3 overflow-hidden rounded-xl bg-gradient-to-br from-emerald-700 via-emerald-600 to-cyan-600 p-4 text-white shadow-sm sm:col-span-2">
+                      <dt className="text-xs font-black uppercase tracking-[.1em] text-emerald-50/90">
+                        {reportAmountLabel(period)}
+                      </dt>
+                      <dd className="mt-1 text-2xl font-black tracking-[-.04em] sm:text-3xl">
+                        {formatMoney(amountCents)}
+                      </dd>
+                    </div>
+                    <ReportMetric
+                      label="Vendas concluídas"
+                      value={String(completedSales.length)}
+                    />
+                    <ReportMetric label="Aparelhos" value={String(itemCount)} />
+                    <ReportMetric label="Avisos" value={String(alertCount)} />
+                  </dl>
 
-              <SalesReportPayments summary={paymentSummary} />
+                  <SalesReportPayments summary={paymentSummary} />
 
-              {cancelledCount > 0 && (
-                <p className="report-section mt-3 rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
-                  {cancelledCount}{' '}
-                  {cancelledCount === 1
-                    ? 'venda cancelada aparece'
-                    : 'vendas canceladas aparecem'}{' '}
-                  apenas para registro e não entram nos totais.
-                </p>
-              )}
-
-              {level === 'complete' && completeMediaTooLarge && (
-                <div className="report-section mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-                  <p className="font-extrabold">
-                    Reduza o período para incluir as fotos com segurança.
-                  </p>
-                  <p className="mt-1">
-                    Este filtro possui {completeMediaStats.count} arquivos (
-                    {formatMediaBytes(completeMediaStats.bytes)}). O relatório
-                    completo aceita até {PERIOD_REPORT_MEDIA_LIMIT} arquivos e{' '}
-                    {formatMediaBytes(PERIOD_REPORT_MEDIA_BYTES_LIMIT)} por vez
-                    para não travar o celular. Os relatórios simplificado e
-                    detalhado continuam disponíveis.
-                  </p>
-                </div>
-              )}
-
-              <section className="report-section mt-5">
-                <h3 className="font-extrabold">Quantidade por aparelho</h3>
-                <div className="mt-2 space-y-2">
-                  {modelGroups.length === 0 ? (
-                    <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">
-                      Nenhum aparelho vendido neste filtro.
+                  {cancelledCount > 0 && (
+                    <p className="report-section mt-3 rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                      {cancelledCount}{' '}
+                      {cancelledCount === 1
+                        ? 'venda cancelada aparece'
+                        : 'vendas canceladas aparecem'}{' '}
+                      apenas para registro e não entram nos totais.
                     </p>
-                  ) : (
-                    modelGroups.map((group) => (
-                      <div
-                        className="report-row rounded-lg border border-slate-200 p-3"
-                        key={group.key}
-                      >
-                        <div className="flex justify-between gap-3">
-                          <span>
-                            <strong>{group.name}</strong>
-                            <span className="block text-xs text-slate-600">
-                              {group.detail}
-                            </span>
-                          </span>
-                          <strong>{group.items.length}</strong>
-                        </div>
-                        {level !== 'simple' && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {group.items.map(({ item, sale }) => (
-                              <code
-                                className="rounded bg-slate-100 px-2 py-1 text-xs"
-                                key={`${sale.id}:${item.id}`}
-                              >
-                                {item.serial} · #
-                                {String(sale.number).padStart(5, '0')}
-                              </code>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))
                   )}
-                </div>
-              </section>
 
-              <section className="mt-5">
-                <h3 className="report-section font-extrabold">
-                  Vendas separadas por dia
-                </h3>
-                <div className="mt-2 space-y-5">
-                  {sales.length === 0 ? (
-                    <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">
-                      Nenhuma venda encontrada neste filtro.
-                    </p>
-                  ) : (
-                    dayGroups.map((day) => (
-                      <section
-                        className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2 sm:p-3"
-                        key={day.key}
-                      >
-                        <header className="report-section grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl bg-gradient-to-r from-slate-950 to-blue-950 px-3 py-3 text-white">
-                          <div className="min-w-0">
-                            <p className="break-words text-sm font-black leading-tight">
-                              {formatReportDay(day.newestAt)}
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-blue-100">
-                              {day.completedCount}{' '}
-                              {day.completedCount === 1
-                                ? 'venda concluída'
-                                : 'vendas concluídas'}{' '}
-                              · {day.itemCount}{' '}
-                              {day.itemCount === 1 ? 'aparelho' : 'aparelhos'}
-                            </p>
-                          </div>
-                          <div className="shrink-0 text-right">
-                            <p className="text-xs font-black uppercase tracking-[.1em] text-blue-200">
-                              Total do dia
-                            </p>
-                            <strong className="mt-0.5 block text-lg leading-none">
-                              {formatMoney(day.totalCents)}
-                            </strong>
-                          </div>
-                        </header>
+                  {completeMediaTooLarge && (
+                    <div className="report-section mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                      <p className="font-extrabold">
+                        Reduza o período para incluir as fotos com segurança.
+                      </p>
+                      <p className="mt-1">
+                        Este filtro possui {completeMediaStats.count} arquivos (
+                        {formatMediaBytes(completeMediaStats.bytes)}). O
+                        relatório completo aceita até{' '}
+                        {PERIOD_REPORT_MEDIA_LIMIT} arquivos e{' '}
+                        {formatMediaBytes(PERIOD_REPORT_MEDIA_BYTES_LIMIT)} por
+                        vez para não travar o celular. Os relatórios
+                        simplificado e detalhado continuam disponíveis.
+                      </p>
+                    </div>
+                  )}
 
-                        <div className="mt-3 space-y-3">
-                          {day.sales.map((sale) => (
-                            <section
-                              className={cn(
-                                'report-row rounded-xl border-2 p-3 shadow-sm',
-                                sale.status === 'cancelled' &&
-                                  'border-slate-300 bg-slate-100/80',
-                                sale.status === 'completed' &&
-                                  sale.receivedDifferenceCents < 0 &&
-                                  'border-rose-300 bg-rose-50/30',
-                                sale.status === 'completed' &&
-                                  sale.receivedDifferenceCents > 0 &&
-                                  'border-violet-300 bg-violet-50/30',
-                                saleFinancialSummary(sale).reconciled &&
-                                  'border-emerald-300 bg-emerald-50/30',
-                                sale.status === 'completed' &&
-                                  !saleFinancialSummary(sale).reconciled &&
-                                  'border-amber-300 bg-amber-50/30',
-                              )}
-                              key={sale.id}
-                            >
-                              <div
-                                className={cn(
-                                  'grid gap-3 rounded-lg p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center',
-                                  sale.status === 'cancelled'
-                                    ? 'bg-slate-200/70'
-                                    : sale.receivedDifferenceCents < 0
-                                      ? 'bg-rose-100/80'
-                                      : sale.receivedDifferenceCents > 0
-                                        ? 'bg-violet-100/80'
-                                        : saleFinancialSummary(sale).reconciled
-                                          ? 'bg-emerald-100/80'
-                                          : 'bg-amber-50',
-                                )}
-                              >
-                                <div className="min-w-0">
-                                  <p className="break-words font-extrabold leading-tight">
-                                    Venda #
-                                    {String(sale.number).padStart(5, '0')} ·{' '}
-                                    {sale.customerName}
-                                  </p>
-                                  <p className="mt-1 break-words text-xs text-slate-600">
-                                    {formatDateTime(sale.createdAt)} ·{' '}
-                                    {sale.sellerName}
-                                  </p>
-                                  <div className="mt-2">
-                                    <SaleStatusBadge sale={sale} />
-                                    <SaleIssuesNotice
-                                      issueKeys={saleIssues(sale).map(
-                                        (issue) => issue.key,
-                                      )}
-                                    />
-                                  </div>
-                                  {saleFinancialSummary(sale).receiptText && (
-                                    <p
-                                      className={cn(
-                                        'mt-1 text-xs font-semibold',
-                                        saleFinancialSummary(sale)
-                                          .receiptWarning
-                                          ? 'text-amber-900'
-                                          : 'text-slate-600',
-                                      )}
-                                    >
-                                      {saleFinancialSummary(sale).receiptText}
-                                    </p>
-                                  )}
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="mt-2"
-                                    onClick={() => onOpenSale(sale)}
-                                    data-report-controls
+                  <section className="report-section mt-5">
+                    <h3 className="font-extrabold">Quantidade por aparelho</h3>
+                    <div className="mt-2 space-y-2">
+                      {modelGroups.length === 0 ? (
+                        <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">
+                          Nenhum aparelho vendido neste filtro.
+                        </p>
+                      ) : (
+                        modelGroups.map((group) => (
+                          <div
+                            className="report-row rounded-lg border border-slate-200 p-3"
+                            key={group.key}
+                          >
+                            <div className="flex justify-between gap-3">
+                              <span>
+                                <strong>{group.name}</strong>
+                                <span className="block text-xs text-slate-600">
+                                  {group.detail}
+                                </span>
+                              </span>
+                              <strong>{group.items.length}</strong>
+                            </div>
+                            {level !== 'simple' && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {group.items.map(({ item, sale }) => (
+                                  <code
+                                    className="rounded bg-slate-100 px-2 py-1 text-xs"
+                                    key={`${sale.id}:${item.id}`}
                                   >
-                                    Abrir venda
-                                  </Button>
-                                </div>
-
-                                {sale.status === 'cancelled' ? (
-                                  <strong className="rounded-full bg-slate-700 px-3 py-1 text-center text-xs text-white sm:justify-self-end">
-                                    Cancelada
-                                  </strong>
-                                ) : (
-                                  <div className="sm:min-w-64">
-                                    <PaymentComparisonLabel
-                                      className="mb-1 justify-start sm:justify-end"
-                                      comparison={getPaymentComparison(sale)}
-                                      surface="report"
-                                    />
-                                    <dl className="grid grid-cols-2 gap-2">
-                                      <div className="rounded-lg bg-white/80 px-2 py-2">
-                                        <dt className="text-xs font-black uppercase tracking-wide text-slate-500">
-                                          Valor da venda
-                                        </dt>
-                                        <dd className="mt-0.5 break-words text-sm font-extrabold">
-                                          {formatMoney(sale.productsTotalCents)}
-                                        </dd>
-                                      </div>
-                                      <div className="rounded-lg bg-white/80 px-2 py-2">
-                                        <dt className="text-xs font-black uppercase tracking-wide text-slate-500">
-                                          Total pago
-                                        </dt>
-                                        <dd className="mt-0.5 break-words text-sm font-extrabold">
-                                          {formatMoney(sale.receivedTotalCents)}
-                                        </dd>
-                                      </div>
-                                    </dl>
-                                  </div>
-                                )}
-                              </div>
-
-                              {sale.status === 'completed' &&
-                                sale.receivedDifferenceCents !== 0 && (
-                                  <p
-                                    className={cn(
-                                      'mt-2 rounded-lg border px-3 py-2 text-sm font-extrabold',
-                                      sale.receivedDifferenceCents < 0
-                                        ? 'border-rose-200 bg-rose-100 text-rose-950'
-                                        : 'border-violet-200 bg-violet-100 text-violet-950',
-                                    )}
-                                  >
-                                    {paymentDifferenceText(sale)}
-                                  </p>
-                                )}
-
-                              <div className="mt-2 divide-y divide-slate-100">
-                                {sale.items.map((item) => (
-                                  <div
-                                    className="flex items-start justify-between gap-3 py-2 text-sm"
-                                    key={item.id}
-                                  >
-                                    <span className="min-w-0">
-                                      <strong>{item.productName}</strong>
-                                      <span className="block text-xs text-slate-600">
-                                        {item.productDetail}
-                                        {level !== 'simple'
-                                          ? ` · SN ${item.serial}`
-                                          : ''}
-                                      </span>
-                                    </span>
-                                    <strong className="shrink-0">
-                                      {formatMoney(item.soldPriceCents)}
-                                    </strong>
-                                  </div>
+                                    {item.serial} · #
+                                    {String(sale.number).padStart(5, '0')}
+                                  </code>
                                 ))}
                               </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </section>
 
-                              {level !== 'simple' &&
-                                sale.status === 'completed' && (
-                                  <div className="mt-2 rounded-lg bg-slate-50 p-2 text-xs">
-                                    <p className="font-extrabold">Pagamentos</p>
-                                    {receiptDrivenPayments(sale).length ===
-                                    0 ? (
-                                      <p className="mt-1 text-amber-800">
-                                        Pagamento não informado — pendente
-                                      </p>
-                                    ) : (
-                                      receiptDrivenPayments(sale).map(
-                                        (payment) => (
-                                          <p
-                                            className="mt-1 flex justify-between gap-3"
-                                            key={payment.id}
-                                          >
-                                            <span>
-                                              {payment.method === 'pix'
-                                                ? `Pix · ${payment.recipientName || 'Recebedor não identificado'}`
-                                                : 'Dinheiro'}
-                                            </span>
-                                            <strong>
-                                              {formatMoney(payment.amountCents)}
-                                            </strong>
-                                          </p>
-                                        ),
-                                      )
+                  <section className="mt-5">
+                    <h3 className="report-section font-extrabold">
+                      Vendas separadas por dia
+                    </h3>
+                    <div className="mt-2 space-y-5">
+                      {sales.length === 0 ? (
+                        <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">
+                          Nenhuma venda encontrada neste filtro.
+                        </p>
+                      ) : (
+                        dayGroups.map((day) => (
+                          <section
+                            className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2 sm:p-3"
+                            key={day.key}
+                          >
+                            <header className="report-section grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl bg-gradient-to-r from-slate-950 to-blue-950 px-3 py-3 text-white">
+                              <div className="min-w-0">
+                                <p className="break-words text-sm font-black leading-tight">
+                                  {formatReportDay(day.newestAt)}
+                                </p>
+                                <p className="mt-1 text-xs font-semibold text-blue-100">
+                                  {day.completedCount}{' '}
+                                  {day.completedCount === 1
+                                    ? 'venda concluída'
+                                    : 'vendas concluídas'}{' '}
+                                  · {day.itemCount}{' '}
+                                  {day.itemCount === 1
+                                    ? 'aparelho'
+                                    : 'aparelhos'}
+                                </p>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <p className="text-xs font-black uppercase tracking-[.1em] text-blue-200">
+                                  Total do dia
+                                </p>
+                                <strong className="mt-0.5 block text-lg leading-none">
+                                  {formatMoney(day.totalCents)}
+                                </strong>
+                              </div>
+                            </header>
+
+                            <div className="mt-3 space-y-3">
+                              {day.sales.map((sale) => (
+                                <section
+                                  className={cn(
+                                    'report-row rounded-xl border-2 p-3 shadow-sm',
+                                    sale.status === 'cancelled' &&
+                                      'border-slate-300 bg-slate-100/80',
+                                    sale.status === 'completed' &&
+                                      sale.receivedDifferenceCents < 0 &&
+                                      'border-rose-300 bg-rose-50/30',
+                                    sale.status === 'completed' &&
+                                      sale.receivedDifferenceCents > 0 &&
+                                      'border-violet-300 bg-violet-50/30',
+                                    saleFinancialSummary(sale).reconciled &&
+                                      'border-emerald-300 bg-emerald-50/30',
+                                    sale.status === 'completed' &&
+                                      !saleFinancialSummary(sale).reconciled &&
+                                      'border-amber-300 bg-amber-50/30',
+                                  )}
+                                  key={sale.id}
+                                >
+                                  <div
+                                    className={cn(
+                                      'grid gap-3 rounded-lg p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center',
+                                      sale.status === 'cancelled'
+                                        ? 'bg-slate-200/70'
+                                        : sale.receivedDifferenceCents < 0
+                                          ? 'bg-rose-100/80'
+                                          : sale.receivedDifferenceCents > 0
+                                            ? 'bg-violet-100/80'
+                                            : saleFinancialSummary(sale)
+                                                  .reconciled
+                                              ? 'bg-emerald-100/80'
+                                              : 'bg-amber-50',
                                     )}
-                                    <ReceiptPaymentDetails
-                                      financiallyReconciled={
-                                        sale.reconciliation.status ===
-                                          'reconciled' &&
-                                        sale.receivedDifferenceCents === 0
-                                      }
-                                      receipts={sale.receipts}
-                                      required={
-                                        sale.reconciliation.status !==
-                                        'not_required'
-                                      }
-                                    />
-                                  </div>
-                                )}
-
-                              {level === 'complete' &&
-                                sale.status === 'completed' &&
-                                (sale.receipts.length > 0 ||
-                                  sale.reconciliation.status !==
-                                    'not_required') && (
-                                  <div className="mt-2 space-y-2">
-                                    <div
-                                      className={cn(
-                                        'rounded-lg px-3 py-2 text-xs',
-                                        sale.reconciliation.status ===
-                                          'reconciled' &&
-                                          'bg-emerald-50 text-emerald-950',
-                                        sale.reconciliation.status ===
-                                          'pending' &&
-                                          'bg-amber-50 text-amber-950',
-                                        sale.reconciliation.status ===
-                                          'divergent' &&
-                                          'bg-rose-50 text-rose-950',
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="break-words font-extrabold leading-tight">
+                                        Venda #
+                                        {String(sale.number).padStart(5, '0')} ·{' '}
+                                        {sale.customerName}
+                                      </p>
+                                      <p className="mt-1 break-words text-xs text-slate-600">
+                                        {formatDateTime(sale.createdAt)} ·{' '}
+                                        {sale.sellerName}
+                                      </p>
+                                      <div className="mt-2">
+                                        <SaleStatusBadge sale={sale} />
+                                        <SaleIssuesNotice
+                                          issueKeys={saleIssues(sale).map(
+                                            (issue) => issue.key,
+                                          )}
+                                        />
+                                      </div>
+                                      {saleFinancialSummary(sale)
+                                        .receiptText && (
+                                        <p
+                                          className={cn(
+                                            'mt-1 text-xs font-semibold',
+                                            saleFinancialSummary(sale)
+                                              .receiptWarning
+                                              ? 'text-amber-900'
+                                              : 'text-slate-600',
+                                          )}
+                                        >
+                                          {
+                                            saleFinancialSummary(sale)
+                                              .receiptText
+                                          }
+                                        </p>
                                       )}
-                                    >
-                                      <p className="font-extrabold">
-                                        {sale.reconciliation.status ===
-                                        'reconciled'
-                                          ? 'Comprovantes conferem com o Pix'
-                                          : sale.reconciliation.status ===
-                                              'divergent'
-                                            ? 'Comprovantes não conferem'
-                                            : 'Conciliação pendente'}
-                                      </p>
-                                      <p>
-                                        Comprovantes:{' '}
-                                        {formatMoney(
-                                          sale.reconciliation
-                                            .confirmedTotalCents,
-                                        )}{' '}
-                                        ·{' '}
-                                        {receiptTargetLabel(
-                                          saleReceiptIncome(sale).cashCents,
-                                        )}
-                                        :{' '}
-                                        {formatMoney(
-                                          saleReceiptIncome(sale)
-                                            .receiptTargetCents,
-                                        )}
-                                        {sale.reconciliation.status ===
-                                        'divergent'
-                                          ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(saleReceiptIncome(sale).cashCents)}`
-                                          : ''}
-                                      </p>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="mt-2"
+                                        onClick={() => onOpenSale(sale)}
+                                        data-report-controls
+                                      >
+                                        Abrir venda
+                                      </Button>
                                     </div>
 
-                                    {!completeMediaTooLarge &&
-                                      sale.items.some(
-                                        (item) => item.photos.length > 0,
-                                      ) && (
-                                        <div>
-                                          <p className="text-xs font-extrabold">
-                                            Fotos dos aparelhos
-                                          </p>
-                                          <div className="mt-1 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                                            {sale.items.flatMap((item) =>
-                                              item.photos.map((photo) => (
-                                                <a
-                                                  href={photo.url}
-                                                  key={photo.id}
-                                                  rel="noreferrer"
-                                                  target="_blank"
-                                                >
-                                                  <img
-                                                    alt={`${item.productName} · SN ${item.serial}`}
-                                                    className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
-                                                    decoding="async"
-                                                    loading="lazy"
-                                                    src={photo.url}
-                                                  />
-                                                </a>
-                                              )),
-                                            )}
+                                    {sale.status === 'cancelled' ? (
+                                      <strong className="rounded-full bg-slate-700 px-3 py-1 text-center text-xs text-white sm:justify-self-end">
+                                        Cancelada
+                                      </strong>
+                                    ) : (
+                                      <div className="sm:min-w-64">
+                                        <PaymentComparisonLabel
+                                          className="mb-1 justify-start sm:justify-end"
+                                          comparison={getPaymentComparison(
+                                            sale,
+                                          )}
+                                          surface="report"
+                                        />
+                                        <dl className="grid grid-cols-2 gap-2">
+                                          <div className="rounded-lg bg-white/80 px-2 py-2">
+                                            <dt className="text-xs font-black uppercase tracking-wide text-slate-500">
+                                              Valor da venda
+                                            </dt>
+                                            <dd className="mt-0.5 break-words text-sm font-extrabold">
+                                              {formatMoney(
+                                                sale.productsTotalCents,
+                                              )}
+                                            </dd>
                                           </div>
-                                        </div>
-                                      )}
-
-                                    {!completeMediaTooLarge &&
-                                      sale.receipts.length > 0 && (
-                                        <div>
-                                          <p className="text-xs font-extrabold">
-                                            Comprovantes da venda #
-                                            {String(sale.number).padStart(
-                                              5,
-                                              '0',
-                                            )}
-                                          </p>
-                                          <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                                            {sale.receipts.map((receipt) =>
-                                              receipt.mimeType ===
-                                              'application/pdf' ? (
-                                                <a
-                                                  className="rounded-lg border border-slate-200 p-3 text-xs font-bold"
-                                                  href={receipt.url}
-                                                  key={receipt.id}
-                                                  rel="noreferrer"
-                                                  target="_blank"
-                                                >
-                                                  <FileText className="mb-1 size-4" />
-                                                  {receipt.name}
-                                                </a>
-                                              ) : (
-                                                <a
-                                                  href={receipt.url}
-                                                  key={receipt.id}
-                                                  rel="noreferrer"
-                                                  target="_blank"
-                                                >
-                                                  <img
-                                                    alt={receipt.name}
-                                                    className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
-                                                    decoding="async"
-                                                    loading="lazy"
-                                                    src={receipt.url}
-                                                  />
-                                                </a>
-                                              ),
-                                            )}
+                                          <div className="rounded-lg bg-white/80 px-2 py-2">
+                                            <dt className="text-xs font-black uppercase tracking-wide text-slate-500">
+                                              Total pago
+                                            </dt>
+                                            <dd className="mt-0.5 break-words text-sm font-extrabold">
+                                              {formatMoney(
+                                                sale.receivedTotalCents,
+                                              )}
+                                            </dd>
                                           </div>
-                                        </div>
-                                      )}
+                                        </dl>
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                            </section>
-                          ))}
-                        </div>
-                      </section>
-                    ))
-                  )}
-                </div>
-              </section>
+
+                                  {sale.status === 'completed' &&
+                                    sale.receivedDifferenceCents !== 0 && (
+                                      <p
+                                        className={cn(
+                                          'mt-2 rounded-lg border px-3 py-2 text-sm font-extrabold',
+                                          sale.receivedDifferenceCents < 0
+                                            ? 'border-rose-200 bg-rose-100 text-rose-950'
+                                            : 'border-violet-200 bg-violet-100 text-violet-950',
+                                        )}
+                                      >
+                                        {paymentDifferenceText(sale)}
+                                      </p>
+                                    )}
+
+                                  <div className="mt-2 divide-y divide-slate-100">
+                                    {sale.items.map((item) => (
+                                      <div
+                                        className="flex items-start justify-between gap-3 py-2 text-sm"
+                                        key={item.id}
+                                      >
+                                        <span className="min-w-0">
+                                          <strong>{item.productName}</strong>
+                                          <span className="block text-xs text-slate-600">
+                                            {item.productDetail}
+                                            {level !== 'simple'
+                                              ? ` · SN ${item.serial}`
+                                              : ''}
+                                          </span>
+                                        </span>
+                                        <strong className="shrink-0">
+                                          {formatMoney(item.soldPriceCents)}
+                                        </strong>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {level !== 'simple' &&
+                                    sale.status === 'completed' && (
+                                      <div className="mt-2 rounded-lg bg-slate-50 p-2 text-xs">
+                                        <p className="font-extrabold">
+                                          Pagamentos
+                                        </p>
+                                        {receiptDrivenPayments(sale).length ===
+                                        0 ? (
+                                          <p className="mt-1 text-amber-800">
+                                            Pagamento não informado — pendente
+                                          </p>
+                                        ) : (
+                                          receiptDrivenPayments(sale).map(
+                                            (payment) => (
+                                              <p
+                                                className="mt-1 flex justify-between gap-3"
+                                                key={payment.id}
+                                              >
+                                                <span>
+                                                  {payment.method === 'pix'
+                                                    ? `Pix · ${payment.recipientName || 'Recebedor não identificado'}`
+                                                    : 'Dinheiro'}
+                                                </span>
+                                                <strong>
+                                                  {formatMoney(
+                                                    payment.amountCents,
+                                                  )}
+                                                </strong>
+                                              </p>
+                                            ),
+                                          )
+                                        )}
+                                        <ReceiptPaymentDetails
+                                          financiallyReconciled={
+                                            sale.reconciliation.status ===
+                                              'reconciled' &&
+                                            sale.receivedDifferenceCents === 0
+                                          }
+                                          receipts={sale.receipts}
+                                          required={
+                                            sale.reconciliation.status !==
+                                            'not_required'
+                                          }
+                                        />
+                                      </div>
+                                    )}
+
+                                  {(level === 'complete' ||
+                                    includePhotos ||
+                                    includeReceipts) &&
+                                    sale.status === 'completed' &&
+                                    (includePhotos ||
+                                      sale.receipts.length > 0 ||
+                                      sale.reconciliation.status !==
+                                        'not_required') && (
+                                      <div className="mt-2 space-y-2">
+                                        <div
+                                          className={cn(
+                                            'rounded-lg px-3 py-2 text-xs',
+                                            sale.reconciliation.status ===
+                                              'reconciled' &&
+                                              'bg-emerald-50 text-emerald-950',
+                                            sale.reconciliation.status ===
+                                              'pending' &&
+                                              'bg-amber-50 text-amber-950',
+                                            sale.reconciliation.status ===
+                                              'divergent' &&
+                                              'bg-rose-50 text-rose-950',
+                                          )}
+                                        >
+                                          <p className="font-extrabold">
+                                            {sale.reconciliation.status ===
+                                            'reconciled'
+                                              ? 'Comprovantes conferem com o Pix'
+                                              : sale.reconciliation.status ===
+                                                  'divergent'
+                                                ? 'Comprovantes não conferem'
+                                                : 'Conciliação pendente'}
+                                          </p>
+                                          <p>
+                                            Comprovantes:{' '}
+                                            {formatMoney(
+                                              sale.reconciliation
+                                                .confirmedTotalCents,
+                                            )}{' '}
+                                            ·{' '}
+                                            {receiptTargetLabel(
+                                              saleReceiptIncome(sale).cashCents,
+                                            )}
+                                            :{' '}
+                                            {formatMoney(
+                                              saleReceiptIncome(sale)
+                                                .receiptTargetCents,
+                                            )}
+                                            {sale.reconciliation.status ===
+                                            'divergent'
+                                              ? ` · Diferença: ${formatMoney(Math.abs(sale.reconciliation.differenceCents ?? 0))} ${(sale.reconciliation.differenceCents ?? 0) < 0 ? 'abaixo' : 'acima'} do ${receiptTargetLabel(saleReceiptIncome(sale).cashCents)}`
+                                              : ''}
+                                          </p>
+                                        </div>
+
+                                        {includePhotos &&
+                                          !completeMediaTooLarge &&
+                                          sale.items.some(
+                                            (item) => item.photos.length > 0,
+                                          ) && (
+                                            <div>
+                                              <p className="text-xs font-extrabold">
+                                                Fotos dos aparelhos
+                                              </p>
+                                              <div className="mt-1 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                                                {sale.items.flatMap((item) =>
+                                                  item.photos.map((photo) => (
+                                                    <a
+                                                      href={photo.url}
+                                                      key={photo.id}
+                                                      rel="noreferrer"
+                                                      target="_blank"
+                                                    >
+                                                      <img
+                                                        alt={`${item.productName} · SN ${item.serial}`}
+                                                        className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                                        decoding="async"
+                                                        loading="lazy"
+                                                        src={photo.url}
+                                                      />
+                                                    </a>
+                                                  )),
+                                                )}
+                                              </div>
+                                            </div>
+                                          )}
+
+                                        {includeReceipts &&
+                                          !completeMediaTooLarge &&
+                                          sale.receipts.length > 0 && (
+                                            <div>
+                                              <p className="text-xs font-extrabold">
+                                                Comprovantes da venda #
+                                                {String(sale.number).padStart(
+                                                  5,
+                                                  '0',
+                                                )}
+                                              </p>
+                                              <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                                {sale.receipts.map((receipt) =>
+                                                  receipt.mimeType ===
+                                                  'application/pdf' ? (
+                                                    <a
+                                                      className="rounded-lg border border-slate-200 p-3 text-xs font-bold"
+                                                      href={receipt.url}
+                                                      key={receipt.id}
+                                                      rel="noreferrer"
+                                                      target="_blank"
+                                                    >
+                                                      <FileText className="mb-1 size-4" />
+                                                      {receipt.name}
+                                                    </a>
+                                                  ) : (
+                                                    <a
+                                                      href={receipt.url}
+                                                      key={receipt.id}
+                                                      rel="noreferrer"
+                                                      target="_blank"
+                                                    >
+                                                      <img
+                                                        alt={receipt.name}
+                                                        className="aspect-square w-full rounded-lg border border-slate-200 object-cover"
+                                                        decoding="async"
+                                                        loading="lazy"
+                                                        src={receipt.url}
+                                                      />
+                                                    </a>
+                                                  ),
+                                                )}
+                                              </div>
+                                            </div>
+                                          )}
+                                      </div>
+                                    )}
+                                </section>
+                              ))}
+                            </div>
+                          </section>
+                        ))
+                      )}
+                    </div>
+                  </section>
+                </>
+              )}
             </article>
           )}
         </div>
@@ -4362,20 +4587,23 @@ function SalesPeriodReport({
           className="m-0 shrink-0 rounded-none border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:flex-wrap"
           data-report-controls
         >
-          {link && linkSignature === `${level}:${filterParams}` && (
-            <div className="w-full min-w-0 text-left sm:basis-full">
-              <Input
-                aria-label="Link do relatório"
-                readOnly
-                value={link}
-                onFocus={(event) => event.target.select()}
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                {linkNotice} Somente usuários autorizados da loja. Mostra dados
-                atualizados; períodos relativos acompanham a data de abertura.
-              </p>
-            </div>
-          )}
+          {kind === 'sales' &&
+            link &&
+            linkSignature === `${level}:${filterParams}` && (
+              <div className="w-full min-w-0 text-left sm:basis-full">
+                <Input
+                  aria-label="Link do relatório"
+                  readOnly
+                  value={link}
+                  onFocus={(event) => event.target.select()}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {linkNotice} Somente usuários autorizados da loja. Mostra
+                  dados atualizados; períodos relativos acompanham a data de
+                  abertura.
+                </p>
+              </div>
+            )}
           <Button
             variant="outline"
             disabled={loading || pdfBusy}
@@ -4383,30 +4611,39 @@ function SalesPeriodReport({
           >
             <RefreshCw /> Atualizar
           </Button>
-          <Button
-            variant="outline"
-            disabled={loading || Boolean(loadError) || pdfBusy}
-            onClick={async () => {
-              try {
-                const url = new URL(
-                  salesReportPath(storeId, level, filterParams),
-                  window.location.origin,
-                ).toString();
-                setLink(url);
-                setLinkSignature(`${level}:${filterParams}`);
+          {kind === 'sales' && (
+            <Button
+              variant="outline"
+              disabled={loading || Boolean(loadError) || pdfBusy}
+              onClick={async () => {
                 try {
-                  await navigator.clipboard.writeText(url);
-                  setLinkNotice('Link copiado.');
-                } catch {
-                  setLinkNotice('Selecione o campo acima para copiar.');
+                  const url = new URL(
+                    salesReportPath(storeId, level, filterParams),
+                    window.location.origin,
+                  ).toString();
+                  setLink(url);
+                  setLinkSignature(`${level}:${filterParams}`);
+                  try {
+                    await navigator.clipboard.writeText(url);
+                    setLinkNotice('Link copiado.');
+                  } catch {
+                    setLinkNotice('Selecione o campo acima para copiar.');
+                  }
+                } catch (error) {
+                  setPdfError(messageOf(error));
                 }
-              } catch (error) {
-                setPdfError(messageOf(error));
-              }
-            }}
-          >
-            <Link2 /> Copiar link
-          </Button>
+              }}
+            >
+              <Link2 /> Link interno
+            </Button>
+          )}
+          <ReportPublicShare
+            options={pdfOptions}
+            csrfToken={csrfToken}
+            disabled={loading || pdfBusy}
+            canCreate={!loadError && sales.length > 0 && !completeMediaTooLarge}
+            onBusyChange={setPdfBusy}
+          />
           {pdfError && (
             <p className="mr-auto text-left text-sm font-semibold text-destructive">
               {pdfError}
@@ -4425,7 +4662,7 @@ function SalesPeriodReport({
               Boolean(loadError) ||
               pdfBusy ||
               sales.length === 0 ||
-              (level === 'complete' && completeMediaTooLarge)
+              completeMediaTooLarge
             }
             onClick={async () => {
               if (!reportRef.current) return;
@@ -4435,12 +4672,8 @@ function SalesPeriodReport({
                 const { downloadSalesReportPdf } =
                   await import('@/lib/sales-report-pdf');
                 await downloadSalesReportPdf({
-                  storeName,
-                  sales,
-                  level,
-                  filterSummary,
-                  generatedAt,
-                  fileName: `relatorio-vendas-${dateKey(Date.now())}-${reportName(level)}`,
+                  ...pdfOptions,
+                  fileName: `relatorio-${kind === 'financial' ? 'financeiro' : 'vendas'}-${dateKey(Date.now())}-${reportName(level)}`,
                 });
               } catch (error) {
                 setPdfError(messageOf(error));
@@ -4458,7 +4691,10 @@ function SalesPeriodReport({
   );
 }
 
-async function fetchSalesForPeriodReport(filterParams: string) {
+async function fetchSalesForPeriodReport(
+  filterParams: string,
+  limit = PERIOD_REPORT_SALES_LIMIT,
+) {
   const records: SaleRecord[] = [];
   let cursor: string | null = null;
   const seenCursors = new Set<string>();
@@ -4471,9 +4707,9 @@ async function fetchSalesForPeriodReport(filterParams: string) {
     const page = await requestJson<SalesPage>(
       `/api/sales?${params.toString()}`,
     );
-    if (page.total > PERIOD_REPORT_SALES_LIMIT) {
+    if (page.total > limit || records.length + page.items.length > limit) {
       throw new Error(
-        `Este filtro possui ${page.total} vendas. Selecione um período menor, com até ${PERIOD_REPORT_SALES_LIMIT}, para gerar o PDF com segurança no celular.`,
+        `Este filtro possui ${page.total} vendas. Selecione um período menor, com até ${limit}, para gerar o PDF com segurança no celular.`,
       );
     }
     records.push(...page.items);
