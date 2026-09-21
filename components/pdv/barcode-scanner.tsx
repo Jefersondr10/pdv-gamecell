@@ -24,6 +24,7 @@ import {
   type ScannerMode,
   type ScannerState,
 } from '@/lib/scanner';
+import { defaultScannerInput, type ScannerInput } from '@/lib/scanner-input';
 
 export type ScanFeedback = 'success' | 'error' | 'silent';
 
@@ -41,6 +42,8 @@ type BarcodeScannerProps = {
 };
 
 let scannerAudioContext: AudioContext | null = null;
+// Keep the chosen reader while moving between scanning steps in this session.
+const scannerInputPreference: Partial<Record<ScannerInput, ScannerInput>> = {};
 
 export function unlockScannerAudio() {
   try {
@@ -73,6 +76,7 @@ export function BarcodeScanner({
   onBack,
 }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const manualInputRef = useRef<HTMLInputElement>(null);
   const scanFrameRef = useRef<HTMLDivElement>(null);
   const serviceRef = useRef<ScannerService | null>(null);
   const onAcceptedRef = useRef(onAccepted);
@@ -80,11 +84,31 @@ export function BarcodeScanner({
   const [state, setState] = useState<ScannerState>('idle');
   const [error, setError] = useState('');
   const [manualValue, setManualValue] = useState('');
-  const [showManual, setShowManual] = useState(false);
+  const [input, setInput] = useState<ScannerInput | null>(null);
+  const defaultInputRef = useRef<ScannerInput>('keyboard');
+  const showManual = input === 'keyboard';
   const [cameras, setCameras] = useState<Array<{ id: string; label: string }>>(
     [],
   );
   const [cameraId, setCameraId] = useState('');
+
+  useEffect(() => {
+    // Resolve only after hydration; until then no camera can auto-start.
+    const timer = window.setTimeout(() => {
+      const defaultInput = defaultScannerInput({
+        userAgent: navigator.userAgent,
+        coarsePointer: window.matchMedia('(pointer: coarse)').matches,
+        canHover: window.matchMedia('(hover: hover)').matches,
+      });
+      defaultInputRef.current = defaultInput;
+      setInput(scannerInputPreference[defaultInput] ?? defaultInput);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (showManual) manualInputRef.current?.focus({ preventScroll: true });
+  }, [showManual]);
 
   useEffect(() => {
     onAcceptedRef.current = onAccepted;
@@ -110,6 +134,9 @@ export function BarcodeScanner({
   const start = useCallback(
     async (selectedCamera = cameraId) => {
       unlockScannerAudio();
+      autoStartAttemptedRef.current = true;
+      scannerInputPreference[defaultInputRef.current] = 'camera';
+      setInput('camera');
       const video = videoRef.current;
       const service = serviceRef.current;
       if (!video || !service) return;
@@ -134,14 +161,15 @@ export function BarcodeScanner({
   );
 
   useEffect(() => {
-    if (!autoStart || autoStartAttemptedRef.current) return;
+    if (!autoStart || input !== 'camera' || autoStartAttemptedRef.current)
+      return;
     const timer = window.setTimeout(() => {
       if (autoStartAttemptedRef.current) return;
       autoStartAttemptedRef.current = true;
       void start();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [autoStart, start]);
+  }, [autoStart, input, start]);
 
   const stop = () => {
     void serviceRef.current?.stop();
@@ -158,13 +186,14 @@ export function BarcodeScanner({
           ? 'Digite um UPC, EAN ou JAN válido, incluindo o dígito verificador.'
           : 'Digite um SN de 8 a 18 caracteres contendo pelo menos uma letra.',
       );
+      manualInputRef.current?.select();
       playScannerFeedback('error');
       return;
     }
     setError('');
     deliverCandidate(candidate);
     setManualValue('');
-    setShowManual(false);
+    manualInputRef.current?.focus({ preventScroll: true });
   };
 
   const scanning = state === 'scanning' || state === 'loading-decoder';
@@ -185,7 +214,11 @@ export function BarcodeScanner({
             </Badge>
           </div>
           <p className="scanner-description mt-1 line-clamp-2 text-sm leading-5 text-white/60">
-            {description}
+            {showManual
+              ? mode === 'product'
+                ? 'Bipe o UPC, EAN ou JAN da embalagem no campo abaixo.'
+                : 'Bipe somente o SN. IMEI e EID não são aceitos.'
+              : description}
           </p>
         </div>
         <ScanLine className="mt-1 size-5 shrink-0 text-sky" />
@@ -193,7 +226,7 @@ export function BarcodeScanner({
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
         <div
-          className={`scanner-camera scanner-grid relative isolate grid place-items-center overflow-hidden rounded-[1.1rem] border border-white/10 bg-[#06111f] px-4 text-center ${fill ? 'min-h-[145px] flex-1' : 'min-h-[240px] sm:min-h-[310px]'}`}
+          className={`scanner-camera scanner-grid relative isolate rounded-[1.1rem] border border-white/10 bg-[#06111f] px-4 text-center ${showManual ? 'overflow-y-auto py-3' : 'grid place-items-center overflow-hidden'} ${fill ? 'min-h-[145px] flex-1' : 'min-h-[240px] sm:min-h-[310px]'}`}
         >
           <video
             aria-label="Imagem ao vivo da câmera"
@@ -202,19 +235,21 @@ export function BarcodeScanner({
             playsInline
             ref={videoRef}
           />
-          <div
-            className={`scan-frame ${mode === 'apple_serial' ? 'scan-frame-serial' : 'scan-frame-product'}`}
-            aria-hidden="true"
-            ref={scanFrameRef}
-          >
-            <span className="corner corner-tl" />
-            <span className="corner corner-tr" />
-            <span className="corner corner-bl" />
-            <span className="corner corner-br" />
-            {scanning && <span className="scan-beam" />}
-          </div>
+          {!showManual && (
+            <div
+              className={`scan-frame ${mode === 'apple_serial' ? 'scan-frame-serial' : 'scan-frame-product'}`}
+              aria-hidden="true"
+              ref={scanFrameRef}
+            >
+              <span className="corner corner-tl" />
+              <span className="corner corner-tr" />
+              <span className="corner corner-bl" />
+              <span className="corner corner-br" />
+              {scanning && <span className="scan-beam" />}
+            </div>
+          )}
 
-          {!scanning && (
+          {!scanning && !showManual && (
             <div className="relative z-10 flex max-w-sm flex-col items-center">
               <span className="grid size-12 place-items-center rounded-2xl bg-white/8 ring-1 ring-white/10 sm:size-14">
                 <Camera className="size-6 text-sky" strokeWidth={1.8} />
@@ -238,18 +273,13 @@ export function BarcodeScanner({
             </p>
           )}
 
-          {(error || notice) && (
-            <div
-              className="absolute inset-x-3 top-3 z-20 flex items-start gap-2 rounded-xl bg-amber-950/90 px-3 py-2.5 text-left text-sm text-amber-50 ring-1 ring-amber-300/20 backdrop-blur"
-              role="alert"
-            >
-              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-              <span className="line-clamp-2">{error || notice}</span>
-            </div>
-          )}
-
           {showManual && (
-            <div className="absolute inset-x-3 bottom-3 z-30 rounded-2xl border border-white/15 bg-[#07182a]/95 p-3 text-left shadow-2xl backdrop-blur">
+            <div className="relative z-10 w-full rounded-2xl border border-white/15 bg-[#07182a]/95 p-3 text-left shadow-2xl backdrop-blur">
+              <p className="mb-2 text-sm font-bold">Bipador USB / Bluetooth</p>
+              <p className="mb-3 text-xs leading-5 text-white/70">
+                Use um leitor em modo teclado, com Enter ao final da leitura.
+                Você também pode digitar o código abaixo.
+              </p>
               <label
                 className="text-sm font-semibold"
                 htmlFor={`manual-${mode}`}
@@ -259,11 +289,18 @@ export function BarcodeScanner({
               <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
                 <Input
                   autoCapitalize="characters"
+                  autoComplete="off"
+                  spellCheck={false}
+                  ref={manualInputRef}
                   className="h-11 min-w-0 border-white/15 bg-black/20 font-mono text-white placeholder:text-white/35"
                   id={`manual-${mode}`}
                   onChange={(event) => setManualValue(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') submitManual();
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      submitManual();
+                    }
                   }}
                   placeholder={
                     mode === 'product' ? '195950638011' : 'HC9P06R095'
@@ -271,6 +308,7 @@ export function BarcodeScanner({
                   value={manualValue}
                 />
                 <Button
+                  type="button"
                   className="h-11 rounded-xl bg-white text-ink hover:bg-white/90"
                   onClick={submitManual}
                 >
@@ -281,7 +319,17 @@ export function BarcodeScanner({
           )}
         </div>
 
-        {cameras.length > 1 && (
+        {(error || notice) && (
+          <div
+            className="flex shrink-0 items-start gap-2 rounded-xl bg-amber-950/90 px-3 py-2.5 text-left text-sm text-amber-50 ring-1 ring-amber-300/20"
+            role="alert"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>{error || notice}</span>
+          </div>
+        )}
+
+        {!showManual && cameras.length > 1 && (
           <label className="flex shrink-0 items-center gap-2 text-sm">
             <span className="shrink-0">Câmera</span>
             <NativeSelect
@@ -302,10 +350,12 @@ export function BarcodeScanner({
             </NativeSelect>
           </label>
         )}
-        <p className="scanner-distance-tip shrink-0 text-center text-xs text-white/65">
-          Mantenha a caixa a cerca de 15–30 cm. Afaste um pouco se a imagem
-          estiver sem foco.
-        </p>
+        {!showManual && (
+          <p className="scanner-distance-tip shrink-0 text-center text-xs text-white/65">
+            Mantenha a caixa a cerca de 15–30 cm. Afaste um pouco se a imagem
+            estiver sem foco.
+          </p>
+        )}
         <div
           className={`grid shrink-0 gap-2 ${onBack ? 'grid-cols-[auto_1fr_auto]' : 'grid-cols-[1fr_auto]'}`}
         >
@@ -320,14 +370,16 @@ export function BarcodeScanner({
             </Button>
           )}
           <Button
-            className="h-11 rounded-xl bg-sky px-4 text-sm font-bold text-ink hover:bg-sky/90 sm:h-12 sm:text-base"
+            className="h-11 min-w-0 rounded-xl bg-sky px-2 text-sm font-bold text-ink hover:bg-sky/90 sm:h-12 sm:px-4 sm:text-base"
             disabled={requestingPermission}
             onClick={() => (scanning ? stop() : void start())}
           >
             {scanning ? (
-              <Pause className="size-5" />
+              <Pause className={`size-5 ${onBack ? 'hidden sm:block' : ''}`} />
             ) : (
-              <ScanLine className="size-5" />
+              <ScanLine
+                className={`size-5 ${onBack ? 'hidden sm:block' : ''}`}
+              />
             )}
             {scanning
               ? 'Pausar'
@@ -336,13 +388,20 @@ export function BarcodeScanner({
                 : 'Abrir câmera'}
           </Button>
           <Button
-            aria-label={mode === 'product' ? 'Digitar código' : 'Digitar SN'}
-            className="h-11 rounded-xl border-white/15 bg-white/5 px-4 text-white hover:bg-white/10 sm:h-12"
-            onClick={() => setShowManual((current) => !current)}
+            aria-label="Usar bipador USB/Bluetooth ou digitar"
+            aria-pressed={showManual}
+            className="h-11 min-w-0 rounded-xl border-white/15 bg-white/5 px-2 text-white hover:bg-white/10 sm:h-12 sm:px-4"
+            onClick={() => {
+              scannerInputPreference[defaultInputRef.current] = 'keyboard';
+              autoStartAttemptedRef.current = true;
+              stop();
+              setError('');
+              setInput('keyboard');
+            }}
             variant="outline"
           >
-            <Keyboard />
-            <span className="hidden sm:inline">Digitar</span>
+            <Keyboard className={onBack ? 'hidden sm:block' : ''} />
+            <span>Bipador</span>
           </Button>
         </div>
       </div>

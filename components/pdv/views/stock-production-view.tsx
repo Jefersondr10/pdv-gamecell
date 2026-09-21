@@ -31,6 +31,9 @@ import {
 
 import { ProductColorSwatch } from '@/components/pdv/product-color-swatch';
 import { StockWhatsAppDialog } from '@/components/pdv/stock-whatsapp-dialog';
+import { StockScannerDialog } from '@/components/pdv/stock-scanner-dialog';
+import { unlockScannerAudio } from '@/components/pdv/barcode-scanner';
+import { isStockSerialQuery, type StockScanResult } from '@/lib/stock-scan';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -140,6 +143,10 @@ export function StockProductionView({
   onOpenSale?: (saleId: string) => void;
 }) {
   const [query, setQuery] = useState('');
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannedResult, setScannedResult] = useState<StockScanResult | null>(
+    null,
+  );
   const [serialSearch, setSerialSearch] = useState<{
     query: string;
     ids: string[];
@@ -151,7 +158,7 @@ export function StockProductionView({
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setSerialSearchError('');
-      if (!/^[a-z0-9]{6,18}$/i.test(term) || !/[0-9]/.test(term)) {
+      if (!isStockSerialQuery(term)) {
         setSerialSearching(false);
         return;
       }
@@ -331,7 +338,9 @@ export function StockProductionView({
           ? row.available > 0
           : row.available === 0) ||
         serialProductIds.has(row.id)) &&
-      (serialProductIds.has(row.id) || matchesProductSearch(row, query)),
+      (scannedResult?.query === normalized
+        ? scannedResult.productIds.includes(row.id)
+        : serialProductIds.has(row.id) || matchesProductSearch(row, query)),
   );
   const available = rows.reduce((sum, row) => sum + row.available, 0);
 
@@ -442,11 +451,29 @@ export function StockProductionView({
                 <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   aria-label="Pesquisar no estoque"
-                  className="h-11 rounded-xl pl-9"
-                  onChange={(event) => setQuery(event.target.value)}
+                  className="h-11 rounded-xl pl-9 pr-12"
+                  onChange={(event) => {
+                    setScannedResult(null);
+                    setQuery(event.target.value);
+                  }}
                   placeholder="Modelo, cor, memória, código ou SN"
                   value={query}
                 />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 size-9 -translate-y-1/2 rounded-lg text-primary"
+                  aria-label="Bipar código ou SN para pesquisar no estoque"
+                  title="Buscar pela câmera ou bipador"
+                  disabled={priceSaving}
+                  onClick={() => {
+                    unlockScannerAudio();
+                    setScannerOpen(true);
+                  }}
+                >
+                  <Camera className="size-5" />
+                </Button>
               </div>
               <div
                 className="flex shrink-0 gap-1 rounded-xl bg-muted/60 p-1"
@@ -698,6 +725,18 @@ export function StockProductionView({
           </div>
         )}
       </Card>
+      {scannerOpen && (
+        <StockScannerDialog
+          products={data.products}
+          onClose={() => setScannerOpen(false)}
+          onFound={(result) => {
+            setQuery(result.query);
+            setScannedResult(result);
+            setStockFilter('all');
+            setScannerOpen(false);
+          }}
+        />
+      )}
       <StockReport
         detailsCursor={detailsCursor}
         detailsError={detailsError}

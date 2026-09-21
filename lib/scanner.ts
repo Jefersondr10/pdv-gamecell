@@ -552,10 +552,15 @@ export function normalizeCandidate(
   if (!rawValue) return null;
 
   if (mode === 'product') {
+    if (!/^[\d\s]+$/.test(rawValue)) return null;
     const digits = rawValue.replace(/\D/g, '');
     if (![8, 12, 13, 14].includes(digits.length)) return null;
     const expandedUpce =
-      format === 'upc_e' && digits.length === 8 ? expandUpce(digits) : null;
+      (format === 'upc_e' ||
+        (format === 'manual_gtin' && !hasValidGtinCheckDigit(digits))) &&
+      digits.length === 8
+        ? expandUpce(digits)
+        : null;
     const canonicalValue = expandedUpce ?? digits;
     if (!hasValidGtinCheckDigit(canonicalValue)) return null;
     const normalizedValue = canonicalValue.padStart(14, '0');
