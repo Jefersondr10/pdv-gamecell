@@ -41,7 +41,7 @@ const SHORT_NOTICE_LABELS: Partial<
   payment_scheduled: 'Pagamento apenas agendado.',
   payment_cancelled: 'Pagamento cancelado ou estornado.',
   payment_status_unconfirmed: 'Conclusão do pagamento não identificada.',
-  reading_ambiguous: 'Mais de uma transação foi identificada.',
+  reading_ambiguous: 'Leituras divergentes; confira o valor e o identificador Pix.',
   reading_blocked: 'Documento bloqueado para conciliação.',
   payer_missing: 'Pagador não identificado.',
   payer_bank_missing: 'Banco pagador não identificado.',

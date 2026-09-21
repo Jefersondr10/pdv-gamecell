@@ -17,6 +17,7 @@
     "test:money": "node --experimental-strip-types scripts/verify-money.ts",
     "test:sales-pdf": "node --experimental-transform-types scripts/verify-sales-pdf.ts",
     "test:financial-reports": "node --experimental-transform-types scripts/verify-financial-reports.ts",
+    "test:nubank-receipts": "node --experimental-transform-types scripts/verify-nubank-receipts.ts",
     "test:sale-participants": "node --experimental-transform-types scripts/verify-sale-participants.ts",
     "test:sale-date": "node --experimental-transform-types scripts/verify-sale-date.ts",
     "test:permissions": "node --experimental-transform-types scripts/verify-permissions.ts",

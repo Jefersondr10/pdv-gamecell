@@ -4,7 +4,7 @@ import {
 } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 9;
+export const RECEIPT_READER_REVISION = 10;
 
 export type ReceiptDocument = {
   version: 1;
@@ -175,11 +175,27 @@ function cleanParticipantBank(value: string | null | undefined) {
 
 // Parse labelled participants only. A logo/header never identifies the recipient.
 export function extractReceiptDocument(text: string) {
+  // Nubank's two-column layout can arrive as "Nome COMPANY" in one OCR
+  // pass and as separate label/value lines in another. Normalize only this
+  // identified layout, so a complete first pass does not require a second
+  // pass merely to recover its recipient bank (and potentially corrupt IDs).
+  const nubankTransfer =
+    /comprovante\s+de\s+transfer[eê]ncia/i.test(text.slice(0, 500)) &&
+    /\bnu\s+pagamentos\b|nubank\.com\.br/i.test(text) &&
+    /^\s*destino\s*$/im.test(text) &&
+    /^\s*origem\s*$/im.test(text);
   const lines = text
     .slice(0, 100_000)
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .flatMap((line) => {
+      if (!nubankTransfer) return [line];
+      const field = line.match(/^(Nome|CNPJ|CPF|Institui[cç][aã]o)\s+(.+)$/i);
+      if (field) return [field[1], field[2]];
+      // Only the label is repaired; the printed E2E token stays strict.
+      return [line.replace(/^[1l]D(?=\s+da\s+transa[cç][aã]o\s*:)/i, 'ID')];
+    });
   const normalized = text
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -617,7 +633,7 @@ export function extractReceiptDocument(text: string) {
           /\b\d{1,2}[/-](?:\d{1,2}|[a-zç]+)[/-]\d{4}\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
         ) ?? []),
         ...(text.match(
-          /\b\d{1,2}\s+(?:jan(?:eiro)?|fev(?:ereiro)?|mar(?:[cç]o)?|abr(?:il)?|mai(?:o)?|jun(?:ho)?|jul(?:ho)?|ago(?:sto)?|set(?:embro)?|out(?:ubro)?|nov(?:embro)?|dez(?:embro)?)\.?\s+\d{4}\s*,?\s*\d{1,2}:\d{2}(?::\d{2})?\b/gi,
+          /\b\d{1,2}\s+(?:jan(?:eiro)?|fev(?:ereiro)?|mar(?:[cç]o)?|abr(?:il)?|mai(?:o)?|jun(?:ho)?|jul(?:ho)?|ago(?:sto)?|set(?:embro)?|out(?:ubro)?|nov(?:embro)?|dez(?:embro)?)\.?\s+\d{4}\s*[-–—,]?\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
         ) ?? []),
       ];
   const participantStarts = [paired, from, to].filter((i) => i >= 0);

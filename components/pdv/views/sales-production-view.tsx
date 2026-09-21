@@ -754,8 +754,11 @@ export function SalesProductionView({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3 sm:overflow-hidden sm:px-6 sm:py-5">
-      <div className="mb-3 flex shrink-0 items-end justify-between gap-3 sm:mb-4">
+    <div
+      data-sales-page
+      className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3 sm:px-6 sm:py-4"
+    >
+      <div className="mb-3 flex shrink-0 items-end justify-between gap-3">
         <div className="min-w-0">
           <p className="eyebrow hidden sm:block">Comercial</p>
           <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
@@ -776,7 +779,7 @@ export function SalesProductionView({
           <span className="hidden sm:inline">Relatório de vendas</span>
         </Button>
       </div>
-      <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 sm:mb-4 sm:grid-cols-4 sm:gap-3">
+      <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
         <Metric
           active={grouping === 'sale' && !alertOnly}
           comparison={
@@ -875,8 +878,11 @@ export function SalesProductionView({
           value={String(activeAggregates.alertCount)}
         />
       </div>
-      <Card className="flex shrink-0 flex-col gap-0 overflow-hidden py-0 sm:min-h-0 sm:flex-1 sm:shrink">
-        <CardHeader className="shrink-0 space-y-2 border-b bg-card p-2.5 sm:p-4">
+      <Card
+        data-sales-results
+        className="flex shrink-0 flex-col gap-0 overflow-hidden py-0"
+      >
+        <CardHeader className="shrink-0 space-y-2 border-b bg-card p-2.5 sm:p-3">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 md:grid-cols-3 xl:grid-cols-[minmax(12rem,1fr)_10rem_11rem_12rem_11rem]">
             <label className="col-span-2 min-w-0 md:col-span-1">
               <span className="mb-1 hidden items-center gap-1.5 text-sm font-bold text-muted-foreground md:flex">
@@ -1116,7 +1122,7 @@ export function SalesProductionView({
             </button>
           )}
         </CardHeader>
-        <CardContent className="p-0 sm:min-h-0 sm:flex-1 sm:overflow-y-auto sm:overscroll-contain">
+        <CardContent className="p-0">
           {activeError ? (
             <div
               className="grid min-h-52 place-items-center p-6 text-center"
@@ -1479,7 +1485,7 @@ function SaleList({
   query: string;
 }) {
   return (
-    <div className="grid gap-3 bg-muted/45 p-2.5 sm:p-4">
+    <div className="grid gap-3 bg-muted/45 p-2.5 sm:gap-2.5 sm:p-3">
       {sales.map((sale) => {
         const financial = saleFinancialSummary(sale);
         const matchedSerial = serialMatchingQuery(
@@ -1505,7 +1511,7 @@ function SaleList({
               onClick={() =>
                 matchedSerial ? onOpenSerial(matchedSerial) : onDetails(sale)
               }
-              className="w-full rounded-xl p-4 text-left transition-colors hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:p-5 sm:pr-16"
+              className="w-full rounded-xl p-4 text-left transition-colors hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:p-3.5 sm:pr-16"
             >
               <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:gap-3">
                 <div className="min-w-0 w-full flex-1 pr-10 sm:w-auto sm:pr-0">
@@ -1526,7 +1532,7 @@ function SaleList({
                     </span>
                   </p>
                   <p
-                    className="mt-2 line-clamp-2 text-sm font-medium leading-relaxed text-muted-foreground"
+                    className="mt-2 line-clamp-2 text-sm font-medium leading-relaxed text-muted-foreground sm:mt-1"
                     title={sale.items
                       .map(
                         (item) => `${item.productName} · ${item.productDetail}`,
@@ -1590,7 +1596,7 @@ function SaleList({
                     )}
                 </div>
               </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t pt-3">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t pt-3 sm:mt-2 sm:pt-2">
                 <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-muted-foreground">
                   <span className="inline-flex items-center gap-1.5">
                     <CalendarDays className="size-3.5" />
@@ -5164,7 +5170,7 @@ function Metric({
       )}
       size="sm"
     >
-      <CardContent className="px-2 py-2.5 sm:p-4">
+      <CardContent className="px-2 py-2.5 sm:p-3">
         <p className="text-sm font-bold text-muted-foreground">
           <span className="sm:hidden">{mobileLabel ?? label}</span>
           <span className="hidden sm:inline">{label}</span>

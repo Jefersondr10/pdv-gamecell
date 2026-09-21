@@ -42,6 +42,26 @@ const saleDateDialog = sales.slice(
   sales.indexOf('function SaleDateDialog('),
   sales.indexOf('function CancelDialog('),
 );
+const salesPage = sales.slice(
+  sales.indexOf('data-sales-page'),
+  sales.indexOf('<SaleDetailsDialog'),
+);
+assert.equal(
+  (salesPage.match(/overflow-y-auto/g) ?? []).length,
+  1,
+  'sales must have one page-level scroller, not a second scroller inside the results',
+);
+assert.doesNotMatch(
+  salesPage,
+  /sm:overflow-hidden|sm:overflow-y-auto|sm:overscroll-contain/,
+  'desktop sales must scroll as a whole, like mobile sales',
+);
+assert.match(
+  salesPage,
+  /data-sales-results\s+className="flex shrink-0 flex-col gap-0 overflow-hidden py-0"/,
+  'the results card must grow with its orders instead of shrinking to the viewport',
+);
+assert.match(salesPage, /Carregar mais/);
 
 assert.match(
   sales,
