@@ -421,34 +421,31 @@ const orderStatuses = await call('/api/order-statuses', {
   cookie: ownerCookie,
 });
 assert.equal((orderStatuses.body.items as unknown[]).length, 1);
-// Only the two automatic outcomes are reserved; warning names are normal store registrations.
+// Every pending status is computed, so a manually assigned label cannot imitate it.
 for (const { label } of SALE_ISSUES) {
-  const created = await call('/api/order-statuses', {
+  const rejected = await call('/api/order-statuses', {
     method: 'POST',
     cookie: ownerCookie,
-    expected: 201,
+    expected: 400,
     headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
     body: JSON.stringify({ name: label, color: 'amber' }),
   });
-  const id = String((created.body.item as { id: string }).id);
-  for (const active of [false, true])
-    await call(`/api/order-statuses/${id}`, {
-      method: 'PATCH',
-      cookie: ownerCookie,
-      headers: {
-        'x-csrf-token': ownerCsrf,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ active }),
-    });
-  await call(`/api/order-statuses/${id}`, {
+  assert.equal(rejected.body.code, 'SYSTEM_STATUS_NAME');
+  await call(`/api/order-statuses/${pendingStatusId}`, {
     method: 'PATCH',
     cookie: ownerCookie,
     expected: 400,
     headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
-    body: JSON.stringify({ name: 'Cancelado' }),
+    body: JSON.stringify({ name: label }),
   });
 }
+for (const active of [false, true])
+  await call(`/api/order-statuses/${pendingStatusId}`, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    headers: { 'x-csrf-token': ownerCsrf, 'content-type': 'application/json' },
+    body: JSON.stringify({ active }),
+  });
 
 const entryOperationId = crypto.randomUUID();
 const entryPayload = {
@@ -1204,8 +1201,9 @@ await call(`/api/sales/${saleId}/order-status`, {
 const manualSale = (
   await call(`/api/sales?period=all&saleId=${saleId}`, { cookie: ownerCookie })
 ).body.items as SaleRecord[];
-assert.equal(saleDisplayStatus(manualSale[0]).key, 'manual');
-assert.equal(saleDisplayStatus(manualSale[0]).label, 'Aguardando retirada');
+assert.equal(saleDisplayStatus(manualSale[0]).key, 'pending_payment');
+assert.equal(saleDisplayStatus(manualSale[0]).label, 'Pagamento incompleto');
+assert.equal(manualSale[0].orderStatus?.name, 'Aguardando retirada');
 assert.ok(saleIssues(manualSale[0]).length > 0);
 assert.equal(
   (
@@ -1214,7 +1212,7 @@ assert.equal(
       { cookie: ownerCookie },
     )
   ).body.total,
-  1,
+  0,
 );
 const disguisedAttachment = new FormData();
 disguisedAttachment.set('operationId', crypto.randomUUID());
@@ -4066,7 +4064,11 @@ for (const amountCents of [410000, 400000]) {
   assert.equal(mixedSale.receivedDifferenceCents, amountCents - 410000);
   assert.equal(
     automaticSaleStatus(mixedSale)?.key ?? null,
-    amountCents === 410000 ? 'reconciled' : null,
+    amountCents === 410000
+      ? 'reconciled'
+      : amountCents < 410000
+        ? 'pending_payment'
+        : 'overpaid',
   );
 }
 console.log(

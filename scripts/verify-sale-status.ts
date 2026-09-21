@@ -11,10 +11,12 @@ import {
 } from '../lib/sale-display-status.ts';
 import { deriveReceiptReconciliation } from '../lib/receipt-reconciliation.ts';
 import { parseSalesFilters } from '../lib/server/sales-filters.ts';
+import type { ReceiptDocument } from '../lib/receipt-document.ts';
 import {
   SALE_ALERT_SQL,
   SALE_AUTO_STATUS_SQL,
   SALE_CHECK_STATUS_SQL,
+  SALE_ISSUE_KEYS_SQL,
 } from '../lib/server/sale-status-sql.ts';
 
 // Aggregate and filter predicates can share this fragment in one D1 statement.
@@ -45,7 +47,12 @@ type Fixture = {
   receivedTotalCents: number;
   payments: { method: string; amountCents: number }[];
   items: { soldPriceCents: number; photos: unknown[] }[];
-  receipts: { receiptAmountCents: number | null; receiptOcrStatus?: string }[];
+  receipts: {
+    receiptAmountCents: number | null;
+    receiptOcrStatus?: string;
+    receiptDetails?: ReceiptDocument;
+    receiptReviewReason?: string;
+  }[];
 };
 const base = (): Fixture => ({
   status: 'completed',
@@ -72,9 +79,7 @@ function add(key: string, change: (value: Fixture) => void = () => {}) {
     ),
   };
   assert.equal(saleCheckStatus(sale).key, key, `${id}: first check`);
-  const expectedAutomatic = ['cancelled', 'reconciled'].includes(key)
-    ? key
-    : null;
+  const expectedAutomatic = key;
   assert.equal(automaticSaleStatus(sale)?.key ?? null, expectedAutomatic);
   assert.equal(saleDisplayStatus(sale).key, expectedAutomatic ?? 'none');
   db.database
@@ -121,6 +126,15 @@ function add(key: string, change: (value: Fixture) => void = () => {}) {
         'INSERT INTO attachments(id,sale_id,store_id,sale_item_id,kind,receipt_amount_cents) VALUES (?, ?, ?, ?, ?, ?)',
       )
       .run(rid, id, 'a', null, 'receipt', r.receiptAmountCents);
+    db.database
+      .prepare(
+        'UPDATE attachments SET receipt_details_json=?,receipt_review_reason=? WHERE id=?',
+      )
+      .run(
+        r.receiptDetails ? JSON.stringify(r.receiptDetails) : null,
+        r.receiptReviewReason ?? null,
+        rid,
+      );
     if (r.receiptOcrStatus)
       db.database
         .prepare('INSERT INTO receipt_ocr_jobs VALUES (?, ?)')
@@ -133,11 +147,16 @@ function add(key: string, change: (value: Fixture) => void = () => {}) {
     .run(`${id}-foreign`, id, 'b', null, 'receipt', 99999);
   const sql = db.database
     .prepare(
-      `SELECT ${SALE_CHECK_STATUS_SQL} AS status, ${SALE_AUTO_STATUS_SQL} AS automatic FROM sales s WHERE id=?`,
+      `SELECT ${SALE_CHECK_STATUS_SQL} AS status, ${SALE_AUTO_STATUS_SQL} AS automatic, ${SALE_ISSUE_KEYS_SQL} AS issues FROM sales s WHERE id=?`,
     )
-    .get(id) as { status: string; automatic: string | null };
+    .get(id) as { status: string; automatic: string | null; issues: string };
   assert.equal(sql.status, key, `${id}: SQL`);
   assert.equal(sql.automatic, expectedAutomatic, `${id}: SQL automatic`);
+  assert.deepEqual(
+    JSON.parse(sql.issues).filter(Boolean),
+    saleIssues(sale).map((issue) => issue.key),
+    `${id}: all SQL/TS statuses agree`,
+  );
   return sale;
 }
 add('reconciled');
@@ -154,7 +173,7 @@ add('missing_price', (v) => {
 add('missing_receipt', (v) => {
   v.receipts = [];
 });
-add('review', (v) => {
+add('pending_payment', (v) => {
   v.receipts[1].receiptAmountCents = 3999;
 });
 for (const status of ['pending', 'processing', 'retry'])
@@ -168,13 +187,13 @@ for (const status of ['needs_review', 'done', 'cancelled', undefined])
 add('reconciled', (v) => {
   v.receipts[1].receiptOcrStatus = 'cancelled';
 });
-const underpaid = add('review', (v) => {
+const underpaid = add('pending_payment', (v) => {
   v.receipts[1].receiptAmountCents = 3999;
   v.receivedTotalCents = 9999;
 });
 assert.deepEqual(
   saleIssues(underpaid).map((issue) => issue.key),
-  ['review', 'pending_payment'],
+  ['pending_payment'],
 );
 add('overpaid', (v) => {
   v.payments = [{ method: 'cash', amountCents: 10001 }];
@@ -226,18 +245,18 @@ add('missing_receipt', (v) => {
   mixed(v);
   v.receipts = [];
 });
-add('review', (v) => {
+add('pending_payment', (v) => {
   mixed(v);
   v.receipts[0].receiptAmountCents = 409999;
 });
-const mixedUnderpaid = add('review', (v) => {
+const mixedUnderpaid = add('pending_payment', (v) => {
   mixed(v);
   v.payments[1].amountCents = 200000;
   v.receivedTotalCents = 610000;
 });
 assert.deepEqual(
   saleIssues(mixedUnderpaid).map((issue) => issue.key),
-  ['review', 'pending_payment'],
+  ['pending_payment'],
 );
 const cashUnderpaid = add('missing_receipt', (v) => {
   mixed(v);
@@ -249,6 +268,79 @@ assert.deepEqual(
   saleIssues(cashUnderpaid).map((issue) => issue.key),
   ['missing_receipt', 'pending_payment'],
 );
+// Re-reading remains visible even if the previous accepted value is preserved.
+for (const status of ['pending', 'processing', 'retry']) {
+  const rereading = add('reading', (v) => {
+    v.receipts[0].receiptOcrStatus = status;
+  });
+  assert.deepEqual(
+    saleIssues(rereading).map((issue) => issue.key),
+    ['reading'],
+  );
+}
+add('overpaid', (v) => {
+  v.receipts[0].receiptAmountCents = 6001;
+});
+const validDoc = (): ReceiptDocument => ({
+  version: 1,
+  state: 'completed',
+  automaticEligible: true,
+  alternateTransactionId: null,
+  observedTransactionId: null,
+  ambiguous: false,
+  blocked: false,
+  payerName: 'Cliente sintético',
+  payerBank: 'Banco sintético',
+  recipientName: 'Loja sintética',
+  recipientBank: 'Banco de teste',
+  recipientDocument: null,
+  transactionId: null,
+  paidAtText: null,
+});
+// Informational metadata omissions do not erase an otherwise accepted payment.
+add('reconciled', (v) => {
+  v.receipts[0].receiptDetails = validDoc();
+});
+for (const state of ['scheduled', 'cancelled'] as const) {
+  add('review', (v) => {
+    v.receipts[0].receiptDetails = {
+      ...validDoc(),
+      state,
+      automaticEligible: false,
+    };
+  });
+}
+add('review', (v) => {
+  v.receipts[0].receiptDetails = {
+    ...validDoc(),
+    ambiguous: true,
+    automaticEligible: false,
+  };
+});
+add('review', (v) => {
+  v.receipts[0].receiptDetails = { ...validDoc(), automaticEligible: false };
+});
+add('review', (v) => {
+  v.receipts.forEach((receipt) => {
+    receipt.receiptDetails = {
+      ...validDoc(),
+      transactionId: `E${'9'.repeat(31)}`,
+    };
+  });
+});
+const simultaneous = add('review', (v) => {
+  v.receipts[0].receiptReviewReason = 'Identificação da transação mudou.';
+  v.receipts[1] = { receiptAmountCents: null, receiptOcrStatus: 'processing' };
+});
+assert.deepEqual(
+  saleIssues(simultaneous).map((issue) => issue.key),
+  ['review', 'reading', 'pending_payment'],
+);
+add('cancelled', (v) => {
+  v.status = 'cancelled';
+  v.receipts[0].receiptDetails = { ...validDoc(), blocked: true };
+  v.receipts[1].receiptOcrStatus = 'processing';
+});
 for (const key of [
   ...SALE_CHECK_STATUSES.map((s) => s.key),
   'pending',
@@ -269,7 +361,15 @@ for (const key of [
     .filter((f) =>
       ['pending', 'alert'].includes(key)
         ? !['cancelled', 'reconciled'].includes(f.key)
-        : f.key === key,
+        : ['cancelled', 'reconciled'].includes(key)
+          ? f.key === key
+          : saleIssues({
+              ...f.value,
+              reconciliation: deriveReceiptReconciliation(
+                f.value.receipts,
+                f.value.productsTotalCents,
+              ),
+            }).some((issue) => issue.key === key),
     )
     .map((f) => f.id)
     .sort();
@@ -288,7 +388,7 @@ assert.deepEqual(
     ...repriced,
     reconciliation: deriveReceiptReconciliation(repriced.receipts, 11000),
   }).map((s) => s.key),
-  ['review', 'pending_payment'],
+  ['pending_payment'],
 );
 repriced.productsTotalCents = 10000;
 repriced.items[1].soldPriceCents = 4000;
@@ -301,9 +401,11 @@ assert.equal(
 );
 assert.deepEqual(
   SYSTEM_SALE_STATUSES.map((s) => s.key),
-  ['cancelled', 'reconciled'],
+  SALE_CHECK_STATUSES.map((s) => s.key),
 );
-assert.equal(isAutomaticStatusName(' Pagamento pendente '), false);
+assert.equal(isAutomaticStatusName(' Pagamento pendente '), true);
+assert.equal(isAutomaticStatusName('Falta comprovante'), true);
+assert.equal(isAutomaticStatusName('Aguardando retirada'), false);
 assert.equal(isAutomaticStatusName('Ｃｏｎｃｉｌｉａｄｏ'), true);
 assert.equal(isAutomaticStatusName('cancelado'), true);
 assert.equal(isAutomaticStatusName('  CONCILIADO '), true);
@@ -314,8 +416,8 @@ const selected = {
   color: 'amber' as const,
 };
 const withManual = { ...multiple, orderStatus: selected };
-assert.equal(saleDisplayStatus(withManual).label, selected.name);
-assert.equal(saleDisplayStatus(withManual).key, 'manual');
+assert.equal(saleDisplayStatus(withManual).label, 'Falta preço de venda');
+assert.equal(saleDisplayStatus(withManual).key, 'missing_price');
 assert.equal(saleIssues(withManual).length, 4);
 const complete = {
   ...base(),
@@ -332,14 +434,14 @@ assert.equal(
     ...complete,
     items: complete.items.map((i) => ({ ...i, photos: [] })),
   }).key,
-  'manual',
+  'missing_photo',
 );
 assert.equal(
   saleDisplayStatus({
     ...withManual,
     orderStatus: { ...selected, name: 'Conciliado' },
   }).key,
-  'none',
+  'missing_price',
 );
 // New display filters agree with the visible status; old links retain the saved assignment.
 db.database.exec(
@@ -358,13 +460,7 @@ for (const scope of ['saved', 'display']) {
   const rows = db.database
     .prepare(`SELECT id FROM sales s WHERE ${filter.where.join(' AND ')}`)
     .all(...filter.bindings);
-  assert.equal(
-    rows.length,
-    scope === 'saved'
-      ? fixtures.length
-      : fixtures.filter((f) => !['reconciled', 'cancelled'].includes(f.key))
-          .length,
-  );
+  assert.equal(rows.length, scope === 'saved' ? fixtures.length : 0);
 }
 const matchingIds = (status: string, scope = 'display') => {
   const filter = parseSalesFilters(
@@ -381,16 +477,12 @@ const matchingIds = (status: string, scope = 'display') => {
       .all(...filter.bindings) as { id: string }[]
   ).map((row) => row.id);
 };
-const pendingIds = fixtures
-  .filter((f) => !['reconciled', 'cancelled'].includes(f.key))
-  .map((f) => f.id)
-  .sort();
 const manualId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 db.database.exec('UPDATE order_statuses SET active=0');
 assert.deepEqual(
   matchingIds(manualId),
-  pendingIds,
-  'inactive assignment stays visible',
+  [],
+  'saved labels never override computed statuses',
 );
 assert.deepEqual(matchingIds('none'), []);
 for (const name of ['conciliado', 'cancelado']) {
@@ -399,7 +491,7 @@ for (const name of ['conciliado', 'cancelado']) {
     .run(name, name);
   assert.deepEqual(
     matchingIds('none'),
-    pendingIds,
+    [],
     'reserved registration is not a manual display status',
   );
   assert.deepEqual(matchingIds(manualId), []);
@@ -408,16 +500,12 @@ for (const name of ['conciliado', 'cancelado']) {
 db.database.exec(
   "UPDATE order_statuses SET store_id='b', name='Pagamento pendente', name_normalized='pagamento pendente'",
 );
-assert.deepEqual(
-  matchingIds('none'),
-  pendingIds,
-  'foreign registration ignored',
-);
+assert.deepEqual(matchingIds('none'), [], 'foreign registration ignored');
 assert.deepEqual(matchingIds(manualId), []);
 db.database.exec('DELETE FROM order_statuses');
-assert.deepEqual(matchingIds('none'), pendingIds, 'orphan ignored');
+assert.deepEqual(matchingIds('none'), [], 'orphan ignored');
 db.database.exec('UPDATE sales SET order_status_id=NULL');
-assert.deepEqual(matchingIds('none'), pendingIds);
+assert.deepEqual(matchingIds('none'), []);
 assert.equal(matchingIds('none', 'saved').length, fixtures.length);
 db.close();
 console.log(

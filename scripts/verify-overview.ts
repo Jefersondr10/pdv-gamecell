@@ -237,7 +237,7 @@ try {
   );
   const lumora = await read('lumora', 'comparison=review');
   assert.equal(lumora.items.length, 1);
-  assert.equal(lumora.items[0].automaticStatus, null);
+  assert.equal(lumora.items[0].automaticStatus, 'pending_payment');
   assert.ok(lumora.items[0].issueKeys.includes('pending_payment'));
   assert.equal(overviewSaleComparison(lumora.items[0]), 'below');
   assert.equal(overviewComparison(lumora.totals), 'review');
@@ -273,7 +273,7 @@ try {
     "UPDATE sale_items SET sold_price_cents=0 WHERE sale_id='no-price'",
   );
   const noPrice = await read('no-price', 'comparison=divergent');
-  assert.equal(noPrice.items[0].automaticStatus, null);
+  assert.equal(noPrice.items[0].automaticStatus, 'missing_price');
   assert.ok(noPrice.items[0].issueKeys.includes('missing_price'));
   assert.equal(overviewSaleComparison(noPrice.items[0]), 'missing_price');
   assert.equal(
@@ -413,8 +413,8 @@ try {
     .exec(`INSERT INTO order_statuses VALUES ('manual', 'statuses', 'Pagamento pendente', 'amber');
     UPDATE sales SET order_status_id='manual' WHERE id='manual-warning'`);
   let manualOverview = (await read('statuses')).items[0];
-  assert.equal(manualOverview.displayStatus.key, 'manual');
-  assert.equal(manualOverview.displayStatus.label, 'Pagamento pendente');
+  assert.equal(manualOverview.displayStatus.key, 'missing_photo');
+  assert.equal(manualOverview.displayStatus.label, 'Falta foto do aparelho');
   assert.deepEqual(manualOverview.issueKeys, ['missing_photo']);
   receipt(
     'manual-photo',
@@ -467,7 +467,10 @@ try {
   db.database.exec(
     "UPDATE sales SET products_total_cents=11000 WHERE id='manual-warning'",
   );
-  assert.equal((await read('statuses')).items[0].displayStatus.key, 'none');
+  assert.equal(
+    (await read('statuses')).items[0].displayStatus.key,
+    'pending_payment',
+  );
   console.log(
     'Overview passed: payment/receipt comparison, no multiplication, partial/missing values, cancelling differences, cash, manual/OCR, date boundaries, metadata-only pagination and tenant isolation.',
   );

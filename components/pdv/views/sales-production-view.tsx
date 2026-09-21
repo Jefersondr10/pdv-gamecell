@@ -57,7 +57,6 @@ import {
   SALE_ISSUES,
   SALE_CHECK_STATUSES,
   type SaleIssueKey,
-  automaticSaleStatus,
   isAutomaticStatusName,
   saleDisplayStatus,
   saleIssues,
@@ -172,13 +171,13 @@ const SALE_EDITOR_COPY: Record<
   full: {
     title: 'Editar venda',
     description:
-      'Edite status, cliente, vendedor, preços, pagamentos, comprovantes e fotos. Produtos e SNs permanecem protegidos.',
+      'Edite cliente, vendedor, preços, pagamentos, comprovantes e fotos. O status é atualizado automaticamente; produtos e SNs permanecem protegidos.',
     saveLabel: 'Salvar venda',
   },
   info: {
     title: 'Status, cliente e vendedor',
     description:
-      'Altere o status cadastrado, o cliente ou o vendedor responsável pela venda.',
+      'Consulte o status automático e altere cliente, vendedor ou etiqueta interna.',
     saveLabel: 'Salvar dados da venda',
   },
   payments: {
@@ -232,18 +231,6 @@ const PERIOD_OPTIONS: Array<FilterOption<PeriodFilter>> = [
   { detail: 'Selecione uma data', label: 'Escolher dia', value: 'day' },
   { detail: 'Selecione um mês', label: 'Mês escolhido', value: 'month' },
   { detail: 'Histórico completo', label: 'Todo período', value: 'all' },
-];
-const ISSUE_OPTIONS: Array<FilterOption<IssueFilter>> = [
-  {
-    detail: 'Exibe vendas com ou sem aviso',
-    label: 'Qualquer pendência',
-    value: 'all',
-  },
-  ...SALE_ISSUES.map((issue) => ({
-    detail: 'Aviso de conferência, independente do status escolhido',
-    label: issue.label,
-    value: issue.key,
-  })),
 ];
 const ANALYTICS_CACHE_MS = 5 * 60 * 1000;
 const PERIOD_REPORT_SALES_LIMIT = 250;
@@ -699,10 +686,10 @@ export function SalesProductionView({
       pieces.push(
         `Vendedor: ${sellerOptions.find((seller) => seller.id === sellerFilter)?.name ?? 'selecionado'}`,
       );
-    if (alertOnly) pieces.push('Somente vendas com avisos');
+    if (alertOnly) pieces.push('Todas com pendências');
     if (issueFilter !== 'all')
       pieces.push(
-        `Conferência: ${SALE_ISSUES.find((issue) => issue.key === issueFilter)?.label}`,
+        `Status: ${SALE_ISSUES.find((issue) => issue.key === issueFilter)?.label}`,
       );
     if (orderStatusFilter.startsWith('auto_'))
       pieces.push(
@@ -722,7 +709,7 @@ export function SalesProductionView({
       );
       if (status)
         pieces.push(
-          `Status ${statusScope === 'saved' ? 'salvo (filtro do link anterior)' : 'da venda'}: ${status.name}`,
+          `Etiqueta ${statusScope === 'saved' ? 'salva (filtro do link anterior)' : 'do link anterior'}: ${status.name}`,
         );
     }
     return pieces.join(' · ');
@@ -867,8 +854,8 @@ export function SalesProductionView({
                 }
               : null
           }
-          label="Vendas com avisos"
-          mobileLabel="Com avisos"
+          label="Vendas com pendências"
+          mobileLabel="Com pendências"
           onClick={() => {
             setAlertOnly(true);
             setIssueFilter('all');
@@ -883,7 +870,7 @@ export function SalesProductionView({
         className="flex shrink-0 flex-col gap-0 overflow-hidden py-0"
       >
         <CardHeader className="shrink-0 space-y-2 border-b bg-card p-2.5 sm:p-3">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 md:grid-cols-3 xl:grid-cols-[minmax(12rem,1fr)_10rem_11rem_12rem_11rem]">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 md:grid-cols-4 xl:grid-cols-[minmax(12rem,1fr)_10rem_15rem_12rem]">
             <label className="col-span-2 min-w-0 md:col-span-1">
               <span className="mb-1 hidden items-center gap-1.5 text-sm font-bold text-muted-foreground md:flex">
                 <Search className="size-3 text-muted-foreground" /> Pesquisar
@@ -936,49 +923,29 @@ export function SalesProductionView({
             >
               <div className="min-w-0">
                 <span className="mb-1 flex items-center gap-1.5 text-sm font-bold text-muted-foreground">
-                  <CircleAlert className="size-3 text-muted-foreground" />
-                  Pendências
-                </span>
-                <SalesFilterSelect
-                  aria-label="Contém pendência na venda"
-                  onValueChange={(next) => {
-                    setIssueFilter(next);
-                    if (next !== 'all') {
-                      setAlertOnly(false);
-                      setGrouping('sale');
-                    }
-                  }}
-                  options={ISSUE_OPTIONS}
-                  value={issueFilter}
-                />
-              </div>
-              <div className="min-w-0">
-                <span className="mb-1 flex items-center gap-1.5 text-sm font-bold text-muted-foreground">
                   <ListFilter className="size-3 text-muted-foreground" /> Status
                 </span>
                 <SalesFilterSelect
                   aria-label="Status da venda"
                   onValueChange={(next) => {
-                    setStatusScope('display');
+                    setStatusScope(
+                      next === 'all' || next.startsWith('auto_')
+                        ? 'display'
+                        : 'saved',
+                    );
+                    setIssueFilter('all');
+                    setAlertOnly(false);
                     setOrderStatusFilter(next);
+                    setGrouping('sale');
                   }}
                   options={[
                     {
-                      detail: 'Status automáticos e cadastrados',
+                      detail: 'Situação atual de todas as vendas',
                       label: 'Todos os status',
                       value: 'all',
                     },
-                    {
-                      detail:
-                        statusScope === 'saved'
-                          ? 'Sem cadastro salvo; filtro do link anterior'
-                          : 'Venda ainda sem um status',
-                      label: 'Sem status',
-                      value: 'none',
-                    },
                     ...SYSTEM_SALE_STATUSES.map((status) => ({
                       label: status.label,
-                      detail: 'Status principal exibido na venda',
                       value: `auto_${status.key}`,
                     })),
                     {
@@ -988,26 +955,31 @@ export function SalesProductionView({
                       value: 'auto_pending',
                     },
                     ...data.orderStatuses
-                      .filter((status) => !isAutomaticStatusName(status.name))
+                      .filter((status) => status.id === orderStatusFilter)
                       .map((status) => ({
-                        detail: status.active
-                          ? 'Status cadastrado pela loja'
-                          : 'Status inativo',
-                        label: `${status.name}${status.active ? '' : ' (inativo)'}`,
+                        detail: 'Filtro histórico preservado do link anterior',
+                        label: `Etiqueta: ${status.name}`,
                         value: status.id,
                       })),
-                    ...SALE_ISSUES.filter(
-                      (issue) => orderStatusFilter === `auto_${issue.key}`,
-                    ).map((issue) => ({
-                      label: `Conferência: ${issue.label}`,
-                      detail: 'Filtro preservado do link anterior',
-                      value: `auto_${issue.key}`,
-                    })),
+                    ...(orderStatusFilter === 'none'
+                      ? [
+                          {
+                            label: 'Sem etiqueta (link anterior)',
+                            value: 'none',
+                          },
+                        ]
+                      : []),
                   ]}
-                  value={orderStatusFilter}
+                  value={
+                    issueFilter !== 'all'
+                      ? `auto_${issueFilter}`
+                      : alertOnly
+                        ? 'auto_pending'
+                        : orderStatusFilter
+                  }
                 />
               </div>
-              <div className="col-span-2 min-w-0 md:col-span-1">
+              <div className="min-w-0">
                 <span className="mb-1 flex items-center gap-1.5 text-sm font-bold text-muted-foreground">
                   <UserRound className="size-3 text-muted-foreground" />{' '}
                   Vendedor
@@ -1893,10 +1865,7 @@ function EditSaleDialog({
     canParticipants,
     data.csrfToken,
   );
-  const initialStatusId =
-    sale?.orderStatus && !isAutomaticStatusName(sale.orderStatus.name)
-      ? sale.orderStatus.id
-      : '';
+  const initialStatusId = sale?.orderStatus?.id ?? '';
   const [selectedStatusId, setSelectedStatusId] = useState(initialStatusId);
   const [currentStatusId, setCurrentStatusId] = useState(initialStatusId);
   const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
@@ -2005,8 +1974,8 @@ function EditSaleDialog({
   );
   const availableStatuses = data.orderStatuses.filter(
     (status) =>
-      (status.active || status.id === currentStatusId) &&
-      !isAutomaticStatusName(status.name),
+      status.id === currentStatusId ||
+      (status.active && !isAutomaticStatusName(status.name)),
   );
   const additionalPaymentCents = parseMoneyInput(paymentAmount);
   const correctedPayments = visiblePayments.map((payment) => {
@@ -2298,8 +2267,8 @@ function EditSaleDialog({
                     <div>
                       <h3 className="font-extrabold">Status da venda</h3>
                       <p className="text-xs text-muted-foreground">
-                        Conciliado e Cancelado são automáticos. Os demais são
-                        escolhidos pela equipe.
+                        O status reflete as pendências da venda e é atualizado
+                        automaticamente ao corrigir os dados.
                       </p>
                     </div>
                   </div>
@@ -2318,11 +2287,11 @@ function EditSaleDialog({
                       className="block text-sm font-semibold"
                       htmlFor="sale-custom-status"
                     >
-                      Status cadastrado
+                      Etiqueta interna (opcional)
                     </label>
                     <NativeSelect
                       id="sale-custom-status"
-                      aria-label="Status cadastrado desta venda"
+                      aria-label="Etiqueta interna desta venda"
                       disabled={!can(data.user, 'sales.status') || uploadBusy}
                       className="h-11 w-full [&_select]:h-11"
                       onChange={(event) =>
@@ -2331,7 +2300,7 @@ function EditSaleDialog({
                       value={selectedStatusId}
                     >
                       <NativeSelectOption value="">
-                        Sem status escolhido
+                        Sem etiqueta
                       </NativeSelectOption>
                       {availableStatuses.map((status) => (
                         <NativeSelectOption key={status.id} value={status.id}>
@@ -2340,23 +2309,20 @@ function EditSaleDialog({
                         </NativeSelectOption>
                       ))}
                     </NativeSelect>
-                    {automaticSaleStatus(sale) && (
-                      <p className="text-sm text-muted-foreground">
-                        {automaticSaleStatus(sale)!.label} prevalece enquanto a
-                        conferência estiver completa. O status escolhido fica
-                        guardado, sem alterar pagamentos.
-                      </p>
-                    )}
+                    <p className="text-sm text-muted-foreground">
+                      A etiqueta serve apenas para organização interna. Não
+                      substitui o status automático nem altera pagamentos.
+                    </p>
                   </div>
                   {selectedStatusId !== currentStatusId && (
                     <p className="mt-2 text-xs font-semibold text-primary">
-                      O status escolhido será salvo ao confirmar as alterações.
+                      A etiqueta será salva ao confirmar as alterações.
                     </p>
                   )}
                   {data.orderStatuses.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-amber-800">
-                      Cadastre os demais status em Configurações › Financeiro ›
-                      Status do pedido.
+                      Gerencie etiquetas em Configurações › Financeiro › Status
+                      e etiquetas.
                     </p>
                   )}
                 </section>

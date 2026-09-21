@@ -10,7 +10,7 @@ export function orderStatusName(value: unknown) {
   if (isAutomaticStatusName(name))
     throw new HttpError(
       400,
-      'Conciliado e Cancelado são exclusivos do sistema. Escolha outro nome para cadastrar.',
+      'Esse nome pertence a um status automático. Escolha outro nome para a etiqueta interna.',
       'SYSTEM_STATUS_NAME',
     );
   return name;

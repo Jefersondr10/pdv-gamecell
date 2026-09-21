@@ -124,7 +124,7 @@ export async function readOverview(
     FROM selected
   ), page AS (SELECT * FROM selected ${cursor ? 'WHERE createdAt < ? OR (createdAt = ? AND id < ?)' : ''} ORDER BY createdAt DESC, id DESC LIMIT ?)
   SELECT summary.*, page.*, (SELECT COALESCE(SUM(pendingCount), 0) FROM compared) AS pendingInPeriod,
-    CASE WHEN page.id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM json_each(page.issueKeysJson) WHERE value IS NOT NULL) THEN 'reconciled' ELSE NULL END AS automaticStatus,
+    CASE WHEN page.id IS NOT NULL THEN COALESCE((SELECT value FROM json_each(page.issueKeysJson) WHERE value IS NOT NULL ORDER BY CAST(key AS INTEGER) LIMIT 1), 'reconciled') END AS automaticStatus,
     a.id AS attachmentId, a.file_name AS fileName,
     a.mime_type AS mimeType, a.size_bytes AS sizeBytes, a.receipt_amount_cents AS amountCents,
     a.receipt_amount_source AS amountSource, a.receipt_amount_confirmed_at AS confirmedAt,

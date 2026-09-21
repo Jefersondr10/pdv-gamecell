@@ -1,5 +1,20 @@
 # Comprovantes, preços e status da venda
 
+## Regra atual — status unificado (21/09/2026)
+
+Esta seção substitui as regras históricas de status manual descritas abaixo.
+
+- Status é calculado pelas pendências reais; nenhuma venda fica “Sem status”.
+- Ordem de prioridade: Cancelado; Falta preço de venda; Falta comprovante; Revisar comprovante; Comprovante em leitura; Pagamento incompleto; Pagamento acima da venda; Falta foto do aparelho; Conciliado.
+- Quando há várias pendências, a primeira aparece no destaque e as demais são mostradas junto à venda. O filtro único **Status** inclui todas as vendas que contenham o status escolhido, mesmo que ele não seja o primeiro.
+- Comprovante válido com valor menor/maior resulta em Pagamento incompleto/acima da venda, não Revisar comprovante. Revisão é para evidência inválida, duplicada, não confirmada ou bloqueada. Valores informados em Pix antigo não prevalecem sobre a evidência aceita.
+- Pix aceito mais dinheiro é comparado com o preço da venda. Dinheiro suficiente dispensa comprovante Pix; pagamento a maior não é conciliado; cancelamento é terminal e não gera pendências ativas.
+- Durante uma releitura, o status Comprovante em leitura aparece mesmo quando o último valor aceito é preservado. Não altera, apaga nem soma pagamentos por conta da apresentação.
+- Informações ausentes no documento (data, banco etc.) continuam explícitas no comprovante. Avisos informativos não retiram um valor aceito do recebido, nem se tornam falsamente pagamento em falta.
+- Nomes/cor/vínculos manuais antigos são preservados como **etiquetas internas**, sem substituir status automático. Os nomes automáticos e os antigos sinônimos são reservados. Nenhuma migração financeira é necessária.
+- Links históricos por etiqueta no escopo `saved` continuam consultando o vínculo salvo; `display` não encontra etiquetas porque agora todo status exibido é automático. Links antigos por `issue` continuam compatíveis.
+- A regra é compartilhada entre lista, detalhe, edição, histórico do cliente, Comprovantes e relatórios. Testes verificam paridade de todos os status TS/SQL, filtros por qualquer pendência, releitura, saldo parcial/excedente, dinheiro, preço, fotos, duplicidade, cancelamento e isolamento de lojas.
+
 ## Precedência do total pago
 
 ### Pix identificado pelo comprovante — revisão de 10/09/2026

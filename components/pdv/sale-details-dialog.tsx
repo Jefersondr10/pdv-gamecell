@@ -300,7 +300,7 @@ export function SaleDetailsDialog({
                   >
                     <h3 className="flex flex-wrap items-center gap-2 text-sm font-extrabold text-amber-950 dark:text-amber-200">
                       <CircleAlert className="size-4 shrink-0" />
-                      Conferência da venda
+                      Status da venda
                       <span className="ml-auto text-xs font-semibold">
                         {issues.length}{' '}
                         {issues.length === 1 ? 'pendência' : 'pendências'}

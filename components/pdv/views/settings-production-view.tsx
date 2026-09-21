@@ -191,9 +191,9 @@ export function SettingsProductionView({
             )}
           <SettingsCard
             icon={ListChecks}
-            title="Status do pedido"
-            detail={`${SYSTEM_SALE_STATUSES.length} automáticos · ${data.orderStatuses.length} de 30 cadastrados`}
-            description="Conciliado e Cancelado são automáticos. Cadastre os demais status da loja."
+            title="Status e etiquetas"
+            detail={`${SYSTEM_SALE_STATUSES.length} status automáticos · ${data.orderStatuses.length} etiquetas`}
+            description="O status acompanha as pendências. Etiquetas são opcionais e não alteram a conciliação."
             disabled={!can(data.user, 'finance.manage')}
             onManage={() => setManager('order-statuses')}
           />
@@ -773,10 +773,10 @@ function OrderStatusesDialog({
         showCloseButton={!busy}
       >
         <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12">
-          <DialogTitle>Status do pedido</DialogTitle>
+          <DialogTitle>Status e etiquetas</DialogTitle>
           <DialogDescription>
-            Conciliado e Cancelado são automáticos. Os demais status são
-            cadastrados e escolhidos por você.
+            Os status são calculados pelas pendências reais da venda. As
+            etiquetas servem apenas para organização interna.
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 overscroll-contain">
@@ -808,7 +808,7 @@ function OrderStatusesDialog({
               ))}
             </ul>
           </section>
-          <h3 className="mb-2 font-bold">Status cadastrados pela loja</h3>
+          <h3 className="mb-2 font-bold">Etiquetas internas da loja</h3>
           <form
             className="grid gap-3 rounded-2xl border bg-muted/25 p-4 sm:grid-cols-[minmax(0,1fr)_11rem_auto] sm:items-end"
             onSubmit={async (event) => {
@@ -830,7 +830,7 @@ function OrderStatusesDialog({
               }
             }}
           >
-            <Field label="Nome do status">
+            <Field label="Nome da etiqueta">
               <Input
                 maxLength={60}
                 onChange={(event) => setName(event.target.value)}
@@ -864,7 +864,7 @@ function OrderStatusesDialog({
           </form>
           {data.orderStatuses.length >= 30 && (
             <p className="mt-2 text-xs font-semibold text-amber-800">
-              Limite de 30 atingido. Renomeie ou reative um status já
+              Limite de 30 atingido. Renomeie ou reative uma etiqueta já
               cadastrado; desativar não apaga o histórico.
             </p>
           )}
@@ -999,14 +999,14 @@ function OrderStatusesDialog({
               </div>
             ))}
             {data.orderStatuses.length === 0 && (
-              <EmptyText>Nenhum status cadastrado.</EmptyText>
+              <EmptyText>Nenhuma etiqueta cadastrada.</EmptyText>
             )}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            Você pode cadastrar Pagamento pendente, Aguardando retirada ou
-            outros nomes da sua rotina. Avisos de preço, pagamento, foto e
-            comprovante continuam visíveis independentemente do status
-            escolhido.
+            Você pode cadastrar etiquetas como Aguardando retirada. Falta de
+            preço, comprovante, pagamento ou foto são status automáticos: só
+            desaparecem quando a pendência é resolvida. Os cadastros antigos
+            permanecem no histórico.
           </p>
         </div>
         <DialogFooter className="m-0 shrink-0 rounded-none border-t p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]">

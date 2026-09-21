@@ -42,7 +42,7 @@ const applyFixture = (total: number) =>
   });
 assert.equal(saleDisplayStatus(applyFixture(3465000)).key, 'reconciled');
 assert.deepEqual(saleIssues(applyFixture(3465000)), []);
-assert.equal(saleIssues(applyFixture(3500000))[0].key, 'review');
+assert.equal(saleIssues(applyFixture(3500000))[0].key, 'pending_payment');
 assert.equal(applyFixture(3500000).reconciliation.differenceCents, -35000);
 assert.equal(applyFixture(3500000).payments, saleFixture.payments);
 assert.equal(applyFixture(3500000).receipts, saleFixture.receipts);

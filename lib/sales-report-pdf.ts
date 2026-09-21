@@ -462,10 +462,11 @@ function saleDetails(
         size: 10,
         bold: true,
       },
-      ...(saleIssues(sale).length
+      ...(saleIssues(sale).length > 1
         ? [
             {
-              text: `Conferência: ${saleIssues(sale)
+              text: `Também: ${saleIssues(sale)
+                .slice(1)
                 .map((issue) => issue.label)
                 .join(' · ')}`,
               size: 9,

@@ -3,7 +3,6 @@ import {
   SALE_ALERT_SQL,
   SALE_CHECK_STATUS_SQL,
   SALE_RECONCILED_SQL,
-  SALE_HAS_MANUAL_STATUS_SQL,
   isSaleCheckStatus,
 } from './sale-status-sql.ts';
 import type { SaleCheckKey, SaleIssueKey } from '../sale-display-status.ts';
@@ -11,10 +10,7 @@ import { SALE_ISSUES } from '../sale-display-status.ts';
 import { SALE_ISSUE_SQL } from './sale-status-sql.ts';
 export { SALE_ALERT_SQL, SALE_RECONCILED_SQL } from './sale-status-sql.ts';
 
-export function salesAggregateSql(
-  filterSql: string,
-  filteredToAlerts = false,
-) {
+export function salesAggregateSql(filterSql: string, filteredToAlerts = false) {
   const alertCountSql = filteredToAlerts
     ? `COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0)`
     : `COALESCE(SUM(CASE WHEN s.status = 'completed' AND ${SALE_ALERT_SQL} THEN 1 ELSE 0 END), 0)`;
@@ -261,6 +257,12 @@ function buildFilterClauses({
   }
   if (saleStatus === 'pending')
     where.push(`s.status = 'completed' AND NOT ${SALE_RECONCILED_SQL}`);
+  else if (saleStatus && SALE_ISSUES.some((issue) => issue.key === saleStatus))
+    // A sale can have several statuses. Filtering must find every matching
+    // badge, not only the first (highest-priority) pending check.
+    where.push(
+      `(s.status = 'completed' AND ${SALE_ISSUE_SQL[saleStatus as SaleIssueKey]})`,
+    );
   else if (saleStatus) {
     where.push(`${SALE_CHECK_STATUS_SQL} = ?`);
     bindings.push(saleStatus);
@@ -280,9 +282,7 @@ function buildFilterClauses({
   if (query) {
     const pattern = `%${query}%`;
     const saleNumberMatch = query.match(/^#?\s*0*(\d{1,10})$/);
-    const exactSaleNumber = saleNumberMatch
-      ? Number(saleNumberMatch[1])
-      : -1;
+    const exactSaleNumber = saleNumberMatch ? Number(saleNumberMatch[1]) : -1;
     where.push(`(
       CAST(s.number AS TEXT) LIKE ? OR s.number = ?
       OR s.customer_name LIKE ? COLLATE NOCASE
@@ -310,18 +310,15 @@ function buildFilterClauses({
   if (issue)
     where.push(`(s.status = 'completed' AND ${SALE_ISSUE_SQL[issue]})`);
   if (orderStatusId === 'none') {
-    where.push(
-      statusScope === 'display'
-        ? `NOT ${SALE_HAS_MANUAL_STATUS_SQL}`
-        : 's.order_status_id IS NULL',
-    );
+    where.push('s.order_status_id IS NULL');
   } else if (orderStatusId) {
     where.push('s.order_status_id = ?');
     bindings.push(orderStatusId);
   }
   if (orderStatusId && statusScope === 'display') {
-    where.push(`s.status = 'completed' AND NOT ${SALE_RECONCILED_SQL}`);
-    if (orderStatusId !== 'none') where.push(SALE_HAS_MANUAL_STATUS_SQL);
+    // Every displayed status is now computed. Historical saved-label links
+    // still work in the default "saved" scope, but none is a display status.
+    where.push('0 = 1');
   }
   if (saleId) {
     where.push('s.id = ?');

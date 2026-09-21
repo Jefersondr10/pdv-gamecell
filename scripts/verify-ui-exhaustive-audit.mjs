@@ -5,6 +5,18 @@ const sales = readFileSync(
   'components/pdv/views/sales-production-view.tsx',
   'utf8',
 );
+assert.doesNotMatch(
+  sales,
+  /aria-label="Contém pendência na venda"/,
+  'sales use one unified status filter',
+);
+assert.match(sales, /aria-label="Status da venda"/);
+assert.match(
+  sales,
+  /Etiqueta interna \(opcional\)/,
+  'saved labels cannot masquerade as automatic statuses',
+);
+assert.doesNotMatch(sales, /Os demais são\s+escolhidos pela equipe/);
 const saleDetails = readFileSync(
   'components/pdv/sale-details-dialog.tsx',
   'utf8',

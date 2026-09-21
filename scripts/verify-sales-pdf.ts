@@ -320,7 +320,7 @@ for (let pageNo = 1; pageNo <= textPdf.numPages; pageNo++) {
     .map((item) => ('str' in item ? item.str : ''))
     .join(' ');
 }
-assert.match(textContent, /Verificar comprovante/);
+assert.match(textContent, /Pagamento incompleto/);
 assert.match(textContent, /34\.650,00 Total recebido/);
 assert.match(textContent, /Falta receber R\$ 80,00/);
 assert.match(textContent, /80,00 abaixo do valor da venda/);

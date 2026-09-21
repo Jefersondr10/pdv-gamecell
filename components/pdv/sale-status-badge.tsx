@@ -9,7 +9,6 @@ import {
 } from '@/lib/sale-display-status';
 import { cn } from '@/lib/utils';
 import { saleReceiptIncome } from '@/lib/receipt-income';
-import { OrderStatusBadge } from './order-status-badge';
 
 export function SaleStatusBadge({ sale }: { sale: SaleRecord }) {
   const status = saleDisplayStatus(sale);
@@ -32,19 +31,9 @@ export function SaleDisplayStatusBadge({
   pixCents?: number;
   cashCents?: number;
 }) {
-  if (status.key === 'manual' && status.color)
-    return (
-      <OrderStatusBadge status={{ name: status.label, color: status.color }} />
-    );
-  if (status.key === 'none')
-    return (
-      <span className="rounded-full bg-muted px-2 py-0.5 text-sm text-muted-foreground">
-        Sem status
-      </span>
-    );
   return (
     <SystemSaleStatusBadge
-      statusKey={status.key as SystemSaleStatusKey}
+      statusKey={status.key}
       pixCents={pixCents}
       cashCents={cashCents}
     />
@@ -60,21 +49,22 @@ export function SaleIssuesNotice({
   compact?: boolean;
   emphasized?: boolean;
 }) {
-  const issues = SALE_ISSUES.filter((issue) => issueKeys.includes(issue.key));
+  // The first status is already shown by the adjacent badge. List only the
+  // additional statuses, instead of a second, competing warning system.
+  const issues = SALE_ISSUES.filter((issue) =>
+    issueKeys.includes(issue.key),
+  ).slice(1);
   if (!issues.length) return null;
   if (emphasized)
     return (
       <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
         {compact ? (
           <p className="font-bold">
-            Conferência: {issues[0].label}
-            {issues.length > 1
-              ? ` · +${issues.length - 1} ${issues.length === 2 ? 'aviso' : 'avisos'}`
-              : ''}
+            Também: {issues.map((issue) => issue.label).join(' · ')}
           </p>
         ) : (
           <>
-            <p className="font-extrabold">Pendências da venda</p>
+            <p className="font-extrabold">Outros status da venda</p>
             <ol className="mt-1 list-decimal space-y-1 pl-5 font-semibold">
               {issues.map((issue) => (
                 <li key={issue.key}>{issue.label}</li>
@@ -86,10 +76,7 @@ export function SaleIssuesNotice({
     );
   return (
     <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-      Conferência:{' '}
-      {compact
-        ? `${issues[0].label}${issues.length > 1 ? ` · +${issues.length - 1} aviso(s)` : ''}`
-        : issues.map((issue) => issue.label).join(' · ')}
+      Também: {issues.map((issue) => issue.label).join(' · ')}
     </p>
   );
 }
@@ -111,22 +98,26 @@ export function SystemSaleStatusBadge({
         'inline-flex max-w-full items-center gap-1.5 rounded-full px-2 py-0.5 text-sm font-semibold leading-5',
         status.tone === 'success'
           ? 'bg-success/10 text-success'
-          : 'bg-muted text-muted-foreground',
+          : status.tone === 'warning'
+            ? 'bg-amber-100 text-amber-950 dark:bg-amber-950/50 dark:text-amber-200'
+            : status.tone === 'neutral'
+              ? 'bg-blue-50 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200'
+              : 'bg-muted text-muted-foreground',
       )}
       title={
         status.key === 'reconciled'
           ? pixCents > 0 && cashCents > 0
-            ? 'Pix e dinheiro conferem com a venda; comprovantes conferem com o Pix; fotos anexadas. Dinheiro informado manualmente. Não confirma crédito bancário.'
+            ? 'Pix e dinheiro conferem com a venda; fotos anexadas. Não confirma crédito bancário.'
             : pixCents > 0
               ? 'Pix confere com a venda; comprovantes conferem com o Pix; fotos anexadas. Não confirma crédito bancário.'
               : cashCents > 0
-                ? 'Dinheiro confere com a venda; fotos anexadas. Dinheiro informado manualmente.'
+                ? 'Dinheiro confere com a venda; fotos anexadas.'
                 : 'Venda conciliada; preços e fotos preenchidos.'
           : status.label
       }
     >
       <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
-      <span className="truncate">{status.label}</span>
+      <span>{status.label}</span>
     </span>
   );
 }
