@@ -1552,6 +1552,63 @@ await call('/api/sales?group=sale&period=all&alert=yes', {
   expected: 400,
 });
 
+// Backdating a completed sale must work through the real endpoint, including
+// before its stock entries, without changing receipts or financial amounts.
+{
+  const before = (
+    await call(`/api/sales?period=all&saleId=${saleId}`, {
+      cookie: ownerCookie,
+    })
+  ).body.items as SaleRecord[];
+  const initial = (
+    await call(`/api/sales/${saleId}/date`, { cookie: ownerCookie })
+  ).body.current as {
+    createdAt: number;
+    revision: number;
+    minimumCreatedAt: number;
+  };
+  assert.equal(initial.minimumCreatedAt, Date.UTC(2020, 0, 1));
+  const backdatedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
+  const changeDate = (createdAt: number, expected: typeof initial) =>
+    call(`/api/sales/${saleId}/date`, {
+      method: 'PATCH',
+      cookie: ownerCookie,
+      headers: {
+        'x-csrf-token': ownerCsrf,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        operationId: crypto.randomUUID(),
+        expected: {
+          createdAt: expected.createdAt,
+          revision: expected.revision,
+        },
+        createdAt,
+      }),
+    });
+  const changed = (await changeDate(backdatedAt, initial)).body
+    .current as typeof initial;
+  assert.equal(changed.createdAt, backdatedAt);
+  assert.equal(changed.revision, initial.revision + 1);
+  const after = (
+    await call(`/api/sales?period=all&saleId=${saleId}`, {
+      cookie: ownerCookie,
+    })
+  ).body.items as SaleRecord[];
+  assert.equal(after[0].createdAt, backdatedAt);
+  assert.equal(after[0].productsTotalCents, before[0].productsTotalCents);
+  assert.equal(after[0].receivedTotalCents, before[0].receivedTotalCents);
+  assert.deepEqual(after[0].payments, before[0].payments);
+  assert.deepEqual(after[0].items, before[0].items);
+  assert.deepEqual(after[0].receipts, before[0].receipts);
+  // Restore the synthetic sale date so subsequent period/ranking tests retain
+  // their original fixture. This test never targets existing store data.
+  await changeDate(initial.createdAt, changed);
+  console.log(
+    'Sale date: HTTP backdating before stock entry and preserved payments/items passed.',
+  );
+}
+
 const cancellationOperationId = crypto.randomUUID();
 await call(`/api/sales/${saleId}/cancel`, {
   method: 'POST',

@@ -4746,7 +4746,7 @@ function SaleDateDialog({
   const unchanged = Boolean(
     current && value === saleDateInputValue(current.createdAt),
   );
-  const invalidChronology = Boolean(
+  const invalidMinimumDate = Boolean(
     current &&
     !unchanged &&
     parsed !== null &&
@@ -4773,9 +4773,10 @@ function SaleDateDialog({
                 Alterar data da venda #{String(sale.number).padStart(5, '0')}
               </DialogTitle>
               <DialogDescription>
-                A venda mudará de dia nos relatórios, fechamentos e histórico
-                dos aparelhos. Datas dos pagamentos e comprovantes não serão
-                alteradas. Horário de Brasília.
+                A data pode ser anterior à entrada no estoque. A venda mudará de
+                dia nos relatórios, fechamentos e histórico dos aparelhos. Datas
+                de entrada, pagamentos e comprovantes não serão alteradas.
+                Horário de Brasília.
               </DialogDescription>
             </DialogHeader>
             {loading ? (
@@ -4811,10 +4812,10 @@ function SaleDateDialog({
                     value={value}
                   />
                 </label>
-                {invalidChronology && (
+                {invalidMinimumDate && (
                   <p className="text-sm font-semibold text-destructive">
-                    A venda não pode ficar antes da entrada dos aparelhos no
-                    estoque.
+                    Escolha uma data a partir de{' '}
+                    {formatDateTime(current.minimumCreatedAt)}.
                   </p>
                 )}
                 {invalidFuture && (
@@ -4843,7 +4844,7 @@ function SaleDateDialog({
                   !current ||
                   parsed === null ||
                   unchanged ||
-                  invalidChronology ||
+                  invalidMinimumDate ||
                   invalidFuture
                 }
                 onClick={async () => {

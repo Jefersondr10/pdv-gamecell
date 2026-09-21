@@ -26,12 +26,7 @@ export async function readSaleDate(
     .prepare(
       `SELECT s.created_at AS createdAt, s.status,
         (SELECT COUNT(*) FROM audit_events a
-          WHERE a.store_id=s.store_id AND a.entity_id=s.id AND a.action=?) AS revision,
-        COALESCE((SELECT MAX(e.created_at)
-          FROM sale_items si
-          JOIN inventory_units iu ON iu.id=si.inventory_unit_id AND iu.store_id=si.store_id
-          JOIN entries e ON e.id=iu.entry_id AND e.store_id=iu.store_id
-          WHERE si.store_id=s.store_id AND si.sale_id=s.id),0) AS minimumCreatedAt
+          WHERE a.store_id=s.store_id AND a.entity_id=s.id AND a.action=?) AS revision
        FROM sales s WHERE s.id=? AND s.store_id=?`,
     )
     .bind(ACTION, saleId, storeId)
@@ -40,7 +35,8 @@ export async function readSaleDate(
     throw new HttpError(404, 'Venda não encontrada.', 'SALE_NOT_FOUND');
   return {
     createdAt: Number(current.createdAt),
-    minimumCreatedAt: Number(current.minimumCreatedAt),
+    // Entry registration can happen after the actual sale. Dates are independent.
+    minimumCreatedAt: MINIMUM_SALE_DATE,
     revision: Number(current.revision),
     status: current.status,
   };
@@ -160,12 +156,6 @@ export async function changeSaleDate(
       'A data da venda foi alterada por outra pessoa. Reabra a venda e confira antes de salvar.',
       'SALE_CHANGED',
     );
-  if (createdAt < before.minimumCreatedAt)
-    throw new HttpError(
-      409,
-      'A venda não pode ficar antes da entrada dos aparelhos no estoque.',
-      'SALE_BEFORE_STOCK_ENTRY',
-    );
   if (createdAt === before.createdAt)
     throw new HttpError(
       400,
@@ -187,12 +177,6 @@ export async function changeSaleDate(
                WHERE id=? AND store_id=? AND status='completed' AND created_at=?)
              AND (SELECT COUNT(*) FROM audit_events
                WHERE store_id=? AND entity_id=? AND action=?)=?
-             AND NOT EXISTS (
-               SELECT 1 FROM sale_items si
-               JOIN inventory_units iu ON iu.id=si.inventory_unit_id AND iu.store_id=si.store_id
-               JOIN entries e ON e.id=iu.entry_id AND e.store_id=iu.store_id
-               WHERE si.store_id=? AND si.sale_id=? AND e.created_at>?
-             )
            THEN ? ELSE NULL END,?,?`,
         )
         .bind(
@@ -207,9 +191,6 @@ export async function changeSaleDate(
           saleId,
           ACTION,
           expected.revision,
-          storeId,
-          saleId,
-          createdAt,
           saleId,
           details,
           now,

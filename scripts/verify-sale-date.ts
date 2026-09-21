@@ -7,7 +7,7 @@ const adapter = new SqliteDatabase(':memory:');
 const db = adapter as unknown as D1Database;
 const entryAt = Date.parse('2026-09-10T09:00:00-03:00');
 const originalAt = Date.parse('2026-09-10T10:00:00-03:00');
-const correctedAt = Date.parse('2026-09-11T11:30:00-03:00');
+const correctedAt = Date.parse('2026-09-09T11:30:00-03:00');
 
 adapter.database.exec(`
   CREATE TABLE sales (id TEXT PRIMARY KEY, store_id TEXT, status TEXT, created_at INTEGER,
@@ -53,7 +53,7 @@ adapter.database
 const scope = { actorId: 'manager', saleId: 'sale', storeId: 'shop' };
 const initial = await readSaleDate(db, 'shop', 'sale');
 assert.equal(initial.createdAt, originalAt);
-assert.equal(initial.minimumCreatedAt, entryAt);
+assert.equal(initial.minimumCreatedAt, Date.UTC(2020, 0, 1));
 assert.equal(initial.revision, 0);
 await assert.rejects(() => readSaleDate(db, 'shop', 'foreign'), {
   code: 'SALE_NOT_FOUND',
@@ -76,9 +76,10 @@ await assert.rejects(
   () => changeSaleDate(db, scope, { ...payload(correctedAt), invented: true }),
   { code: 'UNKNOWN_FIELD' },
 );
-await assert.rejects(() => changeSaleDate(db, scope, payload(entryAt - 1)), {
-  code: 'SALE_BEFORE_STOCK_ENTRY',
-});
+await assert.rejects(
+  () => changeSaleDate(db, scope, payload(Date.UTC(2020, 0, 1) - 1)),
+  { code: 'INVALID_FIELD' },
+);
 await assert.rejects(
   () => changeSaleDate(db, scope, payload(Date.now() + 60 * 60 * 1000)),
   { code: 'SALE_DATE_IN_FUTURE' },
@@ -94,6 +95,23 @@ const first = await changeSaleDate(db, scope, firstInput);
 assert.equal(first.replayed, false);
 assert.equal(first.current.createdAt, correctedAt);
 assert.equal(first.current.revision, 1);
+assert.ok(first.current.createdAt < entryAt, 'sales can predate stock entry');
+assert.equal(
+  adapter.database
+    .prepare('SELECT created_at FROM entries WHERE id=?')
+    .get('entry')!.created_at,
+  entryAt,
+  'backdating a sale must not change its stock entry',
+);
+assert.deepEqual(
+  {
+    ...adapter.database
+      .prepare('SELECT status,sale_id,entry_id FROM inventory_units WHERE id=?')
+      .get('unit'),
+  },
+  { status: 'sold', sale_id: 'sale', entry_id: 'entry' },
+  'the sold unit stays assigned to the same sale and entry',
+);
 assert.equal(
   adapter.database
     .prepare('SELECT sold_at FROM inventory_units WHERE id=?')
@@ -217,5 +235,5 @@ assert.equal(
 
 adapter.close();
 console.log(
-  'PASS: sale date validation, tenant scope, audit, replay, concurrency/ABA, cancellation race, stock movement coherence, immutable operational timestamps and permissions.',
+  'PASS: sales can predate stock entry; date validation, tenant scope, audit, replay, concurrency/ABA, cancellation race, stock movement coherence, immutable operational timestamps and permissions.',
 );

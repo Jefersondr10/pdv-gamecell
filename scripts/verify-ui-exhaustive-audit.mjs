@@ -54,6 +54,11 @@ const saleDateDialog = sales.slice(
   sales.indexOf('function SaleDateDialog('),
   sales.indexOf('function CancelDialog('),
 );
+assert.match(saleDateDialog, /A data pode ser anterior à entrada no estoque/);
+assert.doesNotMatch(
+  saleDateDialog,
+  /invalidChronology|não pode ficar antes da entrada/,
+);
 const salesPage = sales.slice(
   sales.indexOf('data-sales-page'),
   sales.indexOf('<SaleDetailsDialog'),
