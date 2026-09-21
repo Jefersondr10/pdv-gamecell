@@ -1,4 +1,5 @@
 import { REGIONAL_CATALOG_CODES } from './system-catalog-regional.ts';
+import { IPHONE_18_CATALOG_PRODUCTS } from './system-catalog-iphone18.ts';
 
 export type SystemCatalogCode = {
   value: string;
@@ -15,7 +16,7 @@ export type SystemCatalogProduct = {
 
 // Increment this whenever a verified variation or commercial code changes.
 // Stores receive each version once, without changing their prices or active state.
-export const SYSTEM_CATALOG_VERSION = 3;
+export const SYSTEM_CATALOG_VERSION = 4;
 
 type CatalogColor = {
   color: string;
@@ -355,6 +356,7 @@ export const SYSTEM_CATALOG_PRODUCTS: readonly SystemCatalogProduct[] = [
   ...IPHONE_17_PRO,
   ...IPHONE_17_PRO_MAX,
   ...IPHONE_17E,
+  ...IPHONE_18_CATALOG_PRODUCTS,
 ].map((product) => ({
   ...product,
   codes: [

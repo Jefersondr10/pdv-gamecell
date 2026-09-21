@@ -4,17 +4,20 @@ import {
   shortReceiptDate,
 } from '@/lib/receipt-document';
 import { ReceiptReadingNotices } from '@/components/pdv/receipt-reading-notices';
+import { SaleReceiptDetails } from '@/components/pdv/sale-receipt-details';
 
 export function ReceiptPaymentDetails({
   financiallyReconciled = false,
   receipts,
   required = true,
   showNotices = true,
+  layout = 'default',
 }: {
   financiallyReconciled?: boolean;
   receipts: ReceiptAttachmentRecord[];
   required?: boolean;
   showNotices?: boolean;
+  layout?: 'default' | 'sale-detail';
 }) {
   if (!receipts.length && !required) return null;
   if (!receipts.length)
@@ -22,6 +25,20 @@ export function ReceiptPaymentDetails({
       <p className="mt-2 text-sm text-muted-foreground">
         Sem comprovante. Anexe agora ou depois em Vendas para identificar o Pix.
       </p>
+    );
+  if (layout === 'sale-detail')
+    return (
+      <div className="mt-4 space-y-4">
+        {receipts.map((receipt, index) => (
+          <SaleReceiptDetails
+            key={receipt.id}
+            receipt={receipt}
+            index={index}
+            financiallyReconciled={financiallyReconciled}
+            showNotices={showNotices}
+          />
+        ))}
+      </div>
     );
   return (
     <div className="mt-3 grid gap-3 sm:grid-cols-2">

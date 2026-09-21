@@ -1,8 +1,8 @@
-import { classifyCommercialCode, normalizeCommercialCode } from '@/lib/gtin';
+import { classifyCommercialCode, normalizeCommercialCode } from '../gtin.ts';
 import {
   SYSTEM_CATALOG_PRODUCTS,
   SYSTEM_CATALOG_VERSION,
-} from '@/lib/system-catalog';
+} from '../system-catalog.ts';
 
 type ProductRow = {
   id: string;
@@ -249,6 +249,8 @@ function canonicalColor(value: string) {
     sage: 'salvia',
     white: 'branco',
     black: 'preto',
+    burgundy: 'bordo',
+    glacier: 'glacial',
     blue: 'azul',
     green: 'verde',
     yellow: 'amarelo',

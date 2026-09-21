@@ -2,11 +2,9 @@ import { HttpError } from './http.ts';
 import { parseSalesFilters } from './sales-filters.ts';
 import { overviewFilters, type OverviewFilter } from '../overview.ts';
 import {
-  SALE_AUTO_STATUS_SQL,
   SALE_ISSUE_SQL,
   SALE_ISSUE_KEYS_SQL,
   SALE_RECEIPT_TARGET_SQL,
-  SALE_RECEIVED_TOTAL_SQL,
   acceptedReceiptSql,
   duplicateReceiptSql,
   effectiveReceiptReviewReasonSql,
@@ -83,6 +81,9 @@ export async function readOverview(
 
   // One SELECT snapshot, no write-locking batch. Aggregate each relation before
   // joining: multiple payments, items and receipts must never multiply money.
+  // Reuse the accepted-receipt/cash aggregates and derive the automatic status
+  // from the issue keys below. Expanding the same predicates again makes this
+  // read exceed D1's 100 KB statement limit without adding any information.
   const result = await db
     .prepare(`WITH filtered AS (
     SELECT s.* FROM sales s WHERE ${where.join(' AND ')} AND s.status = 'completed'
@@ -99,9 +100,9 @@ export async function readOverview(
     WHERE p.method = 'cash' GROUP BY p.sale_id
   ), compared AS (
     SELECT s.id, s.number, s.customer_name AS customerName, s.created_at AS createdAt,
-      ${SALE_RECEIVED_TOTAL_SQL} AS receivedCents, s.products_total_cents AS saleCents,
+      COALESCE(c.cashCents, 0) + COALESCE(r.receiptCents, 0) AS receivedCents, s.products_total_cents AS saleCents,
       ${SALE_RECEIPT_TARGET_SQL} AS pixCents,
-      ${SALE_AUTO_STATUS_SQL} AS automaticStatus, CASE WHEN ${SALE_ISSUE_SQL.missing_price} THEN 1 ELSE 0 END AS saleInvalid, s.store_id AS storeId,
+      CASE WHEN ${SALE_ISSUE_SQL.missing_price} THEN 1 ELSE 0 END AS saleInvalid, s.store_id AS storeId,
       ${SALE_ISSUE_KEYS_SQL} AS issueKeysJson, os.id AS orderStatusId, os.name AS orderStatusName, os.color AS orderStatusColor,
       COALESCE(c.cashCents, 0) AS cashCents, COALESCE(r.receiptCount, 0) AS receiptCount,
       COALESCE(r.receiptCents, 0) AS receiptCents, COALESCE(r.pendingCount, 0) AS pendingCount, COALESCE(r.receiptReviewCount, 0) AS receiptReviewCount
@@ -123,6 +124,7 @@ export async function readOverview(
     FROM selected
   ), page AS (SELECT * FROM selected ${cursor ? 'WHERE createdAt < ? OR (createdAt = ? AND id < ?)' : ''} ORDER BY createdAt DESC, id DESC LIMIT ?)
   SELECT summary.*, page.*, (SELECT COALESCE(SUM(pendingCount), 0) FROM compared) AS pendingInPeriod,
+    CASE WHEN page.id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM json_each(page.issueKeysJson) WHERE value IS NOT NULL) THEN 'reconciled' ELSE NULL END AS automaticStatus,
     a.id AS attachmentId, a.file_name AS fileName,
     a.mime_type AS mimeType, a.size_bytes AS sizeBytes, a.receipt_amount_cents AS amountCents,
     a.receipt_amount_source AS amountSource, a.receipt_amount_confirmed_at AS confirmedAt,

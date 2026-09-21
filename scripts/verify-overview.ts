@@ -7,7 +7,19 @@ import {
   overviewSaleComparison,
 } from '../lib/overview.ts';
 
-const db = new SqliteDatabase(':memory:');
+// SQLite on Node accepts much larger statements than D1. Enforce the deployed
+// limit here so duplicated status predicates cannot silently break this screen.
+class SizeLimitedDatabase extends SqliteDatabase {
+  prepare(sql: string) {
+    const bytes = Buffer.byteLength(sql, 'utf8');
+    assert.ok(
+      bytes <= 100_000,
+      `Overview SQL exceeds the 100 KB statement limit: ${bytes} bytes`,
+    );
+    return super.prepare(sql);
+  }
+}
+const db = new SizeLimitedDatabase(':memory:');
 db.database.exec(`
   CREATE TABLE sales (id TEXT PRIMARY KEY, store_id TEXT, number INTEGER, customer_name TEXT, created_at INTEGER, status TEXT, received_total_cents INTEGER, products_total_cents INTEGER);
   CREATE TABLE attachments (id TEXT PRIMARY KEY, store_id TEXT, sale_id TEXT, kind TEXT, file_name TEXT, mime_type TEXT, size_bytes INTEGER, receipt_amount_cents INTEGER, receipt_amount_source TEXT, receipt_amount_confirmed_at INTEGER, created_at INTEGER,receipt_review_reason TEXT);

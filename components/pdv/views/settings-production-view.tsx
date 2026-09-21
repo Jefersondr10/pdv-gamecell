@@ -1532,7 +1532,7 @@ function SettingsCard({
         <CardTitle className="text-base">{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
-      <CardContent className="flex items-center justify-between border-t p-4">
+      <CardContent className="flex items-center justify-between gap-3 border-t bg-muted/25 p-4">
         <span className="text-sm font-semibold text-muted-foreground">
           {detail}
         </span>

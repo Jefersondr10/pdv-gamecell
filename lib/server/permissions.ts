@@ -77,6 +77,7 @@ export function routePermissions(request: Request): Permission[] | null {
   if (path === '/api/sales/groups') return ['sales', 'ranking'];
   if (/^\/api\/sales\/[^/]+\/payments$/.test(path)) return ['sales.payments'];
   if (/^\/api\/sales\/[^/]+\/prices$/.test(path)) return ['sales.prices'];
+  if (/^\/api\/sales\/[^/]+\/date$/.test(path)) return ['sales.date'];
   if (/^\/api\/sales\/[^/]+\/receipt-payment$/.test(path))
     return read ? ['sales'] : ['sales.payments'];
   if (/^\/api\/sales\/[^/]+\/attachments$/.test(path))

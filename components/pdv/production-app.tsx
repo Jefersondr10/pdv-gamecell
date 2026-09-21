@@ -831,30 +831,32 @@ function CloudPdv({
               correta. Nenhum dado do relatório foi carregado.
             </div>
           )}
-        <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r bg-sidebar px-5 py-6 lg:flex lg:flex-col">
-          <Brand storeName={data.store.name} />
+        <aside className="app-sidebar fixed inset-y-0 left-0 z-30 hidden w-64 overflow-y-auto border-r px-4 py-6 lg:flex lg:flex-col">
+          <div className="border-b border-white/10 px-2 pb-6">
+            <Brand light storeName={data.store.name} />
+          </div>
           <DesktopNavigation
             items={allowedNavigation}
             active={displayedView}
             onChange={changeView}
           />
           <button
-            className="mt-auto w-full rounded-2xl border bg-card p-4 text-left transition hover:bg-muted/40"
+            className="mt-auto w-full rounded-xl border border-white/10 bg-white/5 p-3.5 text-left transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-sky-300"
             onClick={() => setProfileOpen(true)}
             type="button"
           >
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">
               Operador
             </p>
             <div className="mt-2 flex items-center gap-3">
-              <span className="grid size-10 place-items-center rounded-full bg-secondary text-primary">
+              <span className="grid size-10 place-items-center rounded-xl bg-white/10 text-slate-200">
                 <CircleUserRound className="size-5" />
               </span>
               <span className="min-w-0">
                 <span className="block truncate font-bold">
                   {data.user.displayName}
                 </span>
-                <span className="block text-xs text-muted-foreground">
+                <span className="block text-xs text-slate-400">
                   {roleLabel(data.user.role)} · Ajuda
                 </span>
               </span>
@@ -863,6 +865,26 @@ function CloudPdv({
         </aside>
 
         <section className="mx-auto flex h-dvh min-h-0 max-w-[1500px] flex-col overflow-hidden lg:ml-64">
+          <div className="hidden h-14 shrink-0 items-center justify-between gap-4 border-b bg-card px-6 lg:flex">
+            <p className="text-xs text-muted-foreground">
+              Espaço da loja <span className="mx-2 text-border">/</span>
+              <span className="font-semibold text-foreground">
+                {
+                  allowedNavigation.find((item) => item.view === displayedView)
+                    ?.label
+                }
+              </span>
+            </p>
+            <output
+              aria-live="polite"
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+            >
+              <span
+                className={`size-1.5 rounded-full ${online ? 'bg-success' : 'bg-amber-600'}`}
+              />
+              {online ? 'Conectado' : 'Sem conexão'}
+            </output>
+          </div>
           <header className="relative z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b bg-background/95 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:hidden">
             <button
               aria-controls="mobile-primary-navigation"
@@ -928,7 +950,7 @@ function CloudPdv({
             onChanged={reload}
           />
           {can(data.user, 'backup') && <BackupStatusCard alertOnly />}
-          <div className="min-h-0 flex-1 overflow-hidden">
+          <div className="app-workspace min-h-0 flex-1 overflow-hidden">
             {displayedView === 'sell' && (
               <SellWizard
                 defaultSellerId={data.user.id}
@@ -1856,13 +1878,13 @@ function GuideDialog({
             No menu da loja, abra Comprovantes e escolha o período pela data da
             venda. O Pix vem dos comprovantes e é somado ao dinheiro recebido,
             separados por venda. Um valor único e válido atualiza o recebido
-            automaticamente; dados como banco, pagador, recebedor, data ou ID que
-            não forem lidos aparecem como avisos separados, sem zerar o valor.
-            Agendamento, cancelamento, processamento, valores ambíguos e
+            automaticamente; dados como banco, pagador, recebedor, data ou ID
+            que não forem lidos aparecem como avisos separados, sem zerar o
+            valor. Agendamento, cancelamento, processamento, valores ambíguos e
             duplicidade conhecida continuam exigindo conferência. Toque em um
-            arquivo para abrir a foto ou PDF, ou use Reler comprovante. Pagamentos
-            em dinheiro são informados e conferidos manualmente. Esta conferência
-            é documental: não confirma crédito na conta bancária.
+            arquivo para abrir a foto ou PDF, ou use Reler comprovante.
+            Pagamentos em dinheiro são informados e conferidos manualmente. Esta
+            conferência é documental: não confirma crédito na conta bancária.
           </GuideStep>
           <GuideStep number="Novo" title="iPhone 15 e cores revisadas">
             O catálogo padrão inclui agora o iPhone 15 base, com cinco cores e
@@ -1889,12 +1911,12 @@ function GuideDialog({
           </GuideStep>
           <GuideStep number="1" title="Cadastre a base">
             Em Cadastros, gerencie clientes, produtos, preços, cores, memórias,
-            UPCs, EANs e JANs. O catálogo padrão do sistema já traz
-            o iPhone 15 base, o iPhone 16 (exceto o Pro Max) e toda a linha
-            iPhone 17, com códigos verificados dos Estados Unidos, Japão e
-            referências regionais adicionais. Códigos de outros mercados podem
-            ser acrescentados sem substituir seus preços. Em Ajustes, o
-            proprietário gerencia os usuários da loja.
+            UPCs, EANs e JANs. O catálogo padrão do sistema já traz o iPhone 15
+            base, o iPhone 16 (exceto o Pro Max) e toda a linha iPhone 17, com
+            códigos verificados dos Estados Unidos, Japão e referências
+            regionais adicionais. Códigos de outros mercados podem ser
+            acrescentados sem substituir seus preços. Em Ajustes, o proprietário
+            gerencia os usuários da loja.
           </GuideStep>
           <GuideStep number="2" title="Dê entrada">
             Abra Entrada. Bipe o UPC/EAN, confirme o produto, bipe somente os
@@ -1907,10 +1929,10 @@ function GuideDialog({
             confira ou altere o preço e anexe ou pule o comprovante. Na versão
             de produção, após salvar o envio, o servidor lê o comprovante sem
             depender do celular aberto. O Pix identificado atualiza a venda; só
-            o dinheiro é informado manualmente. Um arquivo sem valor identificado
-            fica para conferência. Também é possível salvar sem comprovante e
-            anexar ou reler depois. A conferência de valores não prova que a
-            transferência bancária foi efetivada.
+            o dinheiro é informado manualmente. Um arquivo sem valor
+            identificado fica para conferência. Também é possível salvar sem
+            comprovante e anexar ou reler depois. A conferência de valores não
+            prova que a transferência bancária foi efetivada.
           </GuideStep>
           <GuideStep number="4" title="Diferenças de valor">
             O sistema permite receber acima ou abaixo do total dos produtos, mas
@@ -1926,12 +1948,12 @@ function GuideDialog({
             alterne entre SNs disponíveis e vendidos e use o ícone para copiar o
             SN. Ao pesquisar um SN em Vendas ou no Histórico de entradas, toque
             no resultado para ver toda a linha do tempo: entrada, vendas,
-            cancelamentos e revendas, com acesso aos detalhes. O relatório ignora
-            estoque zerado. Em Vendas, o botão
-            Relatório de vendas baixa o período filtrado nos formatos
-            simplificado, detalhado ou completo, separa os resultados por dia e
-            destaca o total diário; cada venda também mantém seu próprio PDF. O
-            menu Histórico preserva cada entrada.
+            cancelamentos e revendas, com acesso aos detalhes. O relatório
+            ignora estoque zerado. Em Vendas, o botão Relatório de vendas baixa
+            o período filtrado nos formatos simplificado, detalhado ou completo,
+            separa os resultados por dia e destaca o total diário; cada venda
+            também mantém seu próprio PDF. O menu Histórico preserva cada
+            entrada.
           </GuideStep>
           <GuideStep
             number="6"
@@ -2035,14 +2057,18 @@ function GuideStep({
 
 function navigationButtonClass(view: View, selected: boolean, mobile = false) {
   const base =
-    'group flex w-full items-center gap-3 rounded-2xl border text-left outline-none transition focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
+    'group flex w-full items-center gap-3 rounded-xl border text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
   if (view === 'sell')
-    return `${base} ${mobile ? 'min-h-20 px-4 text-lg' : 'mb-2 min-h-14 px-4 text-base'} border-primary bg-primary font-extrabold text-primary-foreground shadow-md shadow-primary/15 hover:bg-primary/90 ${selected ? 'ring-2 ring-primary/25 ring-offset-2 ring-offset-background' : ''}`;
-  if (view === 'entry')
-    return `${base} ${mobile ? 'min-h-16 px-3.5 text-[0.9375rem]' : 'mb-1 min-h-12 px-4 text-sm'} border-primary/20 bg-secondary font-bold text-primary hover:border-primary/40 hover:bg-accent ${selected ? 'border-primary/50 ring-1 ring-inset ring-primary/20' : ''}`;
-  if (view === 'ranking')
-    return `${base} ${mobile ? 'min-h-12 px-3.5 text-sm' : 'mb-3 min-h-11 px-4 text-sm'} border-ranking-border bg-ranking-soft font-semibold text-ranking-foreground hover:bg-ranking-hover ${selected ? 'ring-1 ring-inset ring-ranking-foreground/35' : ''}`;
-  return `${base} ${mobile ? 'min-h-12 px-3.5 text-sm' : 'min-h-11 px-4 text-sm'} font-semibold ${selected ? 'border-border bg-muted text-foreground' : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'}`;
+    return `${base} ${mobile ? 'min-h-16 px-4 text-base' : 'mb-3 min-h-12 px-4 text-sm'} border-primary bg-primary font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 ${selected ? 'ring-1 ring-inset ring-white/25' : ''}`;
+  return `${base} min-h-11 px-3.5 text-sm font-medium ${
+    mobile
+      ? selected
+        ? 'border-primary/15 bg-secondary text-primary'
+        : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'
+      : selected
+        ? 'border-white/10 bg-white/10 text-white'
+        : 'border-transparent text-slate-300 hover:bg-white/5 hover:text-white'
+  }`;
 }
 
 function DesktopNavigation({
@@ -2055,7 +2081,7 @@ function DesktopNavigation({
   onChange: (view: View) => void;
 }) {
   return (
-    <nav className="mt-8 space-y-1" aria-label="Navegação principal">
+    <nav className="mb-6 mt-5 space-y-1" aria-label="Navegação principal">
       {items.map(({ view, label, icon: Icon }) => (
         <button
           aria-current={active === view ? 'page' : undefined}
@@ -2160,7 +2186,7 @@ function Brand({
   return (
     <div className="flex min-w-0 items-center gap-2 sm:gap-3">
       <span
-        className={`grid place-items-center rounded-xl ${light ? 'bg-white/12 text-white' : 'bg-primary text-primary-foreground'} ${compact ? 'size-9' : 'size-11'}`}
+        className={`grid shrink-0 place-items-center rounded-xl ${light ? 'bg-white/10 text-white ring-1 ring-white/10' : 'bg-primary text-primary-foreground'} ${compact ? 'size-9' : 'size-11'}`}
       >
         <Smartphone className={compact ? 'size-4' : 'size-5'} />
       </span>

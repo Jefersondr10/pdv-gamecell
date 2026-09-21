@@ -33,6 +33,9 @@ export function SalePricesEditor({
   title = 'Preços desta venda',
   children,
   editable = true,
+  className,
+  description,
+  headingIcon,
 }: {
   sale: SaleRecord;
   csrfToken: string;
@@ -43,6 +46,9 @@ export function SalePricesEditor({
   title?: string;
   children?: ReactNode;
   editable?: boolean;
+  className?: string;
+  description?: string;
+  headingIcon?: ReactNode;
 }) {
   const [current, setCurrent] = useState<SalePrices | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -142,16 +148,19 @@ export function SalePricesEditor({
     }
   }
   return (
-    <section className="rounded-2xl border p-4">
+    <section className={cn('rounded-2xl border p-4', className)}>
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h3 className="font-extrabold">{title}</h3>
-          {editable && (
-            <p className="text-sm text-muted-foreground">
-              Altere os preços desta venda. Pagamentos e preços padrão não
-              mudam.
-            </p>
-          )}
+        <div className="flex min-w-0 items-center gap-3">
+          {headingIcon}
+          <div className="min-w-0">
+            <h3 className="font-extrabold">{title}</h3>
+            {(description || editable) && (
+              <p className="text-sm text-muted-foreground">
+                {description ??
+                  'Altere os preços desta venda. Pagamentos e preços padrão não mudam.'}
+              </p>
+            )}
+          </div>
         </div>
         {!current && editable && (
           <Button

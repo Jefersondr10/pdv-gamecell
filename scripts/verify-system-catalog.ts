@@ -4,6 +4,7 @@ import { normalizeCommercialCode } from '../lib/gtin.ts';
 import { hasValidGtinCheckDigit } from '../lib/scanner.ts';
 import { SYSTEM_CATALOG_PRODUCTS } from '../lib/system-catalog.ts';
 import { REGIONAL_CATALOG_CODES } from '../lib/system-catalog-regional.ts';
+import { IPHONE_18_CATALOG_CODES } from '../lib/system-catalog-iphone18.ts';
 
 const expectedByModel = new Map([
   ['iPhone 15', 15],
@@ -16,9 +17,11 @@ const expectedByModel = new Map([
   ['iPhone 17 Pro', 9],
   ['iPhone 17 Pro Max', 12],
   ['iPhone 17e', 6],
+  ['iPhone 18 Pro', 16],
+  ['iPhone 18 Pro Max', 16],
 ]);
 
-assert.equal(SYSTEM_CATALOG_PRODUCTS.length, 116);
+assert.equal(SYSTEM_CATALOG_PRODUCTS.length, 148);
 assert.equal(
   SYSTEM_CATALOG_PRODUCTS.some(({ model }) =>
     /^iPhone 15 (Plus|Pro)/.test(model),
@@ -49,19 +52,40 @@ for (const product of SYSTEM_CATALOG_PRODUCTS) {
     `Produto repetido: ${product.key}`,
   );
   productKeys.add(product.key);
-  assert.equal(
-    product.codes.filter((code) =>
-      ['Estados Unidos', 'Japão'].includes(code.market),
-    ).length,
-    product.model === 'iPhone 15' && product.memory !== '512 GB' ? 3 : 2,
-    `Códigos de ${product.key}`,
-  );
-  const usa = product.codes[0];
-  const japan = product.codes.find((code) => code.market === 'Japão')!;
-  assert.equal(usa.market, 'Estados Unidos');
-  assert.equal(japan.market, 'Japão');
-  assert.match(usa.value, /^\d{12}$/);
-  assert.match(japan.value, /^\d{13}$/);
+  if (!product.model.startsWith('iPhone 18 ')) {
+    assert.equal(
+      product.codes.filter((code) =>
+        ['Estados Unidos', 'Japão'].includes(code.market),
+      ).length,
+      product.model === 'iPhone 15' && product.memory !== '512 GB' ? 3 : 2,
+      `Códigos de ${product.key}`,
+    );
+    const usa = product.codes[0];
+    const japan = product.codes.find((code) => code.market === 'Japão')!;
+    assert.equal(usa.market, 'Estados Unidos');
+    assert.equal(japan.market, 'Japão');
+    assert.match(usa.value, /^\d{12}$/);
+    assert.match(japan.value, /^\d{13}$/);
+  } else {
+    assert.ok(
+      ['Preto', 'Prateado', 'Glacial', 'Bordô'].includes(product.color),
+    );
+    assert.ok(['256 GB', '512 GB', '1 TB', '2 TB'].includes(product.memory));
+    assert.ok(product.codes.some((code) => code.market === 'Japão'));
+    for (const code of product.codes) {
+      assert.ok(
+        IPHONE_18_CATALOG_CODES.some(
+          (evidence) =>
+            evidence.model === product.model &&
+            evidence.color === product.color &&
+            evidence.memory === product.memory &&
+            evidence.value === code.value &&
+            evidence.sources.length > 0 &&
+            evidence.sources.every((url) => new URL(url).protocol === 'https:'),
+        ),
+      );
+    }
+  }
 
   for (const code of product.codes) {
     assert.match(code.value, /^(?:\d{8}|\d{12,14})$/);
@@ -104,8 +128,18 @@ for (const code of REGIONAL_CATALOG_CODES) {
   for (const source of code.sources)
     assert.equal(new URL(source).protocol, 'https:');
 }
-assert.equal(normalizedCodes.size, 350);
+assert.equal(IPHONE_18_CATALOG_CODES.length, 42);
+assert.equal(normalizedCodes.size, 392);
+// UPC, EAN with a leading zero, and GTIN-14 resolve to the same variation.
+assert.equal(
+  normalizeCommercialCode('195951414713'),
+  normalizeCommercialCode('0195951414713'),
+);
+assert.equal(
+  normalizeCommercialCode('195951414713'),
+  normalizeCommercialCode('00195951414713'),
+);
 
 console.log(
-  'System catalog checks passed: 116 variants and 350 unique GTINs (108 regional additions).',
+  'System catalog checks passed: 148 variants and 392 unique GTINs (32 iPhone 18 variants, 42 new codes).',
 );

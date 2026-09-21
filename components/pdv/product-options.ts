@@ -10,6 +10,8 @@ export const APPLE_MEMORY_OPTIONS = [
 ] as const;
 
 export const APPLE_COLOR_SUGGESTIONS = [
+  'Bordô',
+  'Glacial',
   'Laranja-cósmico',
   'Laranja',
   'Azul-intenso',

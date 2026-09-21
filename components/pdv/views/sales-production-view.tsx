@@ -14,6 +14,8 @@ import {
   Camera,
   CircleAlert,
   Download,
+  EllipsisVertical,
+  Eye,
   Link2,
   RefreshCw,
   FileCheck2,
@@ -92,6 +94,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import {
   NativeSelect,
@@ -143,12 +152,47 @@ type Grouping = 'sale' | SalesGrouping;
 type ReportLevel = 'simple' | 'detailed' | 'complete';
 type SellerRanking = 'items' | 'value';
 type IssueFilter = 'all' | SaleIssueKey;
+type SaleEditorMode = 'full' | 'info' | 'payments' | 'photos';
+const SALE_EDITOR_COPY: Record<
+  SaleEditorMode,
+  { description: string; saveLabel: string; title: string }
+> = {
+  full: {
+    title: 'Editar venda',
+    description:
+      'Edite status, cliente, vendedor, preços, pagamentos, comprovantes e fotos. Produtos e SNs permanecem protegidos.',
+    saveLabel: 'Salvar venda',
+  },
+  info: {
+    title: 'Status, cliente e vendedor',
+    description:
+      'Altere o status cadastrado, o cliente ou o vendedor responsável pela venda.',
+    saveLabel: 'Salvar dados da venda',
+  },
+  payments: {
+    title: 'Pagamentos / preço de venda',
+    description:
+      'Confira o Pix pelos comprovantes, corrija o dinheiro recebido ou altere os preços desta venda.',
+    saveLabel: 'Salvar pagamentos',
+  },
+  photos: {
+    title: 'Fotos dos aparelhos',
+    description: 'Adicione somente fotos dos aparelhos vinculados à venda.',
+    saveLabel: 'Salvar fotos',
+  },
+};
 type QueuedPayment = {
   operationId: string;
   method: 'pix' | 'cash';
   pixAccountId: string | null;
   accountName: string | null;
   amountCents: number;
+};
+type SaleDateState = {
+  createdAt: number;
+  minimumCreatedAt: number;
+  revision: number;
+  status: 'completed' | 'cancelled';
 };
 type FilterOption<T extends string> = {
   detail?: string;
@@ -273,6 +317,8 @@ export function SalesProductionView({
   const [detailSale, setDetailSale] = useState<SaleRecord | null>(null);
   const [historySerial, setHistorySerial] = useState<string | null>(null);
   const [editSale, setEditSale] = useState<SaleRecord | null>(null);
+  const [editSaleMode, setEditSaleMode] = useState<SaleEditorMode>('full');
+  const [dateSale, setDateSale] = useState<SaleRecord | null>(null);
   const [cancelSale, setCancelSale] = useState<SaleRecord | null>(null);
   useEffect(() => {
     let active = true;
@@ -371,6 +417,14 @@ export function SalesProductionView({
     new Map<string, { loadedAt: number; value: SalesAnalytics }>(),
   );
   const canCancel = can(data.user, 'sales.cancel');
+  const canChangeDate = can(data.user, 'sales.date');
+  const canManageReceipts = canAny(data.user, [
+    'sales.attachments',
+    'sales.receipts',
+    'sales.receipts.delete',
+  ]);
+  const canPayments = can(data.user, 'sales.payments');
+  const canAttachments = can(data.user, 'sales.attachments');
   const handlePricesChanged = (saleId: string, value: SalePrices) => {
     const update = (record: SaleRecord | null) =>
       record?.id === saleId ? applySalePrices(record, value) : record;
@@ -392,6 +446,7 @@ export function SalesProductionView({
     'sales.prices',
     'sales.status',
   ]);
+  const canEditInfo = canAny(data.user, ['sales.participants', 'sales.status']);
   const filterParams = useMemo(() => {
     if (openSaleId)
       return new URLSearchParams({
@@ -675,11 +730,11 @@ export function SalesProductionView({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-2 py-2 sm:px-4 sm:py-3 lg:px-6">
-      <div className="mb-2 flex shrink-0 items-end justify-between gap-3 sm:mb-3">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto px-3 py-3 sm:overflow-hidden sm:px-6 sm:py-5">
+      <div className="mb-3 flex shrink-0 items-end justify-between gap-3 sm:mb-4">
         <div className="min-w-0">
-          <p className="sr-only">Comercial</p>
-          <h1 className="text-xl font-black tracking-[-.04em] sm:text-2xl">
+          <p className="eyebrow hidden sm:block">Comercial</p>
+          <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
             Vendas
           </h1>
           <p className="sr-only">
@@ -688,7 +743,7 @@ export function SalesProductionView({
           </p>
         </div>
         <Button
-          className="h-9 rounded-xl px-3 font-extrabold shadow-sm"
+          className="h-9 rounded-lg px-3 font-semibold"
           onClick={() => setPeriodReportOpen(true)}
           type="button"
         >
@@ -697,7 +752,7 @@ export function SalesProductionView({
           <span className="hidden sm:inline">Relatório de vendas</span>
         </Button>
       </div>
-      <div className="mb-2 grid shrink-0 grid-cols-4 gap-1 sm:mb-2 sm:gap-2">
+      <div className="mb-3 grid shrink-0 grid-cols-2 gap-2 sm:mb-4 sm:grid-cols-4 sm:gap-3">
         <Metric
           active={grouping === 'sale' && !alertOnly}
           comparison={
@@ -736,8 +791,8 @@ export function SalesProductionView({
                 }
               : null
           }
-          label="Montante vendido"
-          mobileLabel="Valor"
+          label="Total vendido"
+          mobileLabel="Total vendido"
           mobileValue={formatCompactMoney(activeAggregates.amountCents)}
           onClick={() => {
             setAlertOnly(false);
@@ -762,7 +817,7 @@ export function SalesProductionView({
               : null
           }
           label="Aparelhos"
-          mobileLabel="Itens"
+          mobileLabel="Aparelhos"
           onClick={() => {
             setAlertOnly(false);
             setIssueFilter('all');
@@ -785,8 +840,8 @@ export function SalesProductionView({
                 }
               : null
           }
-          label="Avisos"
-          mobileLabel="Avisos"
+          label="Vendas com avisos"
+          mobileLabel="Com avisos"
           onClick={() => {
             setAlertOnly(true);
             setIssueFilter('all');
@@ -796,18 +851,19 @@ export function SalesProductionView({
           value={String(activeAggregates.alertCount)}
         />
       </div>
-      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <CardHeader className="shrink-0 space-y-1.5 border-b bg-muted/20 p-2 sm:p-2.5">
+      <Card className="flex shrink-0 flex-col gap-0 overflow-hidden py-0 sm:min-h-0 sm:flex-1 sm:shrink">
+        <CardHeader className="shrink-0 space-y-2 border-b bg-card p-2.5 sm:p-4">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 md:grid-cols-3 xl:grid-cols-[minmax(12rem,1fr)_10rem_11rem_12rem_11rem]">
             <label className="col-span-2 min-w-0 md:col-span-1">
-              <span className="sr-only mb-1 items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+              <span className="mb-1 hidden items-center gap-1.5 text-sm font-bold text-muted-foreground md:flex">
                 <Search className="size-3 text-muted-foreground" /> Pesquisar
                 vendas
               </span>
               <span className="relative block">
                 <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
-                  className="h-10 rounded-xl bg-background pl-9 font-bold tracking-[-.01em] shadow-sm placeholder:font-medium"
+                  aria-label="Pesquisar vendas"
+                  className="h-10 rounded-lg bg-background/70 pl-9 font-medium placeholder:font-normal"
                   onChange={(event) => setQueryDraft(event.target.value)}
                   placeholder="Cliente, vendedor, modelo, venda ou SN"
                   value={queryDraft}
@@ -815,7 +871,7 @@ export function SalesProductionView({
               </span>
             </label>
             <div className="min-w-0">
-              <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+              <span className="mb-1 flex items-center gap-1.5 text-sm font-bold text-muted-foreground">
                 <CalendarDays className="size-3 text-muted-foreground" />
                 Período
               </span>
@@ -849,9 +905,9 @@ export function SalesProductionView({
               )}
             >
               <div className="min-w-0">
-                <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                <span className="mb-1 flex items-center gap-1.5 text-sm font-bold text-muted-foreground">
                   <CircleAlert className="size-3 text-muted-foreground" />
-                  Contém pendência
+                  Pendências
                 </span>
                 <SalesFilterSelect
                   aria-label="Contém pendência na venda"
@@ -867,9 +923,8 @@ export function SalesProductionView({
                 />
               </div>
               <div className="min-w-0">
-                <span className="mb-1 flex items-center gap-1.5 px-1 text-xs font-black uppercase tracking-[.1em] text-slate-600 dark:text-slate-300">
+                <span className="mb-1 flex items-center gap-1.5 text-sm font-bold text-muted-foreground">
                   <ListFilter className="size-3 text-muted-foreground" /> Status
-                  principal
                 </span>
                 <SalesFilterSelect
                   aria-label="Status da venda"
@@ -923,6 +978,10 @@ export function SalesProductionView({
                 />
               </div>
               <div className="col-span-2 min-w-0 md:col-span-1">
+                <span className="mb-1 flex items-center gap-1.5 text-sm font-bold text-muted-foreground">
+                  <UserRound className="size-3 text-muted-foreground" />{' '}
+                  Vendedor
+                </span>
                 <SalesFilterSelect
                   aria-label="Vendedor das vendas"
                   onValueChange={setSellerFilter}
@@ -1033,7 +1092,7 @@ export function SalesProductionView({
             </button>
           )}
         </CardHeader>
-        <CardContent className="min-h-0 flex-1 overflow-y-auto p-0 overscroll-contain">
+        <CardContent className="p-0 sm:min-h-0 sm:flex-1 sm:overflow-y-auto sm:overscroll-contain">
           {activeError ? (
             <div
               className="grid min-h-52 place-items-center p-6 text-center"
@@ -1078,8 +1137,37 @@ export function SalesProductionView({
           ) : grouping === 'sale' ? (
             <>
               <SaleList
+                canAttachments={canAttachments}
+                canCancel={canCancel}
+                canChangeDate={canChangeDate}
+                canEdit={canEdit}
+                canEditInfo={canEditInfo}
+                canPayments={
+                  canPayments ||
+                  canManageReceipts ||
+                  can(data.user, 'sales.prices')
+                }
+                onCancel={setCancelSale}
+                onChangeDate={setDateSale}
                 onDetails={openSaleDetails}
+                onEdit={(sale) => {
+                  setEditSaleMode('full');
+                  setEditSale(sale);
+                }}
+                onEditInfo={(sale) => {
+                  setEditSaleMode('info');
+                  setEditSale(sale);
+                }}
                 onOpenSerial={openSerialHistory}
+                onPhotos={(sale) => {
+                  setEditSaleMode('photos');
+                  setEditSale(sale);
+                }}
+                onPayments={(sale) => {
+                  setEditSaleMode('payments');
+                  setEditSale(sale);
+                }}
+                onReport={setReportSale}
                 query={query}
                 sales={page.items}
               />
@@ -1149,7 +1237,10 @@ export function SalesProductionView({
         }}
         closeLabel={returnToPeriodReport ? 'Voltar ao relatório' : 'Fechar'}
         onReport={setReportSale}
-        onEdit={setEditSale}
+        onEdit={(sale) => {
+          setEditSaleMode('full');
+          setEditSale(sale);
+        }}
         onCancel={setCancelSale}
         canEdit={canEdit}
         canCancel={canCancel}
@@ -1195,7 +1286,8 @@ export function SalesProductionView({
       />
       <EditSaleDialog
         data={data}
-        key={editSale?.id ?? 'closed-sale-editor'}
+        key={editSale ? `${editSaleMode}:${editSale.id}` : 'closed-sale-editor'}
+        mode={editSaleMode}
         onPricesChanged={handlePricesChanged}
         onReceiptDeleted={(saleId, receiptId) => {
           const update = (record: SaleRecord | null) => {
@@ -1239,6 +1331,7 @@ export function SalesProductionView({
         onOpenChange={(open) => {
           if (!open) {
             setEditSale(null);
+            setEditSaleMode('full');
             if (returnToPeriodReport) {
               setReturnToPeriodReport(false);
               setPeriodReportOpen(true);
@@ -1246,6 +1339,31 @@ export function SalesProductionView({
           }
         }}
         sale={editSale}
+      />
+      <SaleDateDialog
+        data={data}
+        key={dateSale?.id ?? 'closed-sale-date'}
+        onChanged={async (saleId, createdAt) => {
+          const update = (record: SaleRecord | null) =>
+            record?.id === saleId ? { ...record, createdAt } : record;
+          setPage((current) => ({
+            ...current,
+            items: current.items.map((record) => update(record)!),
+          }));
+          setEditSale(update);
+          setDetailSale(update);
+          setReportSale(update);
+          analyticsCacheRef.current.clear();
+          listDataKeyRef.current = '';
+          setAnalyticsState(null);
+          await loadSales(null, false, true);
+          window.dispatchEvent(new Event('pdv:sales-changed'));
+          void onChanged();
+        }}
+        onOpenChange={(open) => {
+          if (!open) setDateSale(null);
+        }}
+        sale={dateSale}
       />
       <CancelDialog
         key={cancelSale?.id ?? 'closed-sale-cancel'}
@@ -1280,18 +1398,44 @@ export function SalesProductionView({
 }
 
 function SaleList({
+  canAttachments,
+  canCancel,
+  canChangeDate,
+  canEdit,
+  canEditInfo,
+  canPayments,
   sales,
+  onCancel,
+  onChangeDate,
   onDetails,
+  onEdit,
+  onEditInfo,
   onOpenSerial,
+  onPayments,
+  onPhotos,
+  onReport,
   query,
 }: {
+  canAttachments: boolean;
+  canCancel: boolean;
+  canChangeDate: boolean;
+  canEdit: boolean;
+  canEditInfo: boolean;
+  canPayments: boolean;
   sales: SaleRecord[];
+  onCancel: (sale: SaleRecord) => void;
+  onChangeDate: (sale: SaleRecord) => void;
   onDetails: (sale: SaleRecord) => void;
+  onEdit: (sale: SaleRecord) => void;
+  onEditInfo: (sale: SaleRecord) => void;
   onOpenSerial: (serial: string) => void;
+  onPayments: (sale: SaleRecord) => void;
+  onPhotos: (sale: SaleRecord) => void;
+  onReport: (sale: SaleRecord) => void;
   query: string;
 }) {
   return (
-    <div className="grid gap-1.5 bg-muted/20 p-1.5 sm:gap-2 sm:p-2">
+    <div className="grid gap-3 bg-muted/45 p-2.5 sm:p-4">
       {sales.map((sale) => {
         const financial = saleFinancialSummary(sale);
         const matchedSerial = serialMatchingQuery(
@@ -1299,138 +1443,263 @@ function SaleList({
           query,
         );
         return (
-          <button
+          <article
             key={sale.id}
-            type="button"
-            aria-label={
-              matchedSerial
-                ? `Abrir movimentações do SN ${matchedSerial}`
-                : `Abrir detalhes da venda ${sale.number}, ${sale.customerName}`
-            }
-            onClick={() =>
-              matchedSerial ? onOpenSerial(matchedSerial) : onDetails(sale)
-            }
             className={cn(
-              'w-full rounded-xl border bg-card px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+              'relative rounded-xl border border-border bg-card shadow-sm transition-colors hover:border-primary/40',
               sale.status === 'cancelled' &&
                 'bg-muted/40 text-muted-foreground',
             )}
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-base font-bold">
-                  <span
-                    className={cn(
-                      'shrink-0 text-lg font-extrabold tabular-nums',
-                      sale.status !== 'cancelled' && 'text-primary',
-                    )}
-                  >
-                    #{String(sale.number).padStart(5, '0')}
-                  </span>
-                  <span
-                    className="min-w-0 max-w-full truncate"
-                    title={sale.customerName}
-                  >
-                    {sale.customerName}
-                  </span>
-                </p>
-                <p
-                  className="mt-0.5 line-clamp-2 text-sm text-muted-foreground"
-                  title={sale.items
-                    .map(
-                      (item) => `${item.productName} · ${item.productDetail}`,
-                    )
-                    .join('; ')}
-                >
-                  {sale.items.length}{' '}
-                  {sale.items.length === 1 ? 'aparelho' : 'aparelhos'} ·{' '}
-                  {sale.items[0]?.productName ?? 'Produto'}
-                  {sale.items[0]?.productDetail
-                    ? ` · ${sale.items[0].productDetail}`
-                    : ''}
-                  {sale.items.length > 1 ? ` +${sale.items.length - 1}` : ''}
-                </p>
-                {matchedSerial && (
-                  <p className="mt-1 font-mono text-xs font-bold text-primary">
-                    SN {matchedSerial} · toque para ver as movimentações
-                  </p>
-                )}
-              </div>
-              <div className="shrink-0 text-right">
-                <p
-                  className={cn(
-                    'text-base font-extrabold tabular-nums',
-                    financial.reconciled && 'text-success',
-                  )}
-                >
-                  {formatMoney(sale.productsTotalCents)}
-                </p>
-                {sale.status === 'cancelled' ? (
-                  <p className="text-sm text-muted-foreground">
-                    {financial.paymentLabel}
-                  </p>
-                ) : financial.pixCents > 0 || financial.cashCents > 0 ? (
-                  <div className="text-sm font-semibold tabular-nums text-success">
-                    {financial.pixCents > 0 && (
-                      <p>Recebido Pix {formatMoney(financial.pixCents)}</p>
-                    )}
-                    {financial.cashCents > 0 && (
-                      <p>
-                        Recebido Dinheiro {formatMoney(financial.cashCents)}
-                      </p>
-                    )}
-                  </div>
-                ) : null}
-                {sale.status === 'completed' &&
-                  sale.receivedDifferenceCents !== 0 && (
-                    <p
+            <button
+              type="button"
+              aria-label={
+                matchedSerial
+                  ? `Abrir movimentações do SN ${matchedSerial}`
+                  : `Abrir detalhes da venda ${sale.number}, ${sale.customerName}`
+              }
+              onClick={() =>
+                matchedSerial ? onOpenSerial(matchedSerial) : onDetails(sale)
+              }
+              className="w-full rounded-xl p-4 text-left transition-colors hover:bg-secondary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:p-5 sm:pr-16"
+            >
+              <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:gap-3">
+                <div className="min-w-0 w-full flex-1 pr-10 sm:w-auto sm:pr-0">
+                  <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-base font-bold sm:text-lg">
+                    <span
                       className={cn(
-                        'mt-0.5 text-sm font-semibold tabular-nums',
-                        sale.receivedDifferenceCents < 0
-                          ? 'text-destructive'
-                          : 'text-amber-800 dark:text-amber-200',
+                        'shrink-0 rounded-md bg-secondary px-2 py-1 text-sm font-extrabold tabular-nums',
+                        sale.status !== 'cancelled' && 'text-primary',
                       )}
                     >
-                      {paymentDifferenceText(sale)}
+                      #{String(sale.number).padStart(5, '0')}
+                    </span>
+                    <span
+                      className="min-w-0 max-w-full truncate"
+                      title={sale.customerName}
+                    >
+                      {sale.customerName}
+                    </span>
+                  </p>
+                  <p
+                    className="mt-2 line-clamp-2 text-sm font-medium leading-relaxed text-muted-foreground"
+                    title={sale.items
+                      .map(
+                        (item) => `${item.productName} · ${item.productDetail}`,
+                      )
+                      .join('; ')}
+                  >
+                    {sale.items.length}{' '}
+                    {sale.items.length === 1 ? 'aparelho' : 'aparelhos'} ·{' '}
+                    {sale.items[0]?.productName ?? 'Produto'}
+                    {sale.items[0]?.productDetail
+                      ? ` · ${sale.items[0].productDetail}`
+                      : ''}
+                    {sale.items.length > 1 ? ` +${sale.items.length - 1}` : ''}
+                  </p>
+                  {matchedSerial && (
+                    <p className="mt-1 font-mono text-xs font-bold text-primary">
+                      SN {matchedSerial} · toque para ver as movimentações
                     </p>
                   )}
+                </div>
+                <div className="min-w-0 max-w-full text-left sm:shrink-0 sm:pl-4 sm:text-right">
+                  <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                    Valor da venda
+                  </p>
+                  <p
+                    className={cn(
+                      'text-xl font-extrabold tracking-tight tabular-nums',
+                      financial.reconciled && 'text-success',
+                    )}
+                  >
+                    {formatMoney(sale.productsTotalCents)}
+                  </p>
+                  {sale.status === 'cancelled' ? (
+                    <p className="text-sm text-muted-foreground">
+                      {financial.paymentLabel}
+                    </p>
+                  ) : financial.pixCents > 0 || financial.cashCents > 0 ? (
+                    <div className="text-sm font-semibold tabular-nums text-success">
+                      {financial.pixCents > 0 && (
+                        <p>Recebido Pix {formatMoney(financial.pixCents)}</p>
+                      )}
+                      {financial.cashCents > 0 && (
+                        <p>
+                          Recebido Dinheiro {formatMoney(financial.cashCents)}
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+                  {sale.status === 'completed' &&
+                    sale.receivedDifferenceCents !== 0 && (
+                      <p
+                        className={cn(
+                          'mt-0.5 text-sm font-semibold tabular-nums',
+                          sale.receivedDifferenceCents < 0
+                            ? 'text-destructive'
+                            : 'text-amber-800 dark:text-amber-200',
+                        )}
+                      >
+                        {paymentDifferenceText(sale)}
+                      </p>
+                    )}
+                </div>
               </div>
-            </div>
-            <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-              <p className="text-xs text-muted-foreground">
-                {formatDateTime(sale.createdAt)} · {sale.sellerName}
-              </p>
-              <span className="flex items-center gap-1.5">
-                <SaleStatusBadge sale={sale} />
-              </span>
-            </div>
-            <SaleIssuesNotice
-              issueKeys={saleIssues(sale).map((issue) => issue.key)}
-              compact
-            />
-            {!financial.reconciled && financial.receiptText && (
-              <p
-                className={cn(
-                  'mt-1 text-sm tabular-nums',
-                  financial.receiptWarning
-                    ? 'font-semibold text-amber-800 dark:text-amber-200'
-                    : 'text-muted-foreground',
-                )}
-              >
-                {financial.receiptText}
-              </p>
-            )}
-            {sale.status === 'completed' &&
-              financial.pixCents > 0 &&
-              !sale.receipts.length && (
-                <p className="mt-1 truncate text-xs font-semibold text-amber-800 dark:text-amber-200">
-                  Sem comprovante
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t pt-3">
+                <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-muted-foreground">
+                  <span className="inline-flex items-center gap-1.5">
+                    <CalendarDays className="size-3.5" />
+                    {formatDateTime(sale.createdAt)}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <UserRound className="size-3.5" />
+                    {sale.sellerName}
+                  </span>
+                </p>
+                <span className="flex items-center gap-1.5">
+                  <SaleStatusBadge sale={sale} />
+                </span>
+              </div>
+              <SaleIssuesNotice
+                issueKeys={saleIssues(sale).map((issue) => issue.key)}
+                compact
+                emphasized
+              />
+              {!financial.reconciled && financial.receiptText && (
+                <p
+                  className={cn(
+                    'mt-1 text-sm tabular-nums',
+                    financial.receiptWarning
+                      ? 'font-semibold text-amber-800 dark:text-amber-200'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  {financial.receiptText}
                 </p>
               )}
-          </button>
+              {sale.status === 'completed' &&
+                financial.pixCents > 0 &&
+                !sale.receipts.length && (
+                  <p className="mt-1 truncate text-xs font-semibold text-amber-800 dark:text-amber-200">
+                    Sem comprovante
+                  </p>
+                )}
+            </button>
+            <SaleActionsMenu
+              canAttachments={canAttachments}
+              canCancel={canCancel}
+              canChangeDate={canChangeDate}
+              canEdit={canEdit}
+              canEditInfo={canEditInfo}
+              canPayments={canPayments}
+              onCancel={() => onCancel(sale)}
+              onChangeDate={() => onChangeDate(sale)}
+              onDetails={() => onDetails(sale)}
+              onEdit={() => onEdit(sale)}
+              onEditInfo={() => onEditInfo(sale)}
+              onPayments={() => onPayments(sale)}
+              onPhotos={() => onPhotos(sale)}
+              onReport={() => onReport(sale)}
+              sale={sale}
+            />
+          </article>
         );
       })}
     </div>
+  );
+}
+
+function SaleActionsMenu({
+  sale,
+  canAttachments,
+  canCancel,
+  canChangeDate,
+  canEdit,
+  canEditInfo,
+  canPayments,
+  onCancel,
+  onChangeDate,
+  onDetails,
+  onEdit,
+  onEditInfo,
+  onPayments,
+  onPhotos,
+  onReport,
+}: {
+  sale: SaleRecord;
+  canAttachments: boolean;
+  canCancel: boolean;
+  canChangeDate: boolean;
+  canEdit: boolean;
+  canEditInfo: boolean;
+  canPayments: boolean;
+  onCancel: () => void;
+  onChangeDate: () => void;
+  onDetails: () => void;
+  onEdit: () => void;
+  onEditInfo: () => void;
+  onPayments: () => void;
+  onPhotos: () => void;
+  onReport: () => void;
+}) {
+  const editable = sale.status === 'completed';
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={`Ações da venda #${String(sale.number).padStart(5, '0')}`}
+        className={cn(
+          buttonVariants({ size: 'icon', variant: 'ghost' }),
+          'absolute top-3 right-3 z-10 size-9 rounded-lg bg-card/90 ring-1 ring-border hover:bg-secondary',
+        )}
+      >
+        <EllipsisVertical className="size-5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-max min-w-56 max-w-[calc(100vw-1rem)] p-1.5 [&_[data-slot=dropdown-menu-item]]:min-h-10 [&_[data-slot=dropdown-menu-item]]:whitespace-nowrap [&_[data-slot=dropdown-menu-item]]:font-semibold"
+      >
+        <DropdownMenuItem onClick={onDetails}>
+          <Eye /> Ver detalhes
+        </DropdownMenuItem>
+        {editable && canEdit && (
+          <DropdownMenuItem onClick={onEdit}>
+            <Pencil /> Editar venda
+          </DropdownMenuItem>
+        )}
+        {editable && canEditInfo && (
+          <DropdownMenuItem onClick={onEditInfo}>
+            <UsersRound /> Status, cliente e vendedor
+          </DropdownMenuItem>
+        )}
+        {editable && canPayments && (
+          <DropdownMenuItem onClick={onPayments}>
+            <WalletCards /> Pagamentos / preço de venda
+          </DropdownMenuItem>
+        )}
+        {editable && canAttachments && (
+          <DropdownMenuItem onClick={onPhotos}>
+            <ImagePlus /> Fotos dos aparelhos
+          </DropdownMenuItem>
+        )}
+        {editable && canChangeDate && (
+          <DropdownMenuItem onClick={onChangeDate}>
+            <CalendarDays /> Alterar data e horário
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onClick={onReport}>
+          <FileText /> Abrir PDF
+        </DropdownMenuItem>
+        {editable && canCancel && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onCancel} variant="destructive">
+              <XCircle /> Cancelar venda
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -1446,7 +1715,7 @@ function GroupedList({
   onOpen: (row: SalesGroupRecord) => void;
 }) {
   return (
-    <div className="divide-y">
+    <div className="grid gap-3 bg-muted/45 p-2.5 sm:p-4">
       {rows.map((row) => {
         const position =
           grouping === 'seller'
@@ -1465,7 +1734,7 @@ function GroupedList({
         return (
           <button
             className={cn(
-              'grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-l-2 border-l-transparent px-4 py-4 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-5',
+              'grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-xl border bg-card px-4 py-4 text-left shadow-sm transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:px-5',
               award === 'Ouro' && 'border-l-amber-500 bg-amber-500/[0.045]',
               award === 'Prata' && 'border-l-slate-400 bg-slate-400/[0.045]',
               award === 'Bronze' && 'border-l-orange-700 bg-orange-700/[0.035]',
@@ -1503,9 +1772,11 @@ function GroupedList({
                     {position}º{award ? ` · ${award}` : ''}
                   </Badge>
                 )}
-                <p className="truncate font-bold">{row.label}</p>
+                <p className="break-words text-base font-extrabold">
+                  {row.label}
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
+              <p className="mt-1 text-sm font-medium text-muted-foreground">
                 {row.saleCount} {row.saleCount === 1 ? 'venda' : 'vendas'} ·{' '}
                 {row.itemCount} {row.itemCount === 1 ? 'aparelho' : 'aparelhos'}
               </p>
@@ -1513,11 +1784,13 @@ function GroupedList({
                 Ver vendas e SNs
               </p>
             </div>
-            <div className="text-right">
+            <div className="col-start-2 text-left sm:col-start-auto sm:text-right">
               <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                 Vendido
               </p>
-              <strong>{formatMoney(row.totalCents)}</strong>
+              <strong className="text-lg font-extrabold tabular-nums">
+                {formatMoney(row.totalCents)}
+              </strong>
             </div>
           </button>
         );
@@ -1529,6 +1802,7 @@ function GroupedList({
 function EditSaleDialog({
   sale,
   data,
+  mode,
   onOpenChange,
   onChanged,
   onReceiptDeleted,
@@ -1536,6 +1810,7 @@ function EditSaleDialog({
 }: {
   sale: SaleRecord | null;
   data: BootstrapData;
+  mode: SaleEditorMode;
   onOpenChange: (open: boolean) => void;
   onChanged: () => Promise<void>;
   onReceiptDeleted: (saleId: string, receiptId: string) => void;
@@ -1545,6 +1820,11 @@ function EditSaleDialog({
   const canAttachments = can(data.user, 'sales.attachments');
   const canReceipts = can(data.user, 'sales.receipts');
   const canDeleteReceipts = can(data.user, 'sales.receipts.delete');
+  const canManageReceiptContent =
+    canAttachments || canReceipts || canDeleteReceipts;
+  const editsInfo = mode === 'full' || mode === 'info';
+  const editsPayments = mode === 'full' || mode === 'payments';
+  const editsPhotos = mode === 'full' || mode === 'photos';
   const [priceEditorOpen, setPriceEditorOpen] = useState(false);
   const deletedReceiptIds = useRef(new Set<string>());
   const [deletedReceipts, setDeletedReceipts] = useState(new Set<string>());
@@ -1552,9 +1832,11 @@ function EditSaleDialog({
     (receipt) => !deletedReceipts.has(receipt.id),
   );
   const canParticipants =
-    can(data.user, 'sales.participants') && sale?.status === 'completed';
+    editsInfo &&
+    can(data.user, 'sales.participants') &&
+    sale?.status === 'completed';
   const participants = useSaleParticipants(
-    sale?.id,
+    editsInfo ? sale?.id : undefined,
     canParticipants,
     data.csrfToken,
   );
@@ -1580,22 +1862,23 @@ function EditSaleDialog({
     ),
   );
   const receiptValueOperationIdRef = useRef(createOperationId());
-  // Keep precedence across partial saves and lost responses, not only this click.
-  const preserveReceiptPaymentRef = useRef(new Set<string>());
   const dirtyReceiptIds = useRef(new Set<string>());
   const [dirtyReceipts, setDirtyReceipts] = useState(new Set<string>());
-  const serverReceipts = useServerReceiptJobs(sale?.id, (jobs) => {
-    setSavedReceiptValues((current) => {
-      const next = { ...current };
-      for (const row of jobs)
-        if (
-          !dirtyReceiptIds.current.has(row.id) &&
-          !deletedReceiptIds.current.has(row.id)
-        )
-          next[row.id] = { amountCents: row.amountCents, source: row.source };
-      return next;
-    });
-  });
+  const serverReceipts = useServerReceiptJobs(
+    editsPayments ? sale?.id : undefined,
+    (jobs) => {
+      setSavedReceiptValues((current) => {
+        const next = { ...current };
+        for (const row of jobs)
+          if (
+            !dirtyReceiptIds.current.has(row.id) &&
+            !deletedReceiptIds.current.has(row.id)
+          )
+            next[row.id] = { amountCents: row.amountCents, source: row.source };
+        return next;
+      });
+    },
+  );
   const attachmentOperationIdRef = useRef(createOperationId());
   const [itemFiles, setItemFiles] = useState<Record<string, File[]>>({});
   const [preparing, setPreparing] = useState(false);
@@ -1880,6 +2163,45 @@ function EditSaleDialog({
     }
   };
 
+  const hasInfoChanges =
+    participants.dirty || selectedStatusId !== currentStatusId;
+  const hasPaymentChanges =
+    receiptFiles.length > 0 ||
+    changedSavedReceiptValues.length > 0 ||
+    hasPaymentCorrections ||
+    queuedPayments.length > 0 ||
+    paymentMethod !== '';
+  const hasPhotoChanges = selectedItemFiles.length > 0;
+  const modeHasChanges =
+    (editsInfo && hasInfoChanges) ||
+    (editsPayments && hasPaymentChanges) ||
+    (editsPhotos && hasPhotoChanges);
+  const modeHasInvalidChanges =
+    editsPayments &&
+    (invalidPaymentCorrection ||
+      queuedPaymentCents > pendingPaymentCents ||
+      (remainingPaymentCents > 0 && paymentMethod !== '' && !paymentReady));
+  const selectedAttachmentFiles = [
+    ...(editsPayments ? receiptFiles : []),
+    ...(editsPhotos ? selectedItemFiles : []),
+  ];
+  const savedAttachmentCount =
+    (editsPayments ? activeReceipts.length : 0) +
+    (editsPhotos
+      ? (sale?.items ?? []).reduce(
+          (total, item) => total + item.photos.length,
+          0,
+        )
+      : 0);
+  const showAttachmentSummary =
+    mode === 'full' ||
+    (mode === 'payments' && canManageReceiptContent) ||
+    (editsPhotos && canAttachments);
+  const showSaveButton =
+    (editsInfo && (canParticipants || can(data.user, 'sales.status'))) ||
+    (editsPayments && (canPayments || canReceipts || canAttachments)) ||
+    (editsPhotos && canAttachments);
+
   return (
     <Dialog
       onOpenChange={(open) => {
@@ -1895,18 +2217,16 @@ function EditSaleDialog({
       >
         {sale && (
           <>
-            <DialogHeader className="shrink-0 border-b px-4 py-3 pr-12">
-              <DialogTitle>
-                Editar venda #{String(sale.number).padStart(5, '0')}
+            <DialogHeader className="shrink-0 border-b bg-secondary/35 px-4 py-4 pr-12 text-left sm:px-6 sm:pr-12">
+              <DialogTitle className="text-lg font-extrabold leading-snug">
+                {SALE_EDITOR_COPY[mode].title} #
+                {String(sale.number).padStart(5, '0')}
               </DialogTitle>
               <DialogDescription>
-                Altere o acompanhamento, complete um pagamento pendente ou
-                acrescente anexos. Com permissão, também troque cliente e
-                vendedor e corrija os preços desta venda. Produtos e SNs
-                permanecem protegidos.
+                {SALE_EDITOR_COPY[mode].description}
               </DialogDescription>
             </DialogHeader>
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 overscroll-contain sm:p-5">
+            <div className="sale-editor-body min-h-0 flex-1 space-y-4 overflow-y-auto bg-muted/35 p-4 overscroll-contain sm:p-5">
               {notice && (
                 <output
                   aria-live="polite"
@@ -1916,84 +2236,88 @@ function EditSaleDialog({
                 </output>
               )}
 
-              <section className="rounded-2xl border p-4">
-                <div className="flex items-start gap-3">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
-                    <FileCheck2 className="size-5" />
-                  </span>
-                  <div>
-                    <h3 className="font-extrabold">Status da venda</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Conciliado e Cancelado são automáticos. Os demais são
-                      escolhidos pela equipe.
-                    </p>
+              {editsInfo && can(data.user, 'sales.status') && (
+                <section className="rounded-2xl border p-4">
+                  <div className="flex items-start gap-3">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
+                      <FileCheck2 className="size-5" />
+                    </span>
+                    <div>
+                      <h3 className="font-extrabold">Status da venda</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Conciliado e Cancelado são automáticos. Os demais são
+                        escolhidos pela equipe.
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <div className="mt-3 space-y-3">
-                  <SaleStatusBadge sale={sale} />
-                  <SaleIssuesNotice
-                    issueKeys={saleIssues(sale).map((issue) => issue.key)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    A conciliação compara os valores lidos nos comprovantes,
-                    somados ao dinheiro recebido, com o preço da venda. Isso não
-                    confirma o crédito na conta bancária.
-                  </p>
-                  <label
-                    className="block text-sm font-semibold"
-                    htmlFor="sale-custom-status"
-                  >
-                    Status cadastrado
-                  </label>
-                  <NativeSelect
-                    id="sale-custom-status"
-                    aria-label="Status cadastrado desta venda"
-                    disabled={!can(data.user, 'sales.status') || uploadBusy}
-                    className="h-11 w-full [&_select]:h-11"
-                    onChange={(event) =>
-                      setSelectedStatusId(event.target.value)
-                    }
-                    value={selectedStatusId}
-                  >
-                    <NativeSelectOption value="">
-                      Sem status escolhido
-                    </NativeSelectOption>
-                    {availableStatuses.map((status) => (
-                      <NativeSelectOption key={status.id} value={status.id}>
-                        {status.name}
-                        {status.active ? '' : ' (inativo)'}
+                  <div className="mt-3 space-y-3">
+                    <SaleStatusBadge sale={sale} />
+                    <SaleIssuesNotice
+                      issueKeys={saleIssues(sale).map((issue) => issue.key)}
+                      emphasized
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      A conciliação compara os valores lidos nos comprovantes,
+                      somados ao dinheiro recebido, com o preço da venda. Isso
+                      não confirma o crédito na conta bancária.
+                    </p>
+                    <label
+                      className="block text-sm font-semibold"
+                      htmlFor="sale-custom-status"
+                    >
+                      Status cadastrado
+                    </label>
+                    <NativeSelect
+                      id="sale-custom-status"
+                      aria-label="Status cadastrado desta venda"
+                      disabled={!can(data.user, 'sales.status') || uploadBusy}
+                      className="h-11 w-full [&_select]:h-11"
+                      onChange={(event) =>
+                        setSelectedStatusId(event.target.value)
+                      }
+                      value={selectedStatusId}
+                    >
+                      <NativeSelectOption value="">
+                        Sem status escolhido
                       </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                  {automaticSaleStatus(sale) && (
-                    <p className="text-sm text-muted-foreground">
-                      {automaticSaleStatus(sale)!.label} prevalece enquanto a
-                      conferência estiver completa. O status escolhido fica
-                      guardado, sem alterar pagamentos.
+                      {availableStatuses.map((status) => (
+                        <NativeSelectOption key={status.id} value={status.id}>
+                          {status.name}
+                          {status.active ? '' : ' (inativo)'}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    {automaticSaleStatus(sale) && (
+                      <p className="text-sm text-muted-foreground">
+                        {automaticSaleStatus(sale)!.label} prevalece enquanto a
+                        conferência estiver completa. O status escolhido fica
+                        guardado, sem alterar pagamentos.
+                      </p>
+                    )}
+                  </div>
+                  {selectedStatusId !== currentStatusId && (
+                    <p className="mt-2 text-xs font-semibold text-primary">
+                      O status escolhido será salvo ao confirmar as alterações.
                     </p>
                   )}
-                </div>
-                {selectedStatusId !== currentStatusId && (
-                  <p className="mt-2 text-xs font-semibold text-primary">
-                    O status escolhido será salvo ao confirmar as alterações.
-                  </p>
-                )}
-                {data.orderStatuses.length === 0 && (
-                  <p className="mt-2 text-xs font-semibold text-amber-800">
-                    Cadastre os demais status em Configurações › Financeiro ›
-                    Status do pedido.
-                  </p>
-                )}
-              </section>
+                  {data.orderStatuses.length === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-amber-800">
+                      Cadastre os demais status em Configurações › Financeiro ›
+                      Status do pedido.
+                    </p>
+                  )}
+                </section>
+              )}
 
-              {canParticipants && (
+              {editsInfo && canParticipants && (
                 <SaleParticipantsEditor
                   editor={participants}
                   disabled={preparing || uploadBusy}
                 />
               )}
 
-              {can(data.user, 'sales.prices') &&
+              {(mode === 'full' || mode === 'payments') &&
+                can(data.user, 'sales.prices') &&
                 sale.status === 'completed' && (
                   <SalePricesEditor
                     sale={sale}
@@ -2010,7 +2334,7 @@ function EditSaleDialog({
                   />
                 )}
 
-              {canPayments && sale.status === 'completed' && (
+              {editsPayments && canPayments && sale.status === 'completed' && (
                 <section className="rounded-2xl border p-4">
                   <div className="flex items-start gap-3">
                     <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
@@ -2305,267 +2629,278 @@ function EditSaleDialog({
                 </section>
               )}
 
-              <section className="rounded-2xl border p-4">
-                <div className="flex flex-wrap items-start justify-between gap-2">
+              {(mode === 'full' ||
+                (mode === 'payments' && canManageReceiptContent)) && (
+                <section className="rounded-2xl border p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex items-start gap-3">
+                      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
+                        <Paperclip className="size-5" />
+                      </span>
+                      <div>
+                        <h3 className="font-extrabold">Comprovantes</h3>
+                        <p className="text-xs text-muted-foreground">
+                          Foto, imagem ou PDF · {activeReceipts.length} de{' '}
+                          {MEDIA_LIMITS.saleReceipts} já anexados
+                        </p>
+                      </div>
+                    </div>
+                    <MediaPickerButtons
+                      accessibleLabel="comprovantes da venda"
+                      allowPdf
+                      disabled={
+                        !canAttachments ||
+                        preparing ||
+                        uploadBusy ||
+                        activeReceipts.length + receiptFiles.length >=
+                          MEDIA_LIMITS.saleReceipts ||
+                        remainingAttachmentCount <= selectedFiles.length
+                      }
+                      id={`sale-${sale.id}-receipts`}
+                      onFiles={prepareReceipts}
+                    />
+                  </div>
+                  {serverReceipts.error && (
+                    <output className="mt-2 block text-xs text-muted-foreground">
+                      {serverReceipts.error}
+                    </output>
+                  )}
+                  {activeReceipts.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {activeReceipts.map((receipt) => (
+                        <SavedReceiptValueEditor
+                          receiptAction={
+                            canDeleteReceipts && sale.status === 'completed' ? (
+                              <DeleteReceiptButton
+                                receipt={receipt}
+                                saleId={sale.id}
+                                csrfToken={data.csrfToken}
+                                disabled={preparing || uploadBusy}
+                                onBusyChange={setUploadBusy}
+                                onDeleted={(cleanupPending) => {
+                                  deletedReceiptIds.current.add(receipt.id);
+                                  setDeletedReceipts(
+                                    new Set(deletedReceiptIds.current),
+                                  );
+                                  dirtyReceiptIds.current.delete(receipt.id);
+                                  setDirtyReceipts(
+                                    new Set(dirtyReceiptIds.current),
+                                  );
+                                  setSavedReceiptValues((current) => {
+                                    const next = { ...current };
+                                    delete next[receipt.id];
+                                    return next;
+                                  });
+                                  receiptValueOperationIdRef.current =
+                                    createOperationId();
+                                  setError('');
+                                  setNotice(
+                                    cleanupPending
+                                      ? 'Comprovante removido da venda. A limpeza do arquivo continuará no servidor.'
+                                      : 'Comprovante excluído. A venda e os pagamentos foram mantidos.',
+                                  );
+                                  onReceiptDeleted(sale.id, receipt.id);
+                                  window.dispatchEvent(
+                                    new Event('pdv:sales-changed'),
+                                  );
+                                  window.dispatchEvent(
+                                    new Event('pdv:receipts-saved'),
+                                  );
+                                }}
+                              />
+                            ) : undefined
+                          }
+                          serverJob={serverReceipts.jobs[receipt.id]}
+                          onServerRetry={
+                            dirtyReceipts.has(receipt.id) ||
+                            hasPaymentCorrections ||
+                            queuedPayments.length > 0
+                              ? undefined
+                              : () => serverReceipts.retry(receipt.id)
+                          }
+                          disabled={!canReceipts || preparing || uploadBusy}
+                          key={receipt.id}
+                          receipt={receipt}
+                          value={
+                            savedReceiptValues[receipt.id] ?? {
+                              amountCents: receipt.receiptAmountCents,
+                              source: receipt.receiptAmountSource,
+                            }
+                          }
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {receiptFiles.length > 0 && (
+                    <>
+                      <SelectedFiles
+                        files={receiptFiles}
+                        onClear={() => {
+                          setReceiptFiles([]);
+                          setReceiptValues([]);
+                        }}
+                      />
+                      <ReceiptReconciliationEditor
+                        cashCents={draftCashCents}
+                        className="mt-3"
+                        disabled={preparing || uploadBusy}
+                        files={receiptFiles}
+                        showSummary={false}
+                        targetCents={draftPixCents}
+                        values={receiptValues}
+                      />
+                    </>
+                  )}
+                  {reconciliation && (
+                    <ReconciliationSummary
+                      cashCents={draftCashCents}
+                      className="mt-3"
+                      reconciliation={reconciliation}
+                      targetCents={draftPixCents}
+                    />
+                  )}
+                  <ReceiptPaymentSync
+                    state={serverReceipts.payment}
+                    productsTotalCents={sale.productsTotalCents}
+                    disabled={
+                      preparing ||
+                      uploadBusy ||
+                      hasPaymentCorrections ||
+                      queuedPayments.length > 0 ||
+                      paymentMethod !== '' ||
+                      selectedFiles.length > 0 ||
+                      changedSavedReceiptValues.length > 0
+                    }
+                    onPayments={(payments, total) => {
+                      if (hasPaymentCorrections || uploadBusy) return false;
+                      setVisiblePayments(payments);
+                      if (total !== sale.receivedTotalCents) void onChanged();
+                      return true;
+                    }}
+                  />
+                </section>
+              )}
+
+              {editsPhotos && (
+                <section className="rounded-2xl border p-4">
                   <div className="flex items-start gap-3">
                     <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
-                      <Paperclip className="size-5" />
+                      <ImagePlus className="size-5" />
                     </span>
                     <div>
-                      <h3 className="font-extrabold">Comprovantes</h3>
+                      <h3 className="font-extrabold">Fotos dos aparelhos</h3>
                       <p className="text-xs text-muted-foreground">
-                        Foto, imagem ou PDF · {activeReceipts.length} de{' '}
-                        {MEDIA_LIMITS.saleReceipts} já anexados
+                        Abra o aparelho para ver ou anexar fotos pelo SN.
                       </p>
                     </div>
                   </div>
-                  <MediaPickerButtons
-                    accessibleLabel="comprovantes da venda"
-                    allowPdf
-                    disabled={
-                      !canAttachments ||
-                      preparing ||
-                      uploadBusy ||
-                      activeReceipts.length + receiptFiles.length >=
-                        MEDIA_LIMITS.saleReceipts ||
-                      remainingAttachmentCount <= selectedFiles.length
+                  <Accordion
+                    className="mt-3 overflow-hidden rounded-xl border"
+                    defaultValue={
+                      sale.items.length === 1 ? [sale.items[0].id] : []
                     }
-                    id={`sale-${sale.id}-receipts`}
-                    onFiles={prepareReceipts}
-                  />
-                </div>
-                {serverReceipts.error && (
-                  <output className="mt-2 block text-xs text-muted-foreground">
-                    {serverReceipts.error}
-                  </output>
-                )}
-                {activeReceipts.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    {activeReceipts.map((receipt) => (
-                      <SavedReceiptValueEditor
-                        receiptAction={
-                          canDeleteReceipts && sale.status === 'completed' ? (
-                            <DeleteReceiptButton
-                              receipt={receipt}
-                              saleId={sale.id}
-                              csrfToken={data.csrfToken}
-                              disabled={preparing || uploadBusy}
-                              onBusyChange={setUploadBusy}
-                              onDeleted={(cleanupPending) => {
-                                deletedReceiptIds.current.add(receipt.id);
-                                setDeletedReceipts(
-                                  new Set(deletedReceiptIds.current),
-                                );
-                                dirtyReceiptIds.current.delete(receipt.id);
-                                setDirtyReceipts(
-                                  new Set(dirtyReceiptIds.current),
-                                );
-                                setSavedReceiptValues((current) => {
-                                  const next = { ...current };
-                                  delete next[receipt.id];
-                                  return next;
-                                });
-                                receiptValueOperationIdRef.current =
-                                  createOperationId();
-                                setError('');
-                                setNotice(
-                                  cleanupPending
-                                    ? 'Comprovante removido da venda. A limpeza do arquivo continuará no servidor.'
-                                    : 'Comprovante excluído. A venda e os pagamentos foram mantidos.',
-                                );
-                                onReceiptDeleted(sale.id, receipt.id);
-                                window.dispatchEvent(
-                                  new Event('pdv:sales-changed'),
-                                );
-                                window.dispatchEvent(
-                                  new Event('pdv:receipts-saved'),
-                                );
-                              }}
-                            />
-                          ) : undefined
-                        }
-                        serverJob={serverReceipts.jobs[receipt.id]}
-                        onServerRetry={
-                          dirtyReceipts.has(receipt.id) ||
-                          hasPaymentCorrections ||
-                          queuedPayments.length > 0
-                            ? undefined
-                            : () => serverReceipts.retry(receipt.id)
-                        }
-                        disabled={!canReceipts || preparing || uploadBusy}
-                        key={receipt.id}
-                        receipt={receipt}
-                        value={
-                          savedReceiptValues[receipt.id] ?? {
-                            amountCents: receipt.receiptAmountCents,
-                            source: receipt.receiptAmountSource,
-                          }
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
-                {receiptFiles.length > 0 && (
-                  <>
-                    <SelectedFiles
-                      files={receiptFiles}
-                      onClear={() => {
-                        setReceiptFiles([]);
-                        setReceiptValues([]);
-                      }}
-                    />
-                    <ReceiptReconciliationEditor
-                      cashCents={draftCashCents}
-                      className="mt-3"
-                      disabled={preparing || uploadBusy}
-                      files={receiptFiles}
-                      showSummary={false}
-                      targetCents={draftPixCents}
-                      values={receiptValues}
-                    />
-                  </>
-                )}
-                {reconciliation && (
-                  <ReconciliationSummary
-                    cashCents={draftCashCents}
-                    className="mt-3"
-                    reconciliation={reconciliation}
-                    targetCents={draftPixCents}
-                  />
-                )}
-                <ReceiptPaymentSync
-                  state={serverReceipts.payment}
-                  productsTotalCents={sale.productsTotalCents}
-                  disabled={
-                    preparing ||
-                    uploadBusy ||
-                    hasPaymentCorrections ||
-                    queuedPayments.length > 0 ||
-                    paymentMethod !== '' ||
-                    selectedFiles.length > 0 ||
-                    changedSavedReceiptValues.length > 0
-                  }
-                  onPayments={(payments, total) => {
-                    if (hasPaymentCorrections || uploadBusy) return false;
-                    setVisiblePayments(payments);
-                    if (total !== sale.receivedTotalCents) void onChanged();
-                    return true;
-                  }}
-                />
-              </section>
-
-              <section className="rounded-2xl border p-4">
-                <div className="flex items-start gap-3">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary">
-                    <ImagePlus className="size-5" />
-                  </span>
-                  <div>
-                    <h3 className="font-extrabold">Fotos dos aparelhos</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Abra o aparelho para ver ou anexar fotos pelo SN.
-                    </p>
-                  </div>
-                </div>
-                <Accordion
-                  className="mt-3 overflow-hidden rounded-xl border"
-                  defaultValue={
-                    sale.items.length === 1 ? [sale.items[0].id] : []
-                  }
-                >
-                  {sale.items.map((item) => {
-                    const selected = itemFiles[item.id] ?? [];
-                    return (
-                      <AccordionItem value={item.id} key={item.id}>
-                        <AccordionTrigger className="items-center gap-3 px-3 py-2.5 hover:no-underline">
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-bold">
-                              {item.productName}
+                  >
+                    {sale.items.map((item) => {
+                      const selected = itemFiles[item.id] ?? [];
+                      return (
+                        <AccordionItem value={item.id} key={item.id}>
+                          <AccordionTrigger className="items-center gap-3 px-3 py-2.5 hover:no-underline">
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-bold">
+                                {item.productName}
+                              </span>
+                              <span className="block text-xs text-muted-foreground">
+                                {item.productDetail} · SN {item.serial}
+                              </span>
                             </span>
-                            <span className="block text-xs text-muted-foreground">
-                              {item.productDetail} · SN {item.serial}
+                            <span
+                              className={`shrink-0 text-xs font-semibold ${item.photos.length + selected.length === 0 ? 'text-amber-800' : 'text-muted-foreground'}`}
+                            >
+                              {selected.length
+                                ? `${selected.length} nova(s)`
+                                : item.photos.length
+                                  ? `${item.photos.length} foto(s)`
+                                  : 'Sem foto'}
                             </span>
-                          </span>
-                          <span
-                            className={`shrink-0 text-xs font-semibold ${item.photos.length + selected.length === 0 ? 'text-amber-800' : 'text-muted-foreground'}`}
-                          >
-                            {selected.length
-                              ? `${selected.length} nova(s)`
-                              : item.photos.length
-                                ? `${item.photos.length} foto(s)`
-                                : 'Sem foto'}
-                          </span>
-                        </AccordionTrigger>
-                        <AccordionContent className="px-3 pb-3">
-                          <div className="flex justify-end">
-                            <MediaPickerButtons
-                              accessibleLabel={`fotos do aparelho ${item.productName}, SN ${item.serial}`}
-                              disabled={
-                                !canAttachments ||
-                                preparing ||
-                                uploadBusy ||
-                                item.photos.length + selected.length >=
-                                  MEDIA_LIMITS.saleItemPhotos ||
-                                remainingAttachmentCount <= selectedFiles.length
-                              }
-                              id={`sale-${sale.id}-item-${item.id}`}
-                              onFiles={(files) =>
-                                prepareItemPhotos(item.id, files)
-                              }
-                            />
-                          </div>
-                          {item.photos.length > 0 && (
-                            <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                              {item.photos.map((photo) => (
-                                <a
-                                  href={photo.url}
-                                  key={photo.id}
-                                  rel="noreferrer"
-                                  target="_blank"
-                                >
-                                  <img
-                                    alt={photo.name}
-                                    className="size-16 rounded-lg border object-cover"
-                                    decoding="async"
-                                    loading="lazy"
-                                    src={photo.url}
-                                  />
-                                </a>
-                              ))}
+                          </AccordionTrigger>
+                          <AccordionContent className="px-3 pb-3">
+                            <div className="flex justify-end">
+                              <MediaPickerButtons
+                                accessibleLabel={`fotos do aparelho ${item.productName}, SN ${item.serial}`}
+                                disabled={
+                                  !canAttachments ||
+                                  preparing ||
+                                  uploadBusy ||
+                                  item.photos.length + selected.length >=
+                                    MEDIA_LIMITS.saleItemPhotos ||
+                                  remainingAttachmentCount <=
+                                    selectedFiles.length
+                                }
+                                id={`sale-${sale.id}-item-${item.id}`}
+                                onFiles={(files) =>
+                                  prepareItemPhotos(item.id, files)
+                                }
+                              />
                             </div>
-                          )}
-                          {selected.length > 0 && (
-                            <SelectedFiles
-                              files={selected}
-                              onClear={() =>
-                                setItemFiles((values) => {
-                                  const next = { ...values };
-                                  delete next[item.id];
-                                  return next;
-                                })
-                              }
-                            />
-                          )}
-                        </AccordionContent>
-                      </AccordionItem>
-                    );
-                  })}
-                </Accordion>
-              </section>
+                            {item.photos.length > 0 && (
+                              <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                                {item.photos.map((photo) => (
+                                  <a
+                                    href={photo.url}
+                                    key={photo.id}
+                                    rel="noreferrer"
+                                    target="_blank"
+                                  >
+                                    <img
+                                      alt={photo.name}
+                                      className="size-16 rounded-lg border object-cover"
+                                      decoding="async"
+                                      loading="lazy"
+                                      src={photo.url}
+                                    />
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                            {selected.length > 0 && (
+                              <SelectedFiles
+                                files={selected}
+                                onClear={() =>
+                                  setItemFiles((values) => {
+                                    const next = { ...values };
+                                    delete next[item.id];
+                                    return next;
+                                  })
+                                }
+                              />
+                            )}
+                          </AccordionContent>
+                        </AccordionItem>
+                      );
+                    })}
+                  </Accordion>
+                </section>
+              )}
 
-              <div className="rounded-xl bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
-                <strong className="text-foreground">
-                  {selectedFiles.length} novo(s) anexo(s)
-                </strong>{' '}
-                ·{' '}
-                {formatMediaBytes(
-                  selectedFiles.reduce((sum, file) => sum + file.size, 0),
-                )}
-                {' · '}
-                {existingAttachmentCount} já salvos nesta venda
-              </div>
+              {showAttachmentSummary && (
+                <div className="rounded-xl bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
+                  <strong className="text-foreground">
+                    {selectedAttachmentFiles.length} novo(s) anexo(s)
+                  </strong>{' '}
+                  ·{' '}
+                  {formatMediaBytes(
+                    selectedAttachmentFiles.reduce(
+                      (sum, file) => sum + file.size,
+                      0,
+                    ),
+                  )}
+                  {' · '}
+                  {savedAttachmentCount} já salvos nesta venda
+                </div>
+              )}
             </div>
             <DialogFooter className="m-0 shrink-0 flex-col rounded-none border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:flex-col">
-              {priceEditorOpen && (
+              {(mode === 'full' || mode === 'payments') && priceEditorOpen && (
                 <output className="text-xs text-muted-foreground">
                   Salve ou cancele a edição dos preços antes de salvar as demais
                   alterações.
@@ -2587,247 +2922,261 @@ function EditSaleDialog({
                 >
                   Fechar
                 </Button>
-                <Button
-                  className="h-10"
-                  disabled={
-                    preparing ||
-                    uploadBusy ||
-                    priceEditorOpen ||
-                    invalidPaymentCorrection ||
-                    queuedPaymentCents > pendingPaymentCents ||
-                    (remainingPaymentCents > 0 &&
-                      paymentMethod !== '' &&
-                      !paymentReady) ||
-                    (selectedFiles.length === 0 &&
-                      selectedStatusId === currentStatusId &&
-                      changedSavedReceiptValues.length === 0 &&
-                      !hasPaymentCorrections &&
-                      !participants.dirty &&
-                      queuedPayments.length === 0 &&
-                      paymentMethod === '')
-                  }
-                  onClick={async () => {
-                    if (uploadInFlightRef.current) return;
-                    uploadInFlightRef.current = true;
-                    setUploadBusy(true);
-                    setError('');
-                    setNotice('');
-                    let statusSaved = false;
-                    let paymentSaved = false;
-                    let receiptValuesSaved = false;
-                    let attachmentsSaved = false;
-                    let participantsSaved = false;
-                    try {
-                      participantsSaved = await participants.save();
-                      if (hasPaymentCorrections) {
-                        const corrected = await requestJson<{
-                          payments: SalePaymentRecord[];
-                        }>(`/api/sales/${sale.id}/payments`, {
-                          method: 'PATCH',
-                          headers: {
-                            'content-type': 'application/json',
-                            'x-csrf-token': data.csrfToken,
-                          },
-                          body: JSON.stringify({
-                            operationId: paymentCorrectionIdRef.current,
-                            expectedPayments: visiblePayments.map(
-                              ({ id, method, pixAccountId, amountCents }) => ({
-                                id,
-                                method,
-                                pixAccountId,
-                                amountCents,
-                              }),
-                            ),
-                            payments: correctedPayments,
-                          }),
-                        });
-                        paymentSaved = true;
-                        preserveReceiptPaymentRef.current.add(
-                          receiptValueOperationIdRef.current,
-                        );
-                        preserveReceiptPaymentRef.current.add(
-                          attachmentOperationIdRef.current,
-                        );
-                        setVisiblePayments(corrected.payments);
-                        setPaymentEdits({});
-                        paymentCorrectionIdRef.current = createOperationId();
-                      }
-                      const inlinePayment = currentPaymentDraft();
-                      const paymentsToSave = [
-                        ...queuedPayments,
-                        ...(inlinePayment ? [inlinePayment] : []),
-                      ];
-                      for (const paymentDraft of paymentsToSave) {
-                        const result = await requestJson<{
-                          payment: SalePaymentRecord;
-                          sale: { receivedDifferenceCents: number };
-                        }>(`/api/sales/${sale.id}/payments`, {
-                          method: 'POST',
-                          headers: {
-                            'content-type': 'application/json',
-                            'x-csrf-token': data.csrfToken,
-                          },
-                          body: JSON.stringify({
-                            operationId: paymentDraft.operationId,
-                            method: paymentDraft.method,
-                            pixAccountId: paymentDraft.pixAccountId,
-                            amountCents: paymentDraft.amountCents,
-                          }),
-                        });
-                        paymentSaved = true;
-                        preserveReceiptPaymentRef.current.add(
-                          receiptValueOperationIdRef.current,
-                        );
-                        preserveReceiptPaymentRef.current.add(
-                          attachmentOperationIdRef.current,
-                        );
-                        setVisiblePayments((current) =>
-                          current.some(
-                            (payment) => payment.id === result.payment.id,
-                          )
-                            ? current
-                            : [...current, result.payment],
-                        );
-                        setQueuedPayments((current) =>
-                          current.filter(
-                            (candidate) =>
-                              candidate.operationId !==
-                              paymentDraft.operationId,
-                          ),
-                        );
-                        setPaymentAmount('');
-                      }
-                      if (paymentsToSave.length > 0) {
-                        setPaymentAmount('');
-                        paymentOperationIdRef.current = createOperationId();
-                      }
-                      if (selectedStatusId !== currentStatusId) {
-                        await requestJson(
-                          `/api/sales/${sale.id}/order-status`,
-                          {
-                            method: 'PATCH',
-                            headers: {
-                              'content-type': 'application/json',
-                              'x-csrf-token': data.csrfToken,
-                            },
-                            body: JSON.stringify({
-                              orderStatusId: selectedStatusId || null,
-                            }),
-                          },
-                        );
-                        statusSaved = true;
-                        setCurrentStatusId(selectedStatusId);
-                      }
-                      if (changedSavedReceiptValues.length > 0) {
-                        await requestJson(
-                          `/api/sales/${sale.id}/receipt-values`,
-                          {
-                            method: 'PATCH',
-                            headers: {
-                              'content-type': 'application/json',
-                              'x-csrf-token': data.csrfToken,
-                            },
-                            body: JSON.stringify({
-                              operationId: receiptValueOperationIdRef.current,
-                              receipts: changedSavedReceiptValues,
-                            }),
-                          },
-                        );
-                        receiptValuesSaved = true;
-                        changedSavedReceiptValues.forEach((receipt) =>
-                          dirtyReceiptIds.current.delete(receipt.id),
-                        );
-                        setDirtyReceipts(new Set(dirtyReceiptIds.current));
-                      }
-                      if (selectedFiles.length > 0) {
-                        const form = new FormData();
-                        form.set(
-                          'operationId',
-                          attachmentOperationIdRef.current,
-                        );
-                        receiptFiles.forEach((file) =>
-                          form.append('receipts', file),
-                        );
-                        if (receiptFiles.length > 0) {
-                          form.append(
-                            'receiptValues',
-                            JSON.stringify(receiptValues),
-                          );
-                        }
-                        Object.entries(itemFiles).forEach(([itemId, files]) => {
-                          files.forEach((file) =>
-                            form.append(`itemPhotos:${itemId}`, file),
-                          );
-                        });
-                        await requestJson<{
-                          receipts: AttachmentRecord[];
-                          replayed?: boolean;
-                        }>(`/api/sales/${sale.id}/attachments`, {
-                          method: 'POST',
-                          headers: { 'x-csrf-token': data.csrfToken },
-                          body: form,
-                        });
-                        window.dispatchEvent(new Event('pdv:receipts-saved'));
-                        attachmentsSaved = true;
-                      }
-                      await onChanged();
-                      if (paymentSaved) setCashEditorOpen(false);
-                      if (
-                        canPayments &&
-                        canReceipts &&
-                        (receiptFiles.length > 0 || receiptValuesSaved) &&
-                        ![...correctedPayments, ...paymentsToSave].some(
-                          (payment) => payment.method === 'pix',
-                        )
-                      ) {
-                        setReceiptFiles([]);
-                        setReceiptValues([]);
-                        setItemFiles({});
-                        setPaymentEdits({});
-                        attachmentOperationIdRef.current = createOperationId();
-                        receiptValueOperationIdRef.current =
-                          createOperationId();
-                        setNotice(
-                          'Comprovante salvo. O valor lido será somado ao dinheiro recebido e conferido com o preço da venda.',
-                        );
-                      } else {
-                        onOpenChange(false);
-                      }
-                    } catch (caught) {
-                      const savedParts = [
-                        participantsSaved ? 'o cliente e vendedor' : '',
-                        paymentSaved ? 'o pagamento' : '',
-                        statusSaved ? 'o status' : '',
-                        receiptValuesSaved
-                          ? 'a conciliação dos comprovantes'
-                          : '',
-                        attachmentsSaved ? 'os anexos' : '',
-                      ].filter(Boolean);
-                      // Reabra com valores atuais também depois de um conflito,
-                      // mesmo que nenhuma parte desta tentativa tenha sido salva.
-                      await onChanged();
-                      setError(
-                        savedParts.length > 0
-                          ? `${savedParts.join(' e ')} ${savedParts.length === 1 ? 'foi salvo' : 'foram salvos'}, mas faltou concluir o restante: ${messageOf(caught)}`
-                          : messageOf(caught),
-                      );
-                    } finally {
-                      uploadInFlightRef.current = false;
-                      setUploadBusy(false);
+                {showSaveButton && (
+                  <Button
+                    className="h-10"
+                    disabled={
+                      preparing ||
+                      uploadBusy ||
+                      ((mode === 'full' || mode === 'payments') &&
+                        priceEditorOpen) ||
+                      modeHasInvalidChanges ||
+                      !modeHasChanges
                     }
-                  }}
-                >
-                  {uploadBusy ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : (
-                    <Paperclip />
-                  )}
-                  {uploadBusy
-                    ? 'Salvando alterações…'
-                    : preparing
-                      ? 'Preparando fotos…'
-                      : 'Salvar alterações'}
-                </Button>
+                    onClick={async () => {
+                      if (uploadInFlightRef.current) return;
+                      uploadInFlightRef.current = true;
+                      setUploadBusy(true);
+                      setError('');
+                      setNotice('');
+                      let statusSaved = false;
+                      let paymentSaved = false;
+                      let receiptValuesSaved = false;
+                      let attachmentsSaved = false;
+                      let participantsSaved = false;
+                      try {
+                        participantsSaved = editsInfo
+                          ? await participants.save()
+                          : false;
+                        if (editsPayments && hasPaymentCorrections) {
+                          const corrected = await requestJson<{
+                            payments: SalePaymentRecord[];
+                          }>(`/api/sales/${sale.id}/payments`, {
+                            method: 'PATCH',
+                            headers: {
+                              'content-type': 'application/json',
+                              'x-csrf-token': data.csrfToken,
+                            },
+                            body: JSON.stringify({
+                              operationId: paymentCorrectionIdRef.current,
+                              expectedPayments: visiblePayments.map(
+                                ({
+                                  id,
+                                  method,
+                                  pixAccountId,
+                                  amountCents,
+                                }) => ({
+                                  id,
+                                  method,
+                                  pixAccountId,
+                                  amountCents,
+                                }),
+                              ),
+                              payments: correctedPayments,
+                            }),
+                          });
+                          paymentSaved = true;
+                          setVisiblePayments(corrected.payments);
+                          setPaymentEdits({});
+                          paymentCorrectionIdRef.current = createOperationId();
+                        }
+                        const inlinePayment = editsPayments
+                          ? currentPaymentDraft()
+                          : null;
+                        const paymentsToSave = editsPayments
+                          ? [
+                              ...queuedPayments,
+                              ...(inlinePayment ? [inlinePayment] : []),
+                            ]
+                          : [];
+                        for (const paymentDraft of paymentsToSave) {
+                          const result = await requestJson<{
+                            payment: SalePaymentRecord;
+                            sale: { receivedDifferenceCents: number };
+                          }>(`/api/sales/${sale.id}/payments`, {
+                            method: 'POST',
+                            headers: {
+                              'content-type': 'application/json',
+                              'x-csrf-token': data.csrfToken,
+                            },
+                            body: JSON.stringify({
+                              operationId: paymentDraft.operationId,
+                              method: paymentDraft.method,
+                              pixAccountId: paymentDraft.pixAccountId,
+                              amountCents: paymentDraft.amountCents,
+                            }),
+                          });
+                          paymentSaved = true;
+                          setVisiblePayments((current) =>
+                            current.some(
+                              (payment) => payment.id === result.payment.id,
+                            )
+                              ? current
+                              : [...current, result.payment],
+                          );
+                          setQueuedPayments((current) =>
+                            current.filter(
+                              (candidate) =>
+                                candidate.operationId !==
+                                paymentDraft.operationId,
+                            ),
+                          );
+                          setPaymentAmount('');
+                        }
+                        if (paymentsToSave.length > 0) {
+                          setPaymentAmount('');
+                          paymentOperationIdRef.current = createOperationId();
+                        }
+                        if (editsInfo && selectedStatusId !== currentStatusId) {
+                          await requestJson(
+                            `/api/sales/${sale.id}/order-status`,
+                            {
+                              method: 'PATCH',
+                              headers: {
+                                'content-type': 'application/json',
+                                'x-csrf-token': data.csrfToken,
+                              },
+                              body: JSON.stringify({
+                                orderStatusId: selectedStatusId || null,
+                              }),
+                            },
+                          );
+                          statusSaved = true;
+                          setCurrentStatusId(selectedStatusId);
+                        }
+                        if (
+                          editsPayments &&
+                          changedSavedReceiptValues.length > 0
+                        ) {
+                          await requestJson(
+                            `/api/sales/${sale.id}/receipt-values`,
+                            {
+                              method: 'PATCH',
+                              headers: {
+                                'content-type': 'application/json',
+                                'x-csrf-token': data.csrfToken,
+                              },
+                              body: JSON.stringify({
+                                operationId: receiptValueOperationIdRef.current,
+                                receipts: changedSavedReceiptValues,
+                              }),
+                            },
+                          );
+                          receiptValuesSaved = true;
+                          changedSavedReceiptValues.forEach((receipt) =>
+                            dirtyReceiptIds.current.delete(receipt.id),
+                          );
+                          setDirtyReceipts(new Set(dirtyReceiptIds.current));
+                        }
+                        const attachmentFiles = [
+                          ...(editsPayments ? receiptFiles : []),
+                          ...(editsPhotos ? selectedItemFiles : []),
+                        ];
+                        if (attachmentFiles.length > 0) {
+                          const form = new FormData();
+                          form.set(
+                            'operationId',
+                            attachmentOperationIdRef.current,
+                          );
+                          if (editsPayments) {
+                            receiptFiles.forEach((file) =>
+                              form.append('receipts', file),
+                            );
+                            form.append(
+                              'receiptValues',
+                              JSON.stringify(receiptValues),
+                            );
+                          }
+                          if (editsPhotos) {
+                            Object.entries(itemFiles).forEach(
+                              ([itemId, files]) => {
+                                files.forEach((file) =>
+                                  form.append(`itemPhotos:${itemId}`, file),
+                                );
+                              },
+                            );
+                          }
+                          await requestJson<{
+                            receipts: AttachmentRecord[];
+                            replayed?: boolean;
+                          }>(`/api/sales/${sale.id}/attachments`, {
+                            method: 'POST',
+                            headers: { 'x-csrf-token': data.csrfToken },
+                            body: form,
+                          });
+                          if (receiptFiles.length > 0)
+                            window.dispatchEvent(
+                              new Event('pdv:receipts-saved'),
+                            );
+                          attachmentsSaved = true;
+                        }
+                        await onChanged();
+                        if (paymentSaved) setCashEditorOpen(false);
+                        if (
+                          editsPayments &&
+                          canPayments &&
+                          canReceipts &&
+                          (receiptFiles.length > 0 || receiptValuesSaved) &&
+                          ![...correctedPayments, ...paymentsToSave].some(
+                            (payment) => payment.method === 'pix',
+                          )
+                        ) {
+                          setReceiptFiles([]);
+                          setReceiptValues([]);
+                          setItemFiles({});
+                          setPaymentEdits({});
+                          attachmentOperationIdRef.current =
+                            createOperationId();
+                          receiptValueOperationIdRef.current =
+                            createOperationId();
+                          setNotice(
+                            'Comprovante salvo. O valor lido será somado ao dinheiro recebido e conferido com o preço da venda.',
+                          );
+                        } else {
+                          onOpenChange(false);
+                        }
+                      } catch (caught) {
+                        const savedParts = [
+                          participantsSaved ? 'o cliente e vendedor' : '',
+                          paymentSaved ? 'o pagamento' : '',
+                          statusSaved ? 'o status' : '',
+                          receiptValuesSaved
+                            ? 'a conciliação dos comprovantes'
+                            : '',
+                          attachmentsSaved ? 'os anexos' : '',
+                        ].filter(Boolean);
+                        // Reabra com valores atuais também depois de um conflito,
+                        // mesmo que nenhuma parte desta tentativa tenha sido salva.
+                        await onChanged();
+                        setError(
+                          savedParts.length > 0
+                            ? `${savedParts.join(' e ')} ${savedParts.length === 1 ? 'foi salvo' : 'foram salvos'}, mas faltou concluir o restante: ${messageOf(caught)}`
+                            : messageOf(caught),
+                        );
+                      } finally {
+                        uploadInFlightRef.current = false;
+                        setUploadBusy(false);
+                      }
+                    }}
+                  >
+                    {uploadBusy ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : mode === 'full' ? (
+                      <Pencil />
+                    ) : mode === 'info' ? (
+                      <UsersRound />
+                    ) : mode === 'payments' ? (
+                      <WalletCards />
+                    ) : (
+                      <ImagePlus />
+                    )}
+                    {uploadBusy
+                      ? 'Salvando…'
+                      : preparing
+                        ? 'Preparando arquivos…'
+                        : SALE_EDITOR_COPY[mode].saveLabel}
+                  </Button>
+                )}
               </div>
             </DialogFooter>
           </>
@@ -4137,6 +4486,202 @@ async function fetchSalesForPeriodReport(filterParams: string) {
   }
 }
 
+function SaleDateDialog({
+  sale,
+  data,
+  onOpenChange,
+  onChanged,
+}: {
+  sale: SaleRecord | null;
+  data: BootstrapData;
+  onOpenChange: (open: boolean) => void;
+  onChanged: (saleId: string, createdAt: number) => Promise<void>;
+}) {
+  const [current, setCurrent] = useState<SaleDateState | null>(null);
+  const [value, setValue] = useState(() =>
+    sale ? saleDateInputValue(sale.createdAt) : '',
+  );
+  const [loading, setLoading] = useState(Boolean(sale));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const operationIdRef = useRef(createOperationId());
+  const [maximumCreatedAt] = useState(() => Date.now() + 5 * 60 * 1000);
+  const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!sale) return;
+    const controller = new AbortController();
+    void requestJson<{ current: SaleDateState }>(
+      `/api/sales/${encodeURIComponent(sale.id)}/date`,
+      { signal: controller.signal },
+    )
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setCurrent(result.current);
+        setValue(saleDateInputValue(result.current.createdAt));
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setError(messageOf(caught));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [sale]);
+  const parsed = parseSaleDateInput(value);
+  const unchanged = Boolean(
+    current && value === saleDateInputValue(current.createdAt),
+  );
+  const invalidChronology = Boolean(
+    current &&
+    !unchanged &&
+    parsed !== null &&
+    parsed < current.minimumCreatedAt,
+  );
+  const invalidFuture = Boolean(parsed !== null && parsed > maximumCreatedAt);
+  const close = () => {
+    if (savingRef.current) return;
+    setError('');
+    onOpenChange(false);
+  };
+  return (
+    <Dialog
+      open={Boolean(sale)}
+      onOpenChange={(open) => {
+        if (!open) close();
+      }}
+    >
+      <DialogContent className="max-w-md" showCloseButton={!busy}>
+        {sale && (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                Alterar data da venda #{String(sale.number).padStart(5, '0')}
+              </DialogTitle>
+              <DialogDescription>
+                A venda mudará de dia nos relatórios, fechamentos e histórico
+                dos aparelhos. Datas dos pagamentos e comprovantes não serão
+                alteradas. Horário de Brasília.
+              </DialogDescription>
+            </DialogHeader>
+            {loading ? (
+              <output className="flex min-h-24 items-center justify-center gap-2 text-sm font-semibold text-muted-foreground">
+                <LoaderCircle className="size-4 animate-spin" /> Conferindo a
+                venda…
+              </output>
+            ) : current ? (
+              <div className="space-y-3">
+                <p className="rounded-xl bg-muted/60 p-3 text-sm">
+                  Data atual:{' '}
+                  <strong>{formatDateTime(current.createdAt)}</strong>
+                </p>
+                <label className="block text-sm font-semibold">
+                  Nova data e horário
+                  <Input
+                    className="mt-1 h-11"
+                    disabled={busy}
+                    max={saleDateInputValue(maximumCreatedAt)}
+                    min={
+                      current.minimumCreatedAt > 0
+                        ? saleDateInputValue(
+                            Math.ceil(current.minimumCreatedAt / 60_000) *
+                              60_000,
+                          )
+                        : undefined
+                    }
+                    onChange={(event) => {
+                      setValue(event.target.value);
+                      setError('');
+                    }}
+                    type="datetime-local"
+                    value={value}
+                  />
+                </label>
+                {invalidChronology && (
+                  <p className="text-sm font-semibold text-destructive">
+                    A venda não pode ficar antes da entrada dos aparelhos no
+                    estoque.
+                  </p>
+                )}
+                {invalidFuture && (
+                  <p className="text-sm font-semibold text-destructive">
+                    A data da venda não pode estar no futuro.
+                  </p>
+                )}
+              </div>
+            ) : null}
+            {error && (
+              <p
+                aria-live="polite"
+                className="rounded-xl bg-destructive/10 p-3 text-sm font-semibold text-destructive"
+              >
+                {error}
+              </p>
+            )}
+            <DialogFooter>
+              <Button disabled={busy} onClick={close} variant="outline">
+                Voltar
+              </Button>
+              <Button
+                disabled={
+                  busy ||
+                  loading ||
+                  !current ||
+                  parsed === null ||
+                  unchanged ||
+                  invalidChronology ||
+                  invalidFuture
+                }
+                onClick={async () => {
+                  if (savingRef.current || !sale || !current || parsed === null)
+                    return;
+                  savingRef.current = true;
+                  setBusy(true);
+                  setError('');
+                  try {
+                    const result = await requestJson<{
+                      current: SaleDateState;
+                    }>(`/api/sales/${encodeURIComponent(sale.id)}/date`, {
+                      method: 'PATCH',
+                      headers: {
+                        'content-type': 'application/json',
+                        'x-csrf-token': data.csrfToken,
+                      },
+                      body: JSON.stringify({
+                        operationId: operationIdRef.current,
+                        expected: {
+                          createdAt: current.createdAt,
+                          revision: current.revision,
+                        },
+                        createdAt: parsed,
+                      }),
+                    });
+                    await onChanged(sale.id, result.current.createdAt);
+                    if (mountedRef.current) onOpenChange(false);
+                  } catch (caught) {
+                    if (mountedRef.current) setError(messageOf(caught));
+                  } finally {
+                    savingRef.current = false;
+                    if (mountedRef.current) setBusy(false);
+                  }
+                }}
+              >
+                {busy ? 'Salvando…' : 'Salvar nova data'}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CancelDialog({
   sale,
   data,
@@ -4377,19 +4922,19 @@ function Metric({
   const content = (
     <Card
       className={cn(
-        'gap-0 overflow-hidden rounded-lg border-border/80 bg-card py-0 transition-all sm:h-full sm:rounded-xl',
-        onClick && 'hover:border-primary/45 hover:bg-secondary/35',
-        active && 'border-primary ring-2 ring-primary/25',
+        'gap-0 overflow-hidden rounded-lg bg-card py-0 transition-colors sm:h-full sm:rounded-xl',
+        onClick && 'hover:bg-secondary/40',
+        active && 'bg-secondary/45 ring-1 ring-primary/35',
       )}
       size="sm"
     >
-      <CardContent className="p-1.5 sm:p-2">
-        <p className="truncate text-xs font-black uppercase tracking-[-.02em] text-muted-foreground sm:tracking-[.08em]">
+      <CardContent className="px-2 py-2.5 sm:p-4">
+        <p className="text-sm font-bold text-muted-foreground">
           <span className="sm:hidden">{mobileLabel ?? label}</span>
           <span className="hidden sm:inline">{label}</span>
         </p>
         <p
-          className="mt-0.5 truncate text-sm font-black tracking-[-.045em] sm:mt-0.5 sm:text-lg sm:tracking-[-.035em]"
+          className="mt-1 truncate text-xl font-extrabold tracking-tight tabular-nums sm:text-2xl"
           title={value}
         >
           <span className="sm:hidden">{mobileValue ?? value}</span>
@@ -4487,7 +5032,7 @@ function SalesFilterSelect<T extends string>({
     >
       <SelectTrigger
         aria-label={ariaLabel}
-        className="h-10 w-full rounded-xl bg-background px-3 text-left font-extrabold tracking-[-.01em] shadow-sm focus-visible:ring-2"
+        className="h-10 w-full rounded-lg bg-card px-3 text-left font-semibold tracking-[-.01em] focus-visible:ring-2"
         size="lg"
       >
         <SelectValue>{selected?.label ?? 'Selecionar'}</SelectValue>
@@ -4505,7 +5050,7 @@ function SalesFilterSelect<T extends string>({
             value={option.value}
           >
             <span className="min-w-0">
-              <span className="block text-[.95rem] font-extrabold leading-tight tracking-[-.015em]">
+              <span className="block text-sm font-semibold leading-tight">
                 {option.label}
               </span>
               {option.detail && (
@@ -4685,6 +5230,29 @@ function dateKey(value: number) {
     month: '2-digit',
     day: '2-digit',
   }).format(new Date(value));
+}
+
+function saleDateInputValue(value: number) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}`;
+}
+
+function parseSaleDateInput(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
+  const parsed = Date.parse(`${value}:00-03:00`);
+  if (!Number.isSafeInteger(parsed) || saleDateInputValue(parsed) !== value)
+    return null;
+  return parsed;
 }
 
 function formatReportDay(value: number) {

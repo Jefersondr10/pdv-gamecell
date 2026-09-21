@@ -34,8 +34,9 @@ assert.match(
 );
 assert.match(
   source,
-  /O Pix vem do valor[\s\S]*?lido no comprovante, sem cadastro manual/,
+  /O Pix vem do\s+valor[\s\S]*?lido no comprovante, sem cadastro manual/,
 );
+assert.match(source, /mode === 'payments'[\s\S]*?canPayments/);
 assert.match(
   source,
   /activeReceipts\.map\(\(receipt\) => \(\{[\s\S]*?receiptDetails: receipt\.receiptDetails,[\s\S]*?receiptPaymentId: receipt\.receiptPaymentId,[\s\S]*?receiptReviewReason:/,

@@ -54,12 +54,36 @@ export function SaleDisplayStatusBadge({
 export function SaleIssuesNotice({
   issueKeys,
   compact = false,
+  emphasized = false,
 }: {
   issueKeys: SaleIssueKey[];
   compact?: boolean;
+  emphasized?: boolean;
 }) {
   const issues = SALE_ISSUES.filter((issue) => issueKeys.includes(issue.key));
   if (!issues.length) return null;
+  if (emphasized)
+    return (
+      <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+        {compact ? (
+          <p className="font-bold">
+            Conferência: {issues[0].label}
+            {issues.length > 1
+              ? ` · +${issues.length - 1} ${issues.length === 2 ? 'aviso' : 'avisos'}`
+              : ''}
+          </p>
+        ) : (
+          <>
+            <p className="font-extrabold">Pendências da venda</p>
+            <ol className="mt-1 list-decimal space-y-1 pl-5 font-semibold">
+              {issues.map((issue) => (
+                <li key={issue.key}>{issue.label}</li>
+              ))}
+            </ol>
+          </>
+        )}
+      </div>
+    );
   return (
     <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
       Conferência:{' '}

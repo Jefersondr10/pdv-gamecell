@@ -26,6 +26,18 @@ const usersDialog = settings.slice(
   settings.indexOf('function UsersDialog('),
   settings.indexOf('function RecoveryCodesDialog('),
 );
+const saleList = sales.slice(
+  sales.indexOf('function SaleList('),
+  sales.indexOf('function GroupedList('),
+);
+const editSaleDialog = sales.slice(
+  sales.indexOf('function EditSaleDialog('),
+  sales.indexOf('function MediaPickerButtons('),
+);
+const saleDateDialog = sales.slice(
+  sales.indexOf('function SaleDateDialog('),
+  sales.indexOf('function CancelDialog('),
+);
 
 assert.match(
   sales,
@@ -99,7 +111,95 @@ assert.doesNotMatch(
   'Pix receipt values must not be manually typed',
 );
 assert.match(receiptEditor, /Reler comprovante/);
+assert.match(saleList, /<article/);
+assert.match(
+  saleList,
+  /<\/button>\s*<SaleActionsMenu/,
+  'the actions trigger must be a sibling of the sale card button',
+);
+assert.match(
+  sales,
+  /const canEdit = canAny\(data\.user, \[[\s\S]*?'sales\.participants'[\s\S]*?'sales\.payments'[\s\S]*?'sales\.attachments'[\s\S]*?'sales\.receipts'[\s\S]*?'sales\.receipts\.delete'[\s\S]*?'sales\.prices'[\s\S]*?'sales\.status'[\s\S]*?\]\);/,
+  'Editar venda must restore every permission supported by the full editor',
+);
+assert.match(
+  sales,
+  /const canEditInfo = canAny\(data\.user, \[[\s\S]*?'sales\.participants'[\s\S]*?'sales\.status'[\s\S]*?\]\);/,
+  'the focused status, customer and seller action must use only its relevant permissions',
+);
+assert.match(
+  sales,
+  /const canManageReceipts = canAny\(data\.user, \[[\s\S]*?'sales\.attachments'[\s\S]*?'sales\.receipts'[\s\S]*?'sales\.receipts\.delete'[\s\S]*?\]\);/,
+  'the focused receipt action must be available to every receipt-management permission',
+);
+for (const label of [
+  'Ver detalhes',
+  'Editar venda',
+  'Status, cliente e vendedor',
+  'Pagamentos / preço de venda',
+  'Fotos dos aparelhos',
+  'Alterar data e horário',
+  'Abrir PDF',
+  'Cancelar venda',
+])
+  assert.match(saleList, new RegExp(label));
+assert.doesNotMatch(
+  saleList,
+  /Comprovantes e releitura|Adicionar comprovante|Dinheiro recebido|Status da venda/,
+  'the menu must keep payments and sale editing consolidated',
+);
+assert.doesNotMatch(editSaleDialog, /initialSection|scrollIntoView/);
+assert.match(
+  sales,
+  /type SaleEditorMode = 'full' \| 'info' \| 'payments' \| 'photos';/,
+);
+assert.match(
+  editSaleDialog,
+  /const editsInfo = mode === 'full' \|\| mode === 'info';/,
+  'the full and focused info editors must share participants and status',
+);
+assert.match(
+  editSaleDialog,
+  /const editsPayments = mode === 'full' \|\| mode === 'payments';/,
+  'the full and focused payments editors must share receipt polling and payment logic',
+);
+assert.match(
+  editSaleDialog,
+  /const editsPhotos = mode === 'full' \|\| mode === 'photos';/,
+  'the full and focused photo editors must share attachment logic',
+);
+assert.match(
+  editSaleDialog,
+  /participantsSaved = editsInfo\s*\? await participants\.save\(\)\s*: false/,
+);
+assert.match(editSaleDialog, /if \(editsPayments && hasPaymentCorrections\)/);
+assert.match(
+  editSaleDialog,
+  /editsInfo &&\s*selectedStatusId !== currentStatusId/,
+);
+assert.match(
+  editSaleDialog,
+  /\.\.\.\(editsPayments \? receiptFiles : \[\]\),[\s\S]*?\.\.\.\(editsPhotos \? selectedItemFiles : \[\]\)/,
+  'the full editor must save receipt and device-photo attachments together',
+);
+assert.match(
+  editSaleDialog,
+  /\(mode === 'full' \|\| mode === 'payments'\) &&[\s\S]*?can\(data\.user, 'sales\.prices'\)/,
+  'prices must be available in the full and payments/price editors instead of the focused info editor',
+);
+assert.match(
+  sales,
+  /key=\{editSale \? `\$\{editSaleMode\}:\$\{editSale\.id\}`/,
+);
+assert.match(saleDateDialog, /const savingRef = useRef\(false\)/);
+assert.match(
+  saleDateDialog,
+  /if \(savingRef\.current \|\| !sale \|\| !current \|\| parsed === null\)/,
+  'date changes must be single-flight before React rerenders',
+);
+assert.match(saleDateDialog, /showCloseButton=\{!busy\}/);
+assert.match(saleDateDialog, /type="datetime-local"/);
 
 console.log(
-  'Exhaustive UI audit guards passed: navigation, single-flight mutations, protected reports and automatic-only Pix receipt reading.',
+  'Exhaustive UI audit guards passed: navigation, single-flight mutations, protected reports, sale actions/date editing and automatic-only Pix receipt reading.',
 );

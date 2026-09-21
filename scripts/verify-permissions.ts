@@ -20,6 +20,16 @@ for (const role of ['owner', 'admin', 'operator'] as const) {
   assert.ok(can({ role }, 'sell.assign'));
 }
 assert.equal(can({ role: 'operator' }, 'sales.cancel'), false);
+assert.equal(can({ role: 'operator' }, 'sales.date'), false);
+assert.equal(can({ role: 'admin' }, 'sales.date'), true);
+assert.equal(
+  can({ role: 'operator', permissions: ['sales', 'sales.date'] }, 'sales.date'),
+  true,
+);
+assert.equal(
+  can({ role: 'operator', permissions: ['sales.date'] }, 'sales.date'),
+  false,
+);
 assert.equal(can({ role: 'operator' }, 'sales.prices'), false);
 assert.equal(can({ role: 'admin' }, 'sales.prices'), true);
 assert.equal(
@@ -94,10 +104,21 @@ assert.equal(mayReadAttachment('entry_photo'), false);
 assert.equal(attachmentReadPermissions('unknown'), null);
 assert.deepEqual(
   routePermissions(
-    new Request('https://example.test/api/inventory/history?serial=SNTEST000001'),
+    new Request(
+      'https://example.test/api/inventory/history?serial=SNTEST000001',
+    ),
   ),
   ['entries', 'sales'],
   'SN history requires access to entries or sales',
+);
+assert.deepEqual(
+  routePermissions(
+    new Request('https://example.test/api/sales/sale-1/date', {
+      method: 'PATCH',
+    }),
+  ),
+  ['sales.date'],
+  'sale date edits have a dedicated manager permission',
 );
 const product = {
   model: 'iPhone 17 Pro Max',

@@ -22,6 +22,7 @@ export const PERMISSION_GROUPS = [
         'sales.participants',
         'Alterar cliente e vendedor de vendas registradas',
       ],
+      ['sales.date', 'Alterar data e hora de vendas registradas'],
       ['sales.payments', 'Adicionar e corrigir pagamentos'],
       ['sales.prices', 'Alterar preços de produtos em vendas realizadas'],
       ['sales.attachments', 'Anexar fotos e comprovantes'],
@@ -71,6 +72,7 @@ export type PermissionSubject = {
 };
 const MANAGER_ONLY: Permission[] = [
   'sales.prices',
+  'sales.date',
   'sales.receipts.delete',
   'sales.cancel',
   'sales.participants',
@@ -86,6 +88,7 @@ export const PERMISSION_PARENTS: Partial<
   'sell.assign': ['sell'],
   'sales.payments': ['sales'],
   'sales.prices': ['sales'],
+  'sales.date': ['sales'],
   'sales.attachments': ['sales'],
   'sales.receipts': ['sales'],
   'sales.receipts.delete': ['sales'],

@@ -1,6 +1,8 @@
 // UI approximations of device finishes, not manufacturer color specifications.
 // Specific names must precede generic colors (e.g. verde-azulado before azul).
 const NAMED_COLORS: Array<[RegExp, string]> = [
+  [/bordo|burgundy/, '#6b3445'],
+  [/glacial|glacier/, '#b6d2dc'],
   [/lavanda|lavender/, '#b9abd9'],
   [/rosa[- ]?palido|soft pink|pale pink/, '#f2dce5'],
   [/rosa|pink/, '#eda4cc'],

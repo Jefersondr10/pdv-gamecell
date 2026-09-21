@@ -53,25 +53,25 @@
 }
 
 :root {
-  --background: oklch(0.975 0.008 247);
-  --foreground: oklch(0.235 0.035 252);
+  --background: #f5f7fa;
+  --foreground: #182437;
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.235 0.035 252);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.235 0.035 252);
-  --primary: oklch(0.285 0.088 251);
+  --primary: #235bd7;
   --primary-foreground: oklch(0.99 0.004 247);
-  --secondary: oklch(0.94 0.018 247);
-  --secondary-foreground: oklch(0.285 0.088 251);
-  --muted: oklch(0.945 0.009 247);
-  --muted-foreground: oklch(0.53 0.035 251);
-  --accent: oklch(0.93 0.032 240);
-  --accent-foreground: oklch(0.285 0.088 251);
+  --secondary: #edf2fc;
+  --secondary-foreground: #254a97;
+  --muted: #eef1f5;
+  --muted-foreground: #617087;
+  --accent: #eaf0fd;
+  --accent-foreground: #204cad;
   --destructive: oklch(0.58 0.22 27);
-  --border: oklch(0.89 0.018 247);
-  --input: oklch(0.89 0.018 247);
-  --ring: oklch(0.63 0.15 241);
-  --radius: 0.8rem;
+  --border: #e1e6ed;
+  --input: #d7dee8;
+  --ring: #4478e6;
+  --radius: 0.625rem;
   --sidebar: oklch(0.995 0.003 247);
   --sidebar-foreground: oklch(0.235 0.035 252);
   --sidebar-primary: oklch(0.285 0.088 251);
@@ -178,10 +178,53 @@
 
 .eyebrow {
   color: var(--muted-foreground);
-  font-size: 0.75rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+/* Workspace chrome only: printed/shared reports keep their own layout. */
+.app-sidebar {
+  background: #111e32;
+  color: #f6f8ff;
+  border-right-color: #111e32;
+}
+
+.app-workspace h1 {
+  font-weight: 750;
+  letter-spacing: -0.035em;
+}
+
+.app-workspace {
+  scrollbar-color: #bec8d7 transparent;
+  scrollbar-width: thin;
+}
+
+@media screen {
+  [data-slot='card'] {
+    box-shadow:
+      var(--tw-ring-offset-shadow, 0 0 #0000),
+      var(--tw-ring-shadow, 0 0 #0000),
+      0 2px 6px rgb(24 36 55 / 3%);
+  }
+
+  [data-slot='dialog-content'] {
+    box-shadow:
+      var(--tw-ring-offset-shadow, 0 0 #0000),
+      var(--tw-ring-shadow, 0 0 #0000),
+      0 24px 80px rgb(11 24 45 / 20%),
+      0 4px 16px rgb(11 24 45 / 8%);
+  }
+
+  [data-slot='dropdown-menu-content'],
+  [data-slot='select-content'] {
+    box-shadow:
+      var(--tw-ring-offset-shadow, 0 0 #0000),
+      var(--tw-ring-shadow, 0 0 #0000),
+      0 12px 36px rgb(11 24 45 / 14%),
+      0 2px 6px rgb(11 24 45 / 6%);
+  }
 }
 
 .scanner-grid {
@@ -446,6 +489,40 @@
   .report-section,
   .report-row {
     break-inside: avoid;
+  }
+}
+
+@media screen {
+  .sale-editor-body > section {
+    background: var(--card);
+    border-radius: 0.75rem;
+  }
+
+  .sale-editor-body h3,
+  .sale-detail-products h3 {
+    font-size: 1rem;
+    font-weight: 800;
+    line-height: 1.5;
+  }
+
+  .sale-editor-body label,
+  .sale-editor-body button {
+    font-weight: 600;
+  }
+
+  .sale-editor-body p,
+  .sale-detail-receipts p {
+    line-height: 1.55;
+  }
+
+  .sale-detail-receipts .report-row {
+    background: var(--card);
+  }
+
+  .sale-detail-receipts .report-row > div:first-child {
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.75rem;
   }
 }
 
