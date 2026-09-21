@@ -1,6 +1,25 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+const recoveryPanel = readFileSync(
+  'components/pdv/operation-recovery-panel.tsx',
+  'utf8',
+);
+assert.match(
+  recoveryPanel,
+  /onClick=\{\(\) => void recover\(true\)\}/,
+  'the user click must bypass automatic retry backoff',
+);
+assert.match(recoveryPanel, /'Conferindo envios…'/);
+assert.match(
+  recoveryPanel,
+  /setStorageError\(''\)/,
+  'refresh clears storage errors separately, never recovery feedback',
+);
+assert.match(recoveryPanel, /role="alert"/);
+assert.match(recoveryPanel, /Sem conexão/);
+assert.doesNotMatch(recoveryPanel, /catch \{\s*\/\* Retain a visible/);
+
 const sales = readFileSync(
   'components/pdv/views/sales-production-view.tsx',
   'utf8',

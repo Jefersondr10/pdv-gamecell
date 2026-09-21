@@ -13,7 +13,7 @@ import {
 import {
   acknowledgeOperation,
   listOperations,
-  recoverOperation,
+  recoverPendingOperations,
   type RecoveryContext,
   type SavedOperation,
 } from '@/lib/client-operation-recovery';
@@ -30,6 +30,11 @@ export function OperationRecoveryPanel({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [storageError, setStorageError] = useState('');
+  const [activity, setActivity] = useState('');
+  const [outcomeErrors, setOutcomeErrors] = useState<Record<string, string>>(
+    {},
+  );
   const running = useRef(false);
   const alive = useRef(true);
   const refresh = useCallback(
@@ -38,46 +43,89 @@ export function OperationRecoveryPanel({
         .then((rows) => {
           if (alive.current) {
             setRows(rows.filter((row) => !row.foregroundAcknowledged));
-            setError('');
+            setStorageError('');
           }
         })
         .catch(() => {
           if (alive.current)
-            setError(
+            setStorageError(
               'Não foi possível consultar os envios guardados neste aparelho.',
             );
         }),
     [storeId, userId],
   );
-  const recover = useCallback(async () => {
-    if (navigator.onLine === false || running.current) return;
-    running.current = true;
-    setBusy(true);
-    try {
-      const pending = (await listOperations({ storeId, userId })).filter(
-        (row) =>
-          row.state === 'pending' && (row.nextAttemptAt ?? 0) <= Date.now(),
-      );
-      for (const row of pending) {
-        if (!alive.current) break;
-        try {
-          await recoverOperation({ storeId, userId, csrfToken }, row);
-          if (alive.current) onChanged();
-        } catch {
-          /* Retain a visible pending/rejected operation. */
+  const recover = useCallback(
+    async (manual = false) => {
+      if (running.current) return;
+      if (navigator.onLine === false) {
+        if (manual) {
+          setActivity('');
+          setError(
+            'Sem conexão. Reconecte à internet e toque novamente; o envio está guardado.',
+          );
         }
+        return;
       }
-    } catch {
-      setError(
-        'Não foi possível consultar os envios guardados. Tente novamente.',
-      );
-    } finally {
-      await refresh();
-      setBusy(false);
-      running.current = false;
-    }
-    // oxlint-disable-next-line react/react-compiler -- The finally path uses refresh; retain it together with every independently captured scope field.
-  }, [storeId, userId, csrfToken, refresh, onChanged]);
+      running.current = true;
+      setBusy(true);
+      setError('');
+      if (manual) {
+        setOutcomeErrors({});
+        setActivity('Conferindo os envios no servidor…');
+      }
+      try {
+        const outcomes = await recoverPendingOperations(
+          { storeId, userId, csrfToken },
+          {
+            manual,
+            shouldContinue: () => alive.current,
+            onProgress: (row, index, total) => {
+              if (alive.current)
+                setActivity(
+                  `Conferindo ${index} de ${total}: ${row.label}. Aguarde a resposta do servidor…`,
+                );
+            },
+            onSettled: (outcome) => {
+              if (!alive.current) return;
+              setOutcomeErrors((previous) => ({
+                ...previous,
+                [`${outcome.row.kind}:${outcome.row.id}`]: outcome.error ?? '',
+              }));
+              void refresh();
+            },
+          },
+        );
+        if (alive.current && (manual || outcomes.length)) {
+          const confirmed = outcomes.filter(
+            (outcome) => outcome.state === 'confirmed',
+          ).length;
+          const unresolved = outcomes.length - confirmed;
+          setError('');
+          setActivity(
+            !outcomes.length
+              ? 'Nenhum envio pendente para retomar.'
+              : unresolved
+                ? `${confirmed ? `${confirmed} envio(s) confirmado(s). ` : ''}${unresolved} envio(s) não concluído(s). Veja o motivo em cada envio.`
+                : `${confirmed} envio(s) confirmado(s) pelo servidor.`,
+          );
+          if (confirmed) onChanged();
+        }
+      } catch {
+        if (alive.current) {
+          setActivity('');
+          setError(
+            'Não foi possível consultar os envios guardados neste aparelho. Tente novamente sem limpar os dados.',
+          );
+        }
+      } finally {
+        await refresh();
+        if (alive.current) setBusy(false);
+        running.current = false;
+      }
+      // oxlint-disable-next-line react/react-compiler -- The finally path uses refresh; retain it together with every independently captured scope field.
+    },
+    [storeId, userId, csrfToken, refresh, onChanged],
+  );
   useEffect(() => {
     alive.current = true;
     queueMicrotask(() => {
@@ -103,7 +151,7 @@ export function OperationRecoveryPanel({
       window.removeEventListener('online', online);
     };
   }, [refresh, recover]);
-  if (!rows.length && !error) return null;
+  if (!rows.length && !error && !storageError) return null;
   const pending = rows.filter((row) => row.state === 'pending').length;
   return (
     <>
@@ -112,6 +160,7 @@ export function OperationRecoveryPanel({
           {pending
             ? `${pending} envio(s) aguardando confirmação`
             : error ||
+              storageError ||
               (rows.some((row) => row.state === 'confirmed')
                 ? 'Há envios confirmados para conferir'
                 : 'Há tentativas não concluídas para conferir')}
@@ -130,7 +179,22 @@ export function OperationRecoveryPanel({
               Use a mesma conta e loja para recuperar.
             </DialogDescription>
           </DialogHeader>
-          {error && <p role="alert">{error}</p>}
+          {(error || storageError) && (
+            <p
+              role="alert"
+              className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm font-semibold text-destructive"
+            >
+              {error || storageError}
+            </p>
+          )}
+          {activity && (
+            <output
+              aria-live="polite"
+              className="rounded-xl border bg-muted/50 p-3 text-sm font-medium"
+            >
+              {activity}
+            </output>
+          )}
           {rows.map((row) => (
             <article
               key={`${row.kind}:${row.id}`}
@@ -151,7 +215,15 @@ export function OperationRecoveryPanel({
                     ? 'Não concluída: confira os dados'
                     : 'Aguardando confirmação — não refaça a operação'}
               </p>
-              {row.error && <p className="mt-1">{row.error}</p>}
+              {row.state !== 'confirmed' &&
+                (outcomeErrors[`${row.kind}:${row.id}`] || row.error) && (
+                  <p
+                    role="alert"
+                    className="mt-2 rounded-lg bg-amber-50 p-2 font-medium text-amber-900"
+                  >
+                    {outcomeErrors[`${row.kind}:${row.id}`] || row.error}
+                  </p>
+                )}
               {row.state !== 'pending' && (
                 <Button
                   className="mt-3"
@@ -172,9 +244,13 @@ export function OperationRecoveryPanel({
               )}
             </article>
           ))}
-          <Button disabled={busy} onClick={() => void recover()}>
-            {busy && <LoaderCircle className="size-4 animate-spin" />}Conferir e
-            retomar envios
+          <Button
+            disabled={busy || pending === 0}
+            aria-busy={busy}
+            onClick={() => void recover(true)}
+          >
+            {busy && <LoaderCircle className="size-4 animate-spin" />}
+            {busy ? 'Conferindo envios…' : 'Conferir e retomar envios'}
           </Button>
           <p className="text-xs text-muted-foreground">
             Os envios ainda pendentes dependem dos dados deste aparelho. Não

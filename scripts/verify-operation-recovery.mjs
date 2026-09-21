@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import 'fake-indexeddb/auto';
 import { IDBObjectStore } from 'fake-indexeddb';
-import { clear } from 'idb-keyval';
+import { clear, update } from 'idb-keyval';
 
 globalThis.window = new EventTarget();
 globalThis.BroadcastChannel = undefined;
@@ -130,7 +130,26 @@ await assert.rejects(() =>
 mode = 'ok';
 committed.set(pendingId, { id: pendingId, number: 3 });
 const before = posts;
-assert.equal((await secondTab.recoverOperation(context, pending)).number, 3);
+const beforeAutomatic = requests;
+assert.deepEqual(await api.recoverPendingOperations(context), []);
+assert.equal(
+  requests,
+  beforeAutomatic,
+  'automatic retries must respect backoff',
+);
+const manualProgress = [];
+const resumed = await api.recoverPendingOperations(context, {
+  manual: true,
+  onProgress: (row, index, total) =>
+    manualProgress.push([row.id, index, total]),
+});
+assert.equal(resumed[0].state, 'confirmed');
+assert.deepEqual(manualProgress, [[pendingId, 1, 1]]);
+assert.equal(
+  (await api.listOperations(context)).find((row) => row.id === pendingId).result
+    .number,
+  3,
+);
 assert.equal(
   posts,
   before,
@@ -197,6 +216,10 @@ for (const recoverableCode of ['BAD_CSRF', 'PASSWORD_CHANGE_REQUIRED']) {
     saved.form.length,
     'Session errors must preserve the unsent payload',
   );
+  assert.match(
+    saved.error,
+    recoverableCode === 'BAD_CSRF' ? /mesma conta e loja/ : /senha/,
+  );
   mode = 'ok';
   assert.equal((await api.recoverOperation(context, saved)).id, sessionId);
 }
@@ -233,6 +256,96 @@ assert.equal(
   multipartId,
 );
 assert.equal(committed.has(multipartId), true);
+
+// The exact manual-button path retries immediately, exposes failures, and
+// retains payloads. A later successful click uses the same operation ID.
+await clear();
+mode = 'offline';
+const manualId = crypto.randomUUID();
+await assert.rejects(
+  () =>
+    api.submitRecoverableOperation(
+      context,
+      'sale',
+      manualId,
+      'Manual recovery',
+      form(manualId),
+    ),
+  api.PendingOperationError,
+);
+const savedManual = (await api.listOperations(context))[0];
+assert.match(savedManual.error, /internet/);
+const attemptsBeforeClick = requests;
+const failedManual = await api.recoverPendingOperations(context, {
+  manual: true,
+});
+assert.equal(failedManual[0].state, 'pending');
+assert.match(failedManual[0].error, /internet/);
+assert.ok(
+  requests > attemptsBeforeClick,
+  'manual click must attempt a request despite backoff',
+);
+assert.ok(
+  (await api.listOperations(context))[0].form.length,
+  'retry failure retains attachments',
+);
+mode = 'ok';
+const postsBeforeManual = posts;
+const [clickOne, clickTwo] = await Promise.all([
+  api.recoverPendingOperations(context, { manual: true }),
+  api.recoverPendingOperations(context, { manual: true }),
+]);
+assert.equal(clickOne[0].state, 'confirmed');
+assert.equal(clickTwo[0].state, 'confirmed');
+assert.equal(posts, postsBeforeManual + 1, 'double-clicks reuse one upload');
+assert.equal((await api.listOperations(context))[0].error, undefined);
+
+// An app restart may keep a seven-minute lease although the sale was saved.
+// Manual confirmation may look it up, but cannot steal an active upload lease.
+await clear();
+mode = 'offline';
+const leasedId = crypto.randomUUID();
+await assert.rejects(
+  () =>
+    api.submitRecoverableOperation(
+      context,
+      'sale',
+      leasedId,
+      'Mobile restarted',
+      form(leasedId),
+    ),
+  api.PendingOperationError,
+);
+const leasedKey = `pdv:outbox:v1:${context.storeId}:${context.userId}:sale:${leasedId}`;
+await update(leasedKey, (row) => ({
+  ...row,
+  leaseOwner: 'other-tab',
+  leaseUntil: Date.now() + 420_000,
+}));
+mode = 'ok';
+const beforeLeaseCheck = posts;
+const unconfirmedLease = await secondTab.recoverPendingOperations(context, {
+  manual: true,
+});
+assert.equal(unconfirmedLease[0].state, 'pending');
+assert.match(unconfirmedLease[0].error, /envio anterior.*andamento/);
+assert.equal(
+  posts,
+  beforeLeaseCheck,
+  'a manual check must not resend an active lease',
+);
+assert.equal((await api.listOperations(context))[0].leaseOwner, 'other-tab');
+committed.set(leasedId, { id: leasedId, number: 7 });
+const confirmedLease = await secondTab.recoverPendingOperations(context, {
+  manual: true,
+});
+assert.equal(confirmedLease[0].state, 'confirmed');
+assert.equal(
+  posts,
+  beforeLeaseCheck,
+  'recover committed sale without reposting',
+);
+assert.equal((await api.listOperations(context))[0].result.number, 7);
 
 mode = 'hold';
 const simultaneousId = crypto.randomUUID();
@@ -303,5 +416,5 @@ assert.equal(
 IDBObjectStore.prototype.put = originalPut;
 await clear();
 console.log(
-  'PASS: lost response, recovery after restart, immutable payload, tenant/actor isolation, rejection, cross-tab lease, quota before send and storage failure after confirmed commit.',
+  'PASS: manual retry ignores backoff with visible errors; automatic backoff, lost response/restart, active-lease lookup without reupload, double-clicks, immutable payload, tenant/actor isolation, rejection, cross-tab lease and quota safety.',
 );

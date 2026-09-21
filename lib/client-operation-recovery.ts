@@ -1,7 +1,7 @@
 'use client';
 
 import { entries, update } from 'idb-keyval';
-import { ApiError, requestJson } from './client-api.ts';
+import { ApiError, messageOf, requestJson } from './client-api.ts';
 
 export type OperationKind = 'sale' | 'entry';
 export type RecoveryScope = { storeId: string; userId: string };
@@ -161,6 +161,7 @@ export async function submitRecoverableOperation(
 export async function recoverOperation(
   context: RecoveryContext,
   row: SavedOperation,
+  options: { checkWhileLeased?: boolean } = {},
 ): Promise<OperationResult> {
   if (row.storeId !== context.storeId || row.userId !== context.userId)
     throw new Error(
@@ -174,12 +175,61 @@ export async function recoverOperation(
   const key = keyFor(row, row.kind, row.id);
   const existing = inFlight.get(key);
   if (existing) return existing;
-  const task = withLease(context, row).finally(() => inFlight.delete(key));
+  const task = withLease(context, row, options.checkWhileLeased).finally(() =>
+    inFlight.delete(key),
+  );
   inFlight.set(key, task);
   return task;
 }
 
-async function withLease(context: RecoveryContext, row: SavedOperation) {
+export type RecoveryOutcome = {
+  row: SavedOperation;
+  state: 'confirmed' | 'pending' | 'rejected';
+  error?: string;
+};
+
+export async function recoverPendingOperations(
+  context: RecoveryContext,
+  options: {
+    manual?: boolean;
+    shouldContinue?: () => boolean;
+    onProgress?: (row: SavedOperation, index: number, total: number) => void;
+    onSettled?: (outcome: RecoveryOutcome) => void;
+  } = {},
+) {
+  const pending = (await listOperations(context)).filter(
+    (row) =>
+      row.state === 'pending' &&
+      (options.manual || (row.nextAttemptAt ?? 0) <= Date.now()),
+  );
+  const outcomes: RecoveryOutcome[] = [];
+  for (const [index, row] of pending.entries()) {
+    if (options.shouldContinue?.() === false) break;
+    options.onProgress?.(row, index + 1, pending.length);
+    let outcome: RecoveryOutcome;
+    try {
+      await recoverOperation(context, row, {
+        checkWhileLeased: options.manual,
+      });
+      outcome = { row, state: 'confirmed' };
+    } catch (error) {
+      outcome = {
+        row,
+        state: error instanceof RejectedOperationError ? 'rejected' : 'pending',
+        error: messageOf(error),
+      };
+    }
+    outcomes.push(outcome);
+    options.onSettled?.(outcome);
+  }
+  return outcomes;
+}
+
+async function withLease(
+  context: RecoveryContext,
+  row: SavedOperation,
+  checkWhileLeased = false,
+) {
   const key = keyFor(row, row.kind, row.id);
   const owner = tabId();
   let acquired = false;
@@ -193,10 +243,30 @@ async function withLease(context: RecoveryContext, row: SavedOperation) {
     return { ...saved, leaseOwner: owner, leaseUntil: Date.now() + 420_000 };
   });
   if (latest.state === 'confirmed' && latest.result) return latest.result;
-  if (!acquired)
-    throw new PendingOperationError(
-      'Outra aba está conferindo este envio. Aguarde a confirmação.',
+  if (latest.state === 'rejected')
+    throw new RejectedOperationError(
+      latest.error || 'Confira os dados antes de tentar novamente.',
     );
+  if (!acquired) {
+    // Mobile reloads can leave a lease behind after the server has committed.
+    // A manual check can confirm it immediately, but must NEVER resend while
+    // another tab still owns the upload lease.
+    if (checkWhileLeased) {
+      try {
+        const result = await lookupOperation(context, latest);
+        if (result) return await confirmOperation(context, latest, result);
+      } catch (error) {
+        throw new PendingOperationError(recoveryFailureMessage(error));
+      }
+    }
+    const seconds = Math.max(
+      1,
+      Math.ceil(((latest.leaseUntil ?? Date.now()) - Date.now()) / 1000),
+    );
+    throw new PendingOperationError(
+      `Um envio anterior ainda pode estar em andamento. Nova tentativa em até ${Math.ceil(seconds / 60)} min; não refaça a operação.`,
+    );
+  }
   try {
     return await recoverNow(context, latest);
   } finally {
@@ -208,38 +278,63 @@ async function withLease(context: RecoveryContext, row: SavedOperation) {
   }
 }
 
+function recoveryFailureMessage(error: unknown) {
+  if (error instanceof ApiError) {
+    if (error.status === 401 || error.code === 'BAD_CSRF')
+      return 'Sua sessão precisa ser renovada. Entre novamente na mesma conta e loja; o envio está guardado.';
+    if (error.code === 'PASSWORD_CHANGE_REQUIRED')
+      return 'Atualize sua senha para retomar. O envio está guardado neste aparelho.';
+    if (error.status === 429)
+      return 'O servidor pediu uma pausa. Aguarde um pouco e tente conferir novamente.';
+  }
+  if (error instanceof TypeError)
+    return 'Não foi possível conectar ao servidor. Confira a internet e tente novamente; o envio está guardado.';
+  return `${messageOf(error)} O envio continua guardado; não refaça a operação.`;
+}
+
+async function lookupOperation(context: RecoveryContext, row: SavedOperation) {
+  const statusUrl = `/api/operations?${new URLSearchParams({ kind: row.kind, id: row.id, actor: context.userId })}`;
+  const lookup = await requestJson<{
+    found: boolean;
+    result?: OperationResult;
+  }>(statusUrl);
+  return lookup.found && lookup.result ? lookup.result : null;
+}
+
+async function confirmOperation(
+  context: RecoveryContext,
+  row: SavedOperation,
+  result: OperationResult,
+) {
+  const key = keyFor(row, row.kind, row.id);
+  if (result.id !== row.id)
+    throw new Error('A confirmação não corresponde ao envio.');
+  await update<SavedOperation | undefined>(key, (current) =>
+    current
+      ? { ...current, state: 'confirmed', result, form: [], error: undefined }
+      : current,
+  ).catch(() => {});
+  window.dispatchEvent(
+    new CustomEvent('pdv:operation-confirmed', {
+      detail: {
+        storeId: context.storeId,
+        userId: context.userId,
+        kind: row.kind,
+        id: row.id,
+        result,
+      },
+    }),
+  );
+  window.dispatchEvent(new Event('pdv:sales-changed'));
+  notify();
+  return result;
+}
+
 async function recoverNow(context: RecoveryContext, row: SavedOperation) {
   const key = keyFor(row, row.kind, row.id);
-  const statusUrl = `/api/operations?${new URLSearchParams({ kind: row.kind, id: row.id, actor: context.userId })}`;
-  const confirm = async (result: OperationResult) => {
-    if (result.id !== row.id)
-      throw new Error('A confirmação não corresponde ao envio.');
-    await update<SavedOperation | undefined>(key, (current) =>
-      current
-        ? { ...current, state: 'confirmed', result, form: [], error: undefined }
-        : current,
-    ).catch(() => {});
-    window.dispatchEvent(
-      new CustomEvent('pdv:operation-confirmed', {
-        detail: {
-          storeId: context.storeId,
-          userId: context.userId,
-          kind: row.kind,
-          id: row.id,
-          result,
-        },
-      }),
-    );
-    window.dispatchEvent(new Event('pdv:sales-changed'));
-    notify();
-    return result;
-  };
   try {
-    const lookup = await requestJson<{
-      found: boolean;
-      result?: OperationResult;
-    }>(statusUrl);
-    if (lookup.found && lookup.result) return await confirm(lookup.result);
+    const found = await lookupOperation(context, row);
+    if (found) return await confirmOperation(context, row, found);
     const form = new FormData();
     row.form.forEach(([name, value]) => form.append(name, value));
     try {
@@ -251,14 +346,11 @@ async function recoverNow(context: RecoveryContext, row: SavedOperation) {
           body: form,
         },
       );
-      return await confirm(result);
+      return await confirmOperation(context, row, result);
     } catch (error) {
       // A lost response is not proof that the transaction failed.
-      const after = await requestJson<{
-        found: boolean;
-        result?: OperationResult;
-      }>(statusUrl);
-      if (after.found && after.result) return await confirm(after.result);
+      const after = await lookupOperation(context, row);
+      if (after) return await confirmOperation(context, row, after);
       if (
         error instanceof ApiError &&
         (([400, 404, 409, 413, 415, 422].includes(error.status) &&
@@ -288,10 +380,12 @@ async function recoverNow(context: RecoveryContext, row: SavedOperation) {
     }
   } catch (error) {
     if (error instanceof RejectedOperationError) throw error;
+    const failure = recoveryFailureMessage(error);
     await update<SavedOperation | undefined>(key, (current) =>
       current?.state === 'pending'
         ? {
             ...current,
+            error: failure,
             attempts: (current.attempts ?? 0) + 1,
             nextAttemptAt:
               Date.now() +
@@ -303,8 +397,7 @@ async function recoverNow(context: RecoveryContext, row: SavedOperation) {
           }
         : current,
     ).catch(() => {});
-    throw new PendingOperationError(
-      'Envio guardado neste aparelho, aguardando confirmação. Abra Envios para acompanhar. Não refaça a operação.',
-    );
+    notify();
+    throw new PendingOperationError(failure);
   }
 }
