@@ -4,7 +4,7 @@ import {
 } from './receipt-amount.ts';
 
 // Engine/parser revision, independent of the saved document format version.
-export const RECEIPT_READER_REVISION = 10;
+export const RECEIPT_READER_REVISION = 11;
 
 export type ReceiptDocument = {
   version: 1;
@@ -184,14 +184,61 @@ export function extractReceiptDocument(text: string) {
     /\bnu\s+pagamentos\b|nubank\.com\.br/i.test(text) &&
     /^\s*destino\s*$/im.test(text) &&
     /^\s*origem\s*$/im.test(text);
-  const lines = text
+  const labelledPixTransfer =
+    /\bpix\s+enviado\b/i.test(text.slice(0, 500)) &&
+    /^\s*quem\s+recebeu\s*$/im.test(text) &&
+    /^\s*quem\s+pagou\s*$/im.test(text);
+  const stoneTransfer =
+    /comprovante\s+de\s+transfer[eê]ncia/i.test(text.slice(0, 500)) &&
+    /\bstone\s+institui[cç][aã]o\s+de\s+pagamento/i.test(text) &&
+    /^\s*dados\s+de\s+destino\s*$/im.test(text) &&
+    /^\s*dados\s+de\s+origem\s*$/im.test(text);
+  const bradescoTransfer =
+    /confirma[cç][aã]o\s+de\s+opera[cç][aã]o/i.test(text.slice(0, 500)) &&
+    /institui[cç][aã]o\s+origem\s*:\s*BANCO\s+BRADESCO/i.test(text);
+  const layoutText = bradescoTransfer
+    ? text.replace(
+        /dados\s+de\s+quem\s*\r?\n\s*recebeu/gi,
+        'Dados de quem recebeu',
+      )
+    : text;
+  const lines = layoutText
     .slice(0, 100_000)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .flatMap((line) => {
-      if (!nubankTransfer) return [line];
-      const field = line.match(/^(Nome|CNPJ|CPF|Institui[cç][aã]o)\s+(.+)$/i);
+    .flatMap((line, index, all) => {
+      // Stone puts names/documents and institution/agency/account in columns.
+      // Decode only the labelled columns in its recognized transfer layout.
+      if (stoneTransfer) {
+        if (/^dados de destino$/i.test(line)) return ['Destino'];
+        if (/^dados de origem$/i.test(line)) return ['Origem'];
+        const nameColumns = /^nome\s+(?:cpf\s*\/\s*cnpj|cpf|cnpj)$/i;
+        const bankColumns = /^institui[cç][aã]o\s+ag[eê]ncia\s+conta$/i;
+        if (nameColumns.test(line) || bankColumns.test(line)) return [];
+        if (nameColumns.test(all[index - 1] ?? '')) {
+          const columns = line.match(
+            /^(.+?)\s+(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})$/,
+          );
+          if (columns) return ['Nome', columns[1], 'CPF/CNPJ', columns[2]];
+        }
+        if (bankColumns.test(all[index - 1] ?? '')) {
+          const columns = line.match(/^(.+?)\s+(\d{1,6})\s+([\d.-]+)$/);
+          if (columns)
+            return [
+              'Instituição',
+              columns[1],
+              'Agência',
+              columns[2],
+              'Conta',
+              columns[3],
+            ];
+        }
+      }
+      if (!nubankTransfer && !labelledPixTransfer) return [line];
+      const field = line.match(
+        /^(Nome|CNPJ|CPF(?:\s*\/\s*CNPJ)?|Institui[cç][aã]o)\s+(.+)$/i,
+      );
       if (field) return [field[1], field[2]];
       // Only the label is repaired; the printed E2E token stays strict.
       return [line.replace(/^[1l]D(?=\s+da\s+transa[cç][aã]o\s*:)/i, 'ID')];
@@ -577,7 +624,7 @@ export function extractReceiptDocument(text: string) {
     }
   }
   let bradescoOperationDate: string | null = null;
-  if (bradescoNetEmpresaCompleted) {
+  if (bradescoNetEmpresaCompleted || bradescoDebitedCompleted) {
     const corruptedAccent = '(?:[cç][aã]o|\\uFFFD+o|o)';
     const labelledValue = (label: RegExp) => {
       const index = lines.findIndex((line) => label.test(line));
@@ -589,7 +636,9 @@ export function extractReceiptDocument(text: string) {
     const company = labelledValue(/^empresa\s*:\s*/i)?.split(
       /\s*\|\s*(?:cpf|cnpj)\s*:/i,
     )[0];
-    const recipientDocumentValue = labelledValue(/^cnpj\s*\/\s*cpf\s*:\s*/i);
+    const recipientDocumentValue = labelledValue(
+      /^(?:cnpj\s*\/\s*cpf|cpf\s*\/\s*cnpj)\s*:\s*/i,
+    );
     let recipientDocument = recipientDocumentValue?.replace(/\D/g, '') ?? '';
     // This corporate Bradesco layout pads a CNPJ with one leading zero.
     if (recipientDocument.length === 15 && recipientDocument.startsWith('0'))
@@ -613,7 +662,11 @@ export function extractReceiptDocument(text: string) {
     };
     recipient = {
       name: cleanParticipantName(
-        labelledValue(/^nome\s+do\s+favorecido\s*:\s*/i),
+        labelledValue(
+          bradescoDebitedCompleted
+            ? /^nome\s*:\s*/i
+            : /^nome\s+do\s+favorecido\s*:\s*/i,
+        ),
       ),
       bank: cleanParticipantBank(
         labelledValue(
@@ -625,15 +678,24 @@ export function extractReceiptDocument(text: string) {
         : null,
     };
   }
+  // Inter prints date and time on adjacent, explicitly labelled lines.
+  const splitTransactionDates = labelledPixTransfer
+    ? [
+        ...text.matchAll(
+          /^\s*data\s+da\s+transa[cç][aã]o\s*:?[\wÀ-ÿ, ]*?(\d{1,2}\/\d{1,2}\/\d{4})\s*\r?\n\s*hor[aá]rio\s*:?\s*(\d{1,2})[h:](\d{2})\s*$/gim,
+        ),
+      ].map((match) => `${match[1]} ${match[2]}:${match[3]}`)
+    : [];
   const dates = transferDates.length
     ? transferDates
     : [
         ...(bradescoOperationDate ? [bradescoOperationDate] : []),
+        ...splitTransactionDates,
         ...(text.match(
           /\b\d{1,2}[/-](?:\d{1,2}|[a-zç]+)[/-]\d{4}\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
         ) ?? []),
         ...(text.match(
-          /\b\d{1,2}\s+(?:jan(?:eiro)?|fev(?:ereiro)?|mar(?:[cç]o)?|abr(?:il)?|mai(?:o)?|jun(?:ho)?|jul(?:ho)?|ago(?:sto)?|set(?:embro)?|out(?:ubro)?|nov(?:embro)?|dez(?:embro)?)\.?\s+\d{4}\s*[-–—,]?\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
+          /\b\d{1,2}\s+(?:de\s+)?(?:jan(?:eiro)?|fev(?:ereiro)?|mar(?:[cç]o)?|abr(?:il)?|mai(?:o)?|jun(?:ho)?|jul(?:ho)?|ago(?:sto)?|set(?:embro)?|out(?:ubro)?|nov(?:embro)?|dez(?:embro)?)\.?\s+(?:de\s+)?\d{4}\s*[-–—,]?\s*(?:[aà]s\s*)?\d{1,2}:\d{2}(?::\d{2})?\b/gi,
         ) ?? []),
       ];
   const participantStarts = [paired, from, to].filter((i) => i >= 0);
@@ -861,7 +923,7 @@ export function shortReceiptDate(value: string | null) {
   const date = normalized.match(
     /(\d{1,2})[/\-.\s]+(\d{1,2}|[a-zç]+)[/\-.\s]+(\d{4})/,
   );
-  const time = value.match(/(\d{1,2}):(\d{2})(?::\d{2})?/);
+  const time = value.match(/\b(\d{1,2})[h:](\d{2})(?::\d{2})?\b/i);
   if (!date) return value;
   const monthToken = date[2].normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const month = /^\d+$/.test(monthToken)
