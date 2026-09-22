@@ -6,6 +6,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { ReceiptReadingNotices } from '@/components/pdv/receipt-reading-notices';
+import { AttachmentPreviewLink } from '@/components/pdv/attachment-preview';
 import {
   receiptTransactionDisplay,
   shortReceiptDate,
@@ -29,17 +30,15 @@ export function SaleReceiptDetails({
   return (
     <article className="min-w-0 overflow-hidden rounded-xl border bg-card">
       <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b bg-secondary/35 px-4 py-3.5 sm:px-5">
-        <a
-          href={receipt.url}
-          target="_blank"
-          rel="noreferrer"
-          title={receipt.name || `Comprovante ${index + 1}`}
+        <AttachmentPreviewLink
+          file={receipt}
+          title={`Comprovante ${index + 1}`}
           className="inline-flex min-h-10 items-center gap-2 rounded-md text-base font-extrabold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <FileText className="size-5 shrink-0" />
           Comprovante {index + 1}
           <ArrowUpRight className="size-4 shrink-0" />
-        </a>
+        </AttachmentPreviewLink>
         <div className="min-w-0 sm:text-right">
           <p className="text-xs font-semibold text-muted-foreground">
             Valor identificado

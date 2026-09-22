@@ -1,6 +1,6 @@
 'use client';
 
-import Image from 'next/image';
+import { AttachmentPreview } from '@/components/pdv/attachment-preview';
 import {
   SaleDisplayStatusBadge,
   SaleIssuesNotice,
@@ -739,7 +739,7 @@ export function OverviewProductionView({
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Abrir arquivo<span className="sr-only"> em nova guia</span>
+                  Abrir original<span className="sr-only"> em nova guia</span>
                 </a>
               </div>
               <ReceiptReadingNotices
@@ -751,9 +751,9 @@ export function OverviewProductionView({
                   receiptOcrStatus: current.receipt.processingStatus,
                 }}
               />
-              <ReceiptPreview
+              <AttachmentPreview
                 key={current.receipt.id}
-                receipt={current.receipt}
+                file={current.receipt}
               />
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -796,40 +796,5 @@ export function OverviewProductionView({
         </DialogContent>
       </Dialog>
     </section>
-  );
-}
-
-function ReceiptPreview({ receipt }: { receipt: Receipt }) {
-  const [failed, setFailed] = useState(false);
-  return (
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl border bg-slate-50">
-      {failed ? (
-        <p className="p-5 text-center text-sm text-muted-foreground">
-          Não foi possível mostrar a prévia. Use “Abrir arquivo” ou tente
-          novamente.
-        </p>
-      ) : receipt.mimeType.startsWith('image/') ? (
-        <Image
-          unoptimized
-          width={1200}
-          height={1600}
-          src={receipt.url}
-          alt={`Comprovante ${receipt.name}`}
-          className="h-full w-full object-contain"
-          onError={() => setFailed(true)}
-        />
-      ) : receipt.mimeType === 'application/pdf' ? (
-        <iframe
-          title={`Comprovante PDF: ${receipt.name}`}
-          src={receipt.url}
-          className="h-full w-full border-0"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <p className="p-5 text-sm text-muted-foreground">
-          Use “Abrir arquivo” para visualizar este anexo.
-        </p>
-      )}
-    </div>
   );
 }

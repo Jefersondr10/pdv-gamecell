@@ -1,6 +1,31 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+const attachmentPreview = readFileSync(
+  'components/pdv/attachment-preview.tsx',
+  'utf8',
+);
+assert.match(attachmentPreview, /event\.preventDefault\(\)/);
+assert.match(attachmentPreview, /event\.ctrlKey/);
+assert.match(attachmentPreview, /credentials: 'same-origin'/);
+assert.match(attachmentPreview, /cache: 'no-store'/);
+assert.match(attachmentPreview, /URL\.revokeObjectURL/);
+assert.match(attachmentPreview, /controller\.abort\(\)/);
+assert.match(attachmentPreview, /Abrir original/);
+assert.match(attachmentPreview, /Fechar comprovante/);
+assert.doesNotMatch(
+  attachmentPreview,
+  /<iframe|method: '(?:POST|PATCH|DELETE)'/,
+);
+for (const name of [
+  'sale-receipt-details',
+  'receipt-payment-details',
+  'receipt-reconciliation-editor',
+]) {
+  const source = readFileSync(`components/pdv/${name}.tsx`, 'utf8');
+  assert.match(source, /<AttachmentPreviewLink/);
+}
+
 const recoveryPanel = readFileSync(
   'components/pdv/operation-recovery-panel.tsx',
   'utf8',

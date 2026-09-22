@@ -5,6 +5,7 @@ import {
 } from '@/lib/receipt-document';
 import { ReceiptReadingNotices } from '@/components/pdv/receipt-reading-notices';
 import { SaleReceiptDetails } from '@/components/pdv/sale-receipt-details';
+import { AttachmentPreviewLink } from '@/components/pdv/attachment-preview';
 
 export function ReceiptPaymentDetails({
   financiallyReconciled = false,
@@ -48,15 +49,13 @@ export function ReceiptPaymentDetails({
           key={receipt.id}
         >
           <div className="flex items-start justify-between gap-3">
-            <a
-              href={receipt.url}
-              title={receipt.name || `Comprovante ${index + 1}`}
-              target="_blank"
-              rel="noreferrer"
+            <AttachmentPreviewLink
+              file={receipt}
+              title={`Comprovante ${index + 1}`}
               className="font-bold text-primary underline underline-offset-2"
             >
               Comprovante {index + 1}
-            </a>
+            </AttachmentPreviewLink>
             <strong className="shrink-0">
               {receipt.receiptAmountCents === null
                 ? 'Em leitura / conferir'

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { AttachmentPreviewLink } from '@/components/pdv/attachment-preview';
 import {
   deriveReceiptReconciliation,
   receiptTargetLabel,
@@ -433,14 +434,13 @@ export function SavedReceiptValueEditor({
     return (
       <div className="rounded-xl border bg-muted/20 p-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <a
+          <AttachmentPreviewLink
             className="min-w-0 flex-1 truncate text-xs font-bold underline-offset-2 hover:underline"
-            href={receipt.url}
-            target="_blank"
-            rel="noreferrer"
+            file={receipt}
+            title="Comprovante de pagamento"
           >
             {receipt.name}
-          </a>
+          </AttachmentPreviewLink>
           {serverJob &&
             !['pending', 'processing', 'retry'].includes(
               serverJob.status ?? '',
@@ -522,14 +522,13 @@ export function SavedReceiptValueEditor({
   return (
     <div className="rounded-xl border bg-muted/20 p-2.5">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <a
+        <AttachmentPreviewLink
           className="min-w-0 flex-1 truncate text-xs font-bold underline-offset-2 hover:underline"
-          href={receipt.url}
-          rel="noreferrer"
-          target="_blank"
+          file={receipt}
+          title="Comprovante de pagamento"
         >
           {receipt.name}
-        </a>
+        </AttachmentPreviewLink>
         <Button
           disabled={disabled || reading}
           onClick={() => void readSavedReceipt()}
@@ -571,8 +570,8 @@ export function SavedReceiptValueEditor({
               : 'text-amber-700 dark:text-amber-300',
           )}
         >
-          {value.amountCents !== null ? 'Valor identificado' : 'Valor sugerido'}:{' '}
-          {formatMoney(value.amountCents ?? localSuggestionCents!)}
+          {value.amountCents !== null ? 'Valor identificado' : 'Valor sugerido'}
+          : {formatMoney(value.amountCents ?? localSuggestionCents!)}
         </output>
       )}
     </div>

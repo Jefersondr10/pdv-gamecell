@@ -5,10 +5,17 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 /** Convert every page, sequentially, without changing the stored original. */
 export async function* receiptPdfImages(
   bytes: Uint8Array,
+  signal?: AbortSignal,
 ): AsyncGenerator<Uint8Array> {
+  signal?.throwIfAborted();
   const pdfjs = await import('pdfjs-dist');
+  signal?.throwIfAborted();
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const task = pdfjs.getDocument({ data: bytes.slice() });
+  let disposal: Promise<void> | undefined;
+  const dispose = () => (disposal ??= task.destroy());
+  const abort = () => void dispose().catch(() => {});
+  signal?.addEventListener('abort', abort, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const pdf = await Promise.race([
@@ -26,6 +33,7 @@ export async function* receiptPdfImages(
         'Um comprovante excede 30 páginas. Use o PDF original ou reduza os anexos.',
       );
     for (let number = 1; number <= pdf.numPages; number++) {
+      signal?.throwIfAborted();
       const page = await pdf.getPage(number);
       const natural = page.getViewport({ scale: 1 });
       const viewport = page.getViewport({
@@ -59,6 +67,7 @@ export async function* receiptPdfImages(
             0.9,
           ),
         );
+        signal?.throwIfAborted();
         yield new Uint8Array(await blob.arrayBuffer());
       } finally {
         clearTimeout(timer);
@@ -69,6 +78,7 @@ export async function* receiptPdfImages(
     }
   } finally {
     clearTimeout(timer);
-    await task.destroy();
+    signal?.removeEventListener('abort', abort);
+    await dispose();
   }
 }
