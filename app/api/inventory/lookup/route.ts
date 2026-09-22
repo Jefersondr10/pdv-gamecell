@@ -1,4 +1,5 @@
 import { requireSession } from '@/lib/server/auth';
+import { inventoryStatusSql } from '@/lib/server/reservations';
 import { apiError, HttpError, json } from '@/lib/server/http';
 import { runtime } from '@/lib/server/runtime';
 import {
@@ -8,8 +9,9 @@ import {
 } from '@/lib/server/security';
 
 type SerialLookupRow = {
+  unitId: string;
   serial: string;
-  status: 'available' | 'sold';
+  status: 'available' | 'sold' | 'reserved';
   product: string;
   detail: string;
   defaultPriceCents: number;
@@ -36,7 +38,7 @@ export async function GET(request: Request) {
     const db = runtime().DB;
     const result = await db
       .prepare(
-        `SELECT iu.serial, iu.status, p.model AS product,
+        `SELECT iu.id AS unitId, iu.serial, ${inventoryStatusSql()} AS status, p.model AS product,
                 (p.color || ' · ' || p.memory) AS detail,
                 p.default_price_cents AS defaultPriceCents
          FROM inventory_units iu

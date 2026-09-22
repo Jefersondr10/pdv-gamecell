@@ -267,6 +267,36 @@ db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
   reportChecksum,
   '0017_public_report_links',
 );
+db.close();
+const migrateReservations = () =>
+  execFileSync(
+    process.execPath,
+    [resolve('scripts/hostinger/apply-reservations-migration.mjs'), path],
+    { stdio: 'pipe' },
+  );
+migrateReservations();
+migrateReservations();
+db = new DatabaseSync(path);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM pdv_release_migrations').get().n,
+  10,
+);
+assert.equal(
+  db.prepare('SELECT count(*) AS n FROM stock_reservations').get().n,
+  0,
+);
+assert.equal(
+  db.prepare('SELECT value FROM fixture_preservation').get().value,
+  'synthetic-record',
+);
+assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
+db.prepare('UPDATE pdv_release_migrations SET checksum=? WHERE name=?').run(
+  'changed',
+  '0018_stock_reservations',
+);
+db.close();
+assert.throws(migrateReservations, /Migration checksum mismatch/);
+db = new DatabaseSync(path);
 db.prepare('UPDATE pdv_release_migrations SET checksum=?').run('changed');
 db.close();
 // The legacy 0009 runner rejects the newer reader_revision column added by 0016.

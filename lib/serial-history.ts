@@ -31,7 +31,7 @@ export type SerialHistoryResponse = {
     serial: string;
     productName: string;
     productDetail: string;
-    status: 'available' | 'sold';
+    status: 'available' | 'sold' | 'reserved';
   };
   entry: SerialHistoryEntry;
   sales: SerialHistorySale[];

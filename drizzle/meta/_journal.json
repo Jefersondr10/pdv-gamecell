@@ -127,6 +127,13 @@
       "when": 1789969670092,
       "tag": "0017_public_report_links",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1790047996069,
+      "tag": "0018_stock_reservations",
+      "breakpoints": true
     }
   ]
 }

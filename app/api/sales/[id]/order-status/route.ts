@@ -17,6 +17,7 @@ export const dynamic = 'force-dynamic';
 type CurrentSale = {
   status: 'completed' | 'cancelled';
   orderStatusId: string | null;
+  orderStatusName: string | null;
 };
 
 type StatusResult = {
@@ -52,8 +53,9 @@ export async function PATCH(
 
     const current = await db
       .prepare(
-        `SELECT status, order_status_id AS orderStatusId
-         FROM sales WHERE id = ? AND store_id = ? LIMIT 1`,
+        `SELECT s.status, s.order_status_id AS orderStatusId, o.name AS orderStatusName
+         FROM sales s LEFT JOIN order_statuses o ON o.id=s.order_status_id AND o.store_id=s.store_id
+         WHERE s.id = ? AND s.store_id = ? LIMIT 1`,
       )
       .bind(saleId, session.storeId)
       .first<CurrentSale>();
@@ -130,6 +132,12 @@ export async function PATCH(
             JSON.stringify({
               previousOrderStatusId: current.orderStatusId,
               orderStatusId,
+              previousOrderStatusName:
+                current.orderStatusId === null
+                  ? 'Sem status cadastrado'
+                  : current.orderStatusName,
+              orderStatusName:
+                orderStatusId === null ? 'Sem status cadastrado' : targetName,
             }),
             now,
           ),

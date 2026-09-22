@@ -68,6 +68,8 @@ export function routePermissions(request: Request): Permission[] | null {
     throw new HttpError(400, 'Endereço inválido.', 'INVALID_PATH');
   }
   const read = request.method === 'GET';
+  if (path === '/api/reservations' || /^\/api\/reservations\/[^/]+$/.test(path))
+    return [read ? 'reservations' : 'reservations.manage'];
   if (path === '/api/report-shares') return ['sales'];
   if (path === '/api/sales')
     return read
@@ -76,6 +78,8 @@ export function routePermissions(request: Request): Permission[] | null {
         : ['sales']
       : ['sell'];
   if (path === '/api/sales/groups') return ['sales', 'ranking'];
+  if (/^\/api\/sales\/[^/]+\/(history|receipt-conflicts)$/.test(path))
+    return ['sales'];
   if (/^\/api\/sales\/[^/]+\/payments$/.test(path)) return ['sales.payments'];
   if (/^\/api\/sales\/[^/]+\/prices$/.test(path)) return ['sales.prices'];
   if (/^\/api\/sales\/[^/]+\/date$/.test(path)) return ['sales.date'];
@@ -97,8 +101,9 @@ export function routePermissions(request: Request): Permission[] | null {
   if (path === '/api/receipt-ocr/legacy-review') return ['sales.receipts'];
   if (path === '/api/entries') return [read ? 'entries' : 'entry'];
   if (path === '/api/inventory/history') return ['entries', 'sales'];
-  if (path === '/api/inventory') return ['stock'];
-  if (path === '/api/inventory/lookup') return ['sell', 'entry', 'stock'];
+  if (path === '/api/inventory') return ['stock', 'reservations'];
+  if (path === '/api/inventory/lookup')
+    return ['sell', 'entry', 'stock', 'reservations'];
   if (path === '/api/rankings') return ['ranking'];
   if (path === '/api/overview') return ['overview'];
   if (path === '/api/clients') return ['clients.create'];

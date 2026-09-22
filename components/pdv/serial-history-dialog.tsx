@@ -199,7 +199,9 @@ export function SerialHistoryDialog({
                 >
                   {history.unit.status === 'available'
                     ? 'Disponível no estoque'
-                    : 'Vendido'}
+                    : history.unit.status === 'reserved'
+                      ? 'Reservado'
+                      : 'Vendido'}
                 </Badge>
               </div>
 
@@ -290,10 +292,7 @@ function MovementRow({
           <>
             <DetailGrid
               rows={[
-                [
-                  'Operador',
-                  movement.entry.operatorName || 'Não disponível',
-                ],
+                ['Operador', movement.entry.operatorName || 'Não disponível'],
                 ['Data da entrada', formatDateTime(movement.entry.createdAt)],
               ]}
             />
@@ -382,11 +381,7 @@ function SaleMovementDetails({
       />
       <AttachmentGallery label="Fotos desta venda" photos={sale.photos} />
       {onOpenSale && (
-        <OpenSaleButton
-          opening={opening}
-          sale={sale}
-          onOpenSale={onOpenSale}
-        />
+        <OpenSaleButton opening={opening} sale={sale} onOpenSale={onOpenSale} />
       )}
     </>
   );

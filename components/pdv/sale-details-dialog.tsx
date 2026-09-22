@@ -1,12 +1,11 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import {
   ArrowUpRight,
   Banknote,
   CalendarDays,
   ChevronDown,
-  CircleAlert,
   FileText,
   Paperclip,
   Pencil,
@@ -34,7 +33,8 @@ import { SaleStatusBadge } from '@/components/pdv/sale-status-badge';
 import { ReceiptPaymentDetails } from '@/components/pdv/receipt-payment-details';
 import { SalePricesEditor } from '@/components/pdv/sale-prices-editor';
 import { receiptDrivenPayments } from '@/lib/receipt-income';
-import { saleIssues } from '@/lib/sale-display-status';
+import { SalePendingActions } from '@/components/pdv/sale-pending-actions';
+import { SaleActivityHistory } from '@/components/pdv/sale-activity-history';
 import { saleFinancialSummary } from '@/lib/sale-financial-summary';
 import { receiptTargetLabel } from '@/lib/receipt-reconciliation';
 import { cn } from '@/lib/utils';
@@ -60,6 +60,8 @@ export function SaleDetailsDialog({
   onEditInfo,
   onEditPayments,
   onEditReceipts,
+  onEditPhotos,
+  onOpenRelatedSale,
   onChangeDate,
   onCancel,
   canEdit,
@@ -69,6 +71,7 @@ export function SaleDetailsDialog({
   canEditStatus,
   canEditPayments,
   canEditReceipts,
+  canAddAttachments,
   canChangeDate,
   suspended = false,
   csrfToken,
@@ -83,6 +86,8 @@ export function SaleDetailsDialog({
   onEditInfo: (sale: SaleRecord) => void;
   onEditPayments: (sale: SaleRecord) => void;
   onEditReceipts: (sale: SaleRecord) => void;
+  onEditPhotos: (sale: SaleRecord) => void;
+  onOpenRelatedSale: (id: string) => Promise<unknown>;
   onChangeDate: (sale: SaleRecord) => void;
   onCancel: (sale: SaleRecord) => void;
   canEdit: boolean;
@@ -92,6 +97,7 @@ export function SaleDetailsDialog({
   canEditStatus: boolean;
   canEditPayments: boolean;
   canEditReceipts: boolean;
+  canAddAttachments: boolean;
   canChangeDate: boolean;
   suspended?: boolean;
   csrfToken: string;
@@ -100,7 +106,8 @@ export function SaleDetailsDialog({
   closeLabel?: string;
 }) {
   const financial = sale ? saleFinancialSummary(sale) : null;
-  const issues = sale ? saleIssues(sale) : [];
+  const priceEditButton = useRef<HTMLButtonElement>(null);
+  const receiptSection = useRef<HTMLElement>(null);
   const payments = sale ? receiptDrivenPayments(sale) : [];
   const showReceiptConference = Boolean(
     sale &&
@@ -293,33 +300,41 @@ export function SaleDetailsDialog({
                   </div>
                 </section>
 
-                {issues.length > 0 && (
-                  <section
-                    className="rounded-xl border border-amber-200 bg-amber-50/80 p-4 dark:border-amber-800 dark:bg-amber-950/30"
-                    aria-label="Pendências da venda"
-                  >
-                    <h3 className="flex flex-wrap items-center gap-2 text-sm font-extrabold text-amber-950 dark:text-amber-200">
-                      <CircleAlert className="size-4 shrink-0" />
-                      Status da venda
-                      <span className="ml-auto text-xs font-semibold">
-                        {issues.length}{' '}
-                        {issues.length === 1 ? 'pendência' : 'pendências'}
-                      </span>
-                    </h3>
-                    <ol className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      {issues.map((issue, index) => (
-                        <li
-                          key={issue.key}
-                          className="flex items-start gap-2 text-sm font-semibold text-amber-950 dark:text-amber-200"
-                        >
-                          <span className="flex size-5 shrink-0 items-center justify-center rounded bg-amber-200/55 text-xs font-extrabold dark:bg-amber-800/50">
-                            {index + 1}
-                          </span>
-                          <span>{issue.label}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  </section>
+                {!suspended && (
+                  <SalePendingActions
+                    key={JSON.stringify([
+                      sale.id,
+                      sale.receivedTotalCents,
+                      sale.receipts,
+                    ])}
+                    sale={sale}
+                    disabled={locked}
+                    allowed={{
+                      prices: canEditPrices,
+                      receipts: canEditReceipts,
+                      cash: canEditPayments,
+                      photos: canAddAttachments,
+                      view_receipts: true,
+                    }}
+                    onOpenSale={onOpenRelatedSale}
+                    onAction={(action) => {
+                      if (locked) return;
+                      if (action === 'prices') {
+                        priceEditButton.current?.scrollIntoView({
+                          block: 'center',
+                        });
+                        priceEditButton.current?.click();
+                      } else if (action === 'receipts') onEditReceipts(sale);
+                      else if (action === 'cash') onEditPayments(sale);
+                      else if (action === 'photos') onEditPhotos(sale);
+                      else {
+                        receiptSection.current?.scrollIntoView({
+                          block: 'start',
+                        });
+                        receiptSection.current?.focus({ preventScroll: true });
+                      }
+                    }}
+                  />
                 )}
 
                 {sale.status === 'cancelled' && (
@@ -348,6 +363,7 @@ export function SaleDetailsDialog({
                   )}
                 >
                   <SalePricesEditor
+                    editButtonRef={priceEditButton}
                     sale={sale}
                     csrfToken={csrfToken}
                     title="Aparelhos vendidos"
@@ -513,7 +529,11 @@ export function SaleDetailsDialog({
                 </div>
 
                 {showReceiptConference && (
-                  <section className="min-w-0 rounded-xl border bg-card p-4 shadow-sm sm:p-5">
+                  <section
+                    ref={receiptSection}
+                    tabIndex={-1}
+                    className="min-w-0 rounded-xl border bg-card p-4 shadow-sm sm:p-5"
+                  >
                     <SectionHeading
                       icon={<ReceiptText className="size-5" />}
                       title="Comprovantes de pagamento"
@@ -622,6 +642,9 @@ export function SaleDetailsDialog({
                       showNotices={false}
                     />
                   </section>
+                )}
+                {!suspended && (
+                  <SaleActivityHistory key={sale.id} saleId={sale.id} />
                 )}
               </div>
             </div>

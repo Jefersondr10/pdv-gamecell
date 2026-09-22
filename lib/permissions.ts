@@ -1,5 +1,12 @@
 export const PERMISSION_GROUPS = [
   {
+    label: 'Reservas',
+    items: [
+      ['reservations', 'Consultar reservas e aparelhos'],
+      ['reservations.manage', 'Criar, alterar prazo e liberar reservas'],
+    ],
+  },
+  {
     label: 'Vender',
     items: [
       ['sell', 'Acessar e finalizar novas vendas'],
@@ -85,6 +92,7 @@ const MANAGER_ONLY: Permission[] = [
 export const PERMISSION_PARENTS: Partial<
   Record<Permission, readonly Permission[]>
 > = {
+  'reservations.manage': ['reservations'],
   'sell.assign': ['sell'],
   'sales.payments': ['sales'],
   'sales.prices': ['sales'],

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
+import { activeReservationSql } from '../lib/server/reservation-stock.ts';
 import {
   buildStockWhatsAppMessage,
   stockColorEmoji,
@@ -87,13 +88,19 @@ const source = await readFile(
   new URL('../app/api/inventory/route.ts', import.meta.url),
   'utf8',
 );
-const sql = source.match(
+const sqlTemplate = source.match(
   /`(\s*SELECT p\.model, p\.color, p\.memory, p\.default_price_cents AS defaultPriceCents[\s\S]*?)`/,
 )?.[1];
-assert.ok(sql, 'Offer query must be covered by this test.');
+assert.ok(sqlTemplate, 'Offer query must be covered by this test.');
+const sql = sqlTemplate.replace(
+  '${activeReservationSql()}',
+  activeReservationSql(),
+);
 const db = new DatabaseSync(':memory:');
 db.exec(`CREATE TABLE products(id TEXT PRIMARY KEY,store_id TEXT,model TEXT,color TEXT,memory TEXT,default_price_cents INTEGER,active INTEGER);
 CREATE TABLE inventory_units(id TEXT PRIMARY KEY,store_id TEXT,product_id TEXT,status TEXT);
+CREATE TABLE stock_reservations(id TEXT PRIMARY KEY,store_id TEXT,status TEXT,expires_at INTEGER);
+CREATE TABLE stock_reservation_items(reservation_id TEXT,inventory_unit_id TEXT);
 CREATE INDEX idx_inventory_units_product_status ON inventory_units(product_id,status);`);
 const addProduct = db.prepare('INSERT INTO products VALUES(?,?,?,?,?,?,?)');
 const addUnit = db.prepare('INSERT INTO inventory_units VALUES(?,?,?,?)');
@@ -136,6 +143,24 @@ assert.equal(
   654321,
 );
 assert.equal(db.prepare(sql).all('shop-b').length, 1);
+db.prepare('INSERT INTO stock_reservations VALUES(?,?,?,?)').run(
+  'hold',
+  'shop-a',
+  'active',
+  Date.now() + 60000,
+);
+db.prepare('INSERT INTO stock_reservation_items VALUES(?,?)').run('hold', 'u1');
+assert.equal(
+  db.prepare(sql).all('shop-a').length,
+  150,
+  'Reserved-only variations must not be offered on WhatsApp',
+);
+db.prepare('UPDATE stock_reservations SET expires_at=?').run(Date.now() - 1000);
+assert.equal(
+  db.prepare(sql).all('shop-a').length,
+  151,
+  'Expired holds are available again',
+);
 db.close();
 console.log(
   'WhatsApp stock grouping, exact prices, emojis, no quantities, complete inventory and tenant isolation passed.',

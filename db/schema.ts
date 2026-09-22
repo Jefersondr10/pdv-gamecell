@@ -5,6 +5,8 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  primaryKey,
+  check,
 } from 'drizzle-orm/sqlite-core';
 
 const timestamps = {
@@ -658,5 +660,57 @@ export const auditEvents = sqliteTable(
       table.action,
       table.entityId,
     ),
+  ],
+);
+
+export const stockReservations = sqliteTable(
+  'stock_reservations',
+  {
+    id: text('id').primaryKey(),
+    storeId: text('store_id')
+      .notNull()
+      .references(() => stores.id),
+    customerId: text('customer_id')
+      .notNull()
+      .references(() => clients.id),
+    customerName: text('customer_name').notNull(),
+    createdBy: text('created_by')
+      .notNull()
+      .references(() => users.id),
+    expiresAt: integer('expires_at').notNull(),
+    status: text('status', { enum: ['active', 'released', 'converted'] })
+      .notNull()
+      .default('active'),
+    saleId: text('sale_id').references(() => sales.id),
+    notes: text('notes').notNull().default(''),
+    revision: integer('revision').notNull().default(0),
+    fingerprint: text('fingerprint').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index('idx_stock_reservations_store').on(
+      table.storeId,
+      table.status,
+      table.expiresAt,
+    ),
+    check(
+      'stock_reservation_status',
+      sql`${table.status} IN ('active','released','converted')`,
+    ),
+  ],
+);
+export const stockReservationItems = sqliteTable(
+  'stock_reservation_items',
+  {
+    reservationId: text('reservation_id')
+      .notNull()
+      .references(() => stockReservations.id),
+    inventoryUnitId: text('inventory_unit_id')
+      .notNull()
+      .references(() => inventoryUnits.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.reservationId, table.inventoryUnitId] }),
+    index('idx_stock_reservation_unit').on(table.inventoryUnitId),
   ],
 );

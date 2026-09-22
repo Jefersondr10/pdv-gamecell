@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode, type Ref } from 'react';
 import { LoaderCircle, Pencil, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,6 +36,7 @@ export function SalePricesEditor({
   className,
   description,
   headingIcon,
+  editButtonRef,
 }: {
   sale: SaleRecord;
   csrfToken: string;
@@ -49,6 +50,7 @@ export function SalePricesEditor({
   className?: string;
   description?: string;
   headingIcon?: ReactNode;
+  editButtonRef?: Ref<HTMLButtonElement>;
 }) {
   const [current, setCurrent] = useState<SalePrices | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -168,6 +170,7 @@ export function SalePricesEditor({
             variant="outline"
             size="sm"
             disabled={disabled || busy}
+            ref={editButtonRef}
             onClick={() => void start()}
           >
             {busy ? <LoaderCircle className="animate-spin" /> : <Pencil />}{' '}

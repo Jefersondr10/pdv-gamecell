@@ -71,6 +71,7 @@ type StockRow = ProductRecord & {
   received: number;
   available: number;
   sold: number;
+  reserved: number;
   serials: string[];
   photos: AttachmentRecord[];
 };
@@ -187,9 +188,9 @@ export function StockProductionView({
   const serialProductIds = new Set(
     serialSearch.query === query.trim() ? serialSearch.ids : [],
   );
-  const [stockFilter, setStockFilter] = useState<'available' | 'empty' | 'all'>(
-    'available',
-  );
+  const [stockFilter, setStockFilter] = useState<
+    'available' | 'empty' | 'reserved' | 'all'
+  >('available');
   const [reportOpen, setReportOpen] = useState(false);
   const [whatsappOpen, setWhatsappOpen] = useState(false);
   const [reportGeneratedAt, setReportGeneratedAt] = useState(() => Date.now());
@@ -336,7 +337,9 @@ export function StockProductionView({
       (stockFilter === 'all' ||
         (stockFilter === 'available'
           ? row.available > 0
-          : row.available === 0) ||
+          : stockFilter === 'reserved'
+            ? row.reserved > 0
+            : row.available === 0 && row.reserved === 0) ||
         serialProductIds.has(row.id)) &&
       (scannedResult?.query === normalized
         ? scannedResult.productIds.includes(row.id)
@@ -407,7 +410,8 @@ export function StockProductionView({
       {!editingPrices && (
         <p className="mb-2 text-sm text-muted-foreground">
           <strong className="text-foreground">{available}</strong> aparelhos
-          disponíveis · {rowsWithStock.length} variações com estoque
+          disponíveis · {rows.reduce((sum, row) => sum + row.reserved, 0)}{' '}
+          reservados · {rowsWithStock.length} variações disponíveis
         </p>
       )}
       {priceNotice && (
@@ -438,12 +442,16 @@ export function StockProductionView({
           <div className="flex items-center justify-between gap-3">
             <div className="sr-only">
               <CardTitle className="text-base">
-                {editingPrices ? 'Editar preços padrão' : 'Estoque disponível'}
+                {editingPrices
+                  ? 'Editar preços padrão'
+                  : stockFilter === 'reserved'
+                    ? 'Estoque reservado'
+                    : 'Estoque disponível'}
               </CardTitle>
               <CardDescription>
                 {editingPrices
                   ? 'Válidos nas próximas vendas e na lista do WhatsApp.'
-                  : 'A lista mostra somente a quantidade disponível de cada variação.'}
+                  : 'Disponíveis para venda e reservados separados por variação.'}
               </CardDescription>
             </div>
             <div className="flex w-full flex-wrap gap-2">
@@ -482,6 +490,7 @@ export function StockProductionView({
                 {(
                   [
                     ['available', 'Com estoque'],
+                    ['reserved', 'Reservados'],
                     ['empty', 'Sem estoque'],
                     ['all', 'Todos'],
                   ] as const
@@ -627,6 +636,11 @@ export function StockProductionView({
                       >
                         {row.available}
                       </Badge>
+                      {row.reserved > 0 && (
+                        <p className="mt-1 text-xs font-bold text-amber-700">
+                          {row.reserved} reservado(s)
+                        </p>
+                      )}
                     </div>
                   </button>
                   <div className="py-2 pl-1 pr-2 sm:pr-3">
@@ -759,6 +773,7 @@ export function StockProductionView({
       {selectedRow && (
         <StockProductDetails
           key={selectedRow.id}
+          initialStatus={stockFilter === 'reserved' ? 'reserved' : 'available'}
           onOpenChange={(open) => !open && setSelectedRow(null)}
           onOpenSale={onOpenSale}
           row={rows.find((row) => row.id === selectedRow.id) ?? selectedRow}
@@ -770,14 +785,18 @@ export function StockProductionView({
 
 function StockProductDetails({
   row,
+  initialStatus,
   onOpenChange,
   onOpenSale,
 }: {
   row: StockRow;
+  initialStatus: 'available' | 'reserved';
   onOpenChange: (open: boolean) => void;
   onOpenSale?: (saleId: string) => void;
 }) {
-  const [status, setStatus] = useState<'available' | 'sold'>('available');
+  const [status, setStatus] = useState<'available' | 'sold' | 'reserved'>(
+    initialStatus,
+  );
   const [queryDraft, setQueryDraft] = useState('');
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<InventoryDetailRecord[]>([]);
@@ -1002,7 +1021,11 @@ function StockProductDetails({
               </DialogDescription>
             </div>
           </div>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+          <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
+            <div className="rounded-lg bg-amber-50 px-2 py-1.5 text-amber-900">
+              <span className="block">Reservado</span>
+              <strong>{row.reserved}</strong>
+            </div>
             <div className="rounded-lg bg-muted px-2 py-1.5">
               <span className="block text-muted-foreground">Disponível</span>
               <strong>{row.available}</strong>
@@ -1071,7 +1094,9 @@ function StockProductDetails({
                   >
                     {selectedUnit.status === 'available'
                       ? 'Disponível'
-                      : 'Vendido'}
+                      : selectedUnit.status === 'reserved'
+                        ? 'Reservado'
+                        : 'Vendido'}
                   </Badge>
                 </div>
                 <p className="mt-3 text-sm text-muted-foreground">
@@ -1141,7 +1166,7 @@ function StockProductDetails({
           ) : (
             <>
               <div className="mb-3 grid gap-2">
-                <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
+                <div className="grid gap-1 rounded-xl bg-muted p-1 sm:grid-cols-3">
                   <Button
                     className="h-9 rounded-lg"
                     onClick={() => setStatus('available')}
@@ -1149,6 +1174,14 @@ function StockProductDetails({
                     variant={status === 'available' ? 'default' : 'ghost'}
                   >
                     Disponíveis ({row.available})
+                  </Button>
+                  <Button
+                    className="h-9 rounded-lg"
+                    onClick={() => setStatus('reserved')}
+                    size="sm"
+                    variant={status === 'reserved' ? 'default' : 'ghost'}
+                  >
+                    Reservados ({row.reserved})
                   </Button>
                   <Button
                     className="h-9 rounded-lg"
@@ -1172,7 +1205,11 @@ function StockProductDetails({
                 <p className="text-sm text-muted-foreground">
                   {items.length}
                   {total === null ? '' : ` de ${total}`}{' '}
-                  {status === 'available' ? 'disponíveis' : 'vendidos'}
+                  {status === 'available'
+                    ? 'disponíveis'
+                    : status === 'reserved'
+                      ? 'reservados'
+                      : 'vendidos'}
                 </p>
               </div>
               <div className="divide-y overflow-hidden rounded-2xl border">
@@ -1221,7 +1258,11 @@ function StockProductDetails({
                         item.status === 'available' ? 'default' : 'secondary'
                       }
                     >
-                      {item.status === 'available' ? 'Disponível' : 'Vendido'}
+                      {item.status === 'available'
+                        ? 'Disponível'
+                        : item.status === 'reserved'
+                          ? 'Reservado'
+                          : 'Vendido'}
                     </Badge>
                     <button
                       aria-label={`Abrir detalhes do SN ${item.serial}`}
@@ -1243,7 +1284,9 @@ function StockProductDetails({
                       ? 'Nenhum SN encontrado nesta lista.'
                       : status === 'available'
                         ? 'Este produto não possui SN disponível.'
-                        : 'Este produto ainda não possui SN vendido.'}
+                        : status === 'reserved'
+                          ? 'Este produto não possui SN reservado.'
+                          : 'Este produto ainda não possui SN vendido.'}
                   </p>
                 )}
               </div>
@@ -1630,6 +1673,7 @@ function buildRows(
       received: summary?.received ?? 0,
       available: summary?.available ?? 0,
       sold: summary?.sold ?? 0,
+      reserved: summary?.reserved ?? 0,
       serials: units.map((unit) => unit.serial),
       photos: Array.from(photosById.values()),
     };

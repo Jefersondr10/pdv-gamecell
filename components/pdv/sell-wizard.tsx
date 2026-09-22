@@ -102,7 +102,7 @@ type SaleProduct = {
 
 export type SaleSerialMatch = SaleProduct & {
   serial: string;
-  status: 'available' | 'sold';
+  status: 'available' | 'sold' | 'reserved';
 };
 
 export type SaleProductLookup = Record<string, SaleProduct>;
@@ -121,6 +121,7 @@ type SalePayment = {
 };
 
 export type CompletedSalePayload = {
+  stockReservationId?: string;
   operationId: string;
   customerId: string;
   customer: string;
@@ -559,7 +560,7 @@ export function SellWizard({
         const unavailable = candidateValues
           .map((value) =>
             matches.find(
-              (match) => match.serial === value && match.status === 'sold',
+              (match) => match.serial === value && match.status !== 'available',
             ),
           )
           .find(Boolean);
@@ -582,7 +583,7 @@ export function SellWizard({
       }
     }
     if (!availableValue && unavailableValue) {
-      const warning = `O SN ${unavailableValue} já foi vendido e não está disponível. Cancele a venda anterior para liberá-lo.`;
+      const warning = `O SN ${unavailableValue} está vendido ou reservado e não está disponível. Consulte Vendas ou Reservas para conferir.`;
       setPendingSerial(null);
       setPendingProduct(null);
       setPhotoFiles([]);
@@ -2089,9 +2090,7 @@ function SaleReview({
           </div>
 
           {receiptReading && (
-            <output
-              className="mt-4 block rounded-xl border border-sky-500/35 bg-sky-50 px-3 py-2 text-sm text-sky-950 dark:bg-sky-500/10 dark:text-sky-100"
-            >
+            <output className="mt-4 block rounded-xl border border-sky-500/35 bg-sky-50 px-3 py-2 text-sm text-sky-950 dark:bg-sky-500/10 dark:text-sky-100">
               <p className="font-bold">Comprovante em leitura</p>
               <p className="mt-0.5 text-xs">
                 O Pix será identificado pelo comprovante depois que a venda for

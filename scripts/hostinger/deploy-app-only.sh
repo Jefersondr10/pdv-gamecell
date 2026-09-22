@@ -1,11 +1,11 @@
 #!/bin/sh
-# App-only release: optional additive report migration, no off-site backup or OCR restart.
+# App-only release: optional additive migration, no off-site backup or OCR restart.
 set -eu
 release=${1:?Provide tested application tag}
 previous=${2:?Provide expected live application tag}
 commit=${3:?Provide exact tested full source revision}
 migration=${4:-none}
-case "$migration" in none|public-reports) ;; *) exit 2;; esac
+case "$migration" in none|public-reports|reservations) ;; *) exit 2;; esac
 case "$release:$previous" in *[!a-zA-Z0-9:._-]*) exit 2;; esac
 test "$release" != "$previous"
 test "${#commit}" = 40
@@ -67,6 +67,9 @@ NODE
 cp -p .env ".env.pre-$release"
 if test "$migration" = public-reports; then
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-public-reports-migration.mjs /data/pdv.sqlite
+fi
+if test "$migration" = reservations; then
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/opt/atacadoapple/live/data,target=/data --entrypoint node "atacadoapple:$release" scripts/hostinger/apply-reservations-migration.mjs /data/pdv.sqlite
 fi
 rollback_needed=1
 sed -i "s/^PDV_IMAGE=.*/PDV_IMAGE=atacadoapple:$release/" .env

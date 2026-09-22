@@ -1232,6 +1232,8 @@ export function SalesProductionView({
         canEditStatus={can(data.user, 'sales.status')}
         canEditPayments={canPayments}
         canEditReceipts={canManageReceipts}
+        canAddAttachments={canAttachments}
+        onOpenRelatedSale={openSaleFromHistory}
         canChangeDate={canChangeDate}
         csrfToken={data.csrfToken}
         onPricesChanged={handlePricesChanged}
@@ -1259,6 +1261,10 @@ export function SalesProductionView({
         }}
         onEditReceipts={(sale) => {
           setEditSaleMode('receipts');
+          setEditSale(sale);
+        }}
+        onEditPhotos={(sale) => {
+          setEditSaleMode('photos');
           setEditSale(sale);
         }}
         onChangeDate={setDateSale}

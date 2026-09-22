@@ -18,9 +18,12 @@ export const MIGRATION_TABLES = [
   'entries',
   'sales',
   'inventory_units',
+  'stock_reservations',
+  'stock_reservation_items',
   'sale_items',
   'payments',
   'attachments',
+  'report_shares',
   'receipt_ocr_jobs',
   'store_backup_alert_settings',
   'file_deletion_jobs',
@@ -33,6 +36,9 @@ export const MIGRATION_TABLES = [
 // Child rows with NO ACTION foreign keys must precede their parents. Listing
 // every application table also prevents queues or settings surviving a reset.
 export const PRODUCTION_RESET_DELETE_ORDER = [
+  'report_shares',
+  'stock_reservation_items',
+  'stock_reservations',
   'login_attempts',
   'file_deletion_jobs',
   'receipt_ocr_jobs',

@@ -11,6 +11,7 @@ import { can, canAny, type PermissionSubject } from '@/lib/permissions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
+  CalendarClock,
   ChevronDown,
   CircleUserRound,
   History,
@@ -127,6 +128,13 @@ const StockProductionView = dynamic(
     ),
   { loading: ViewLoading },
 );
+const ReservationsView = dynamic(
+  () =>
+    import('@/components/pdv/views/reservations-view').then(
+      (module) => module.ReservationsView,
+    ),
+  { loading: ViewLoading },
+);
 
 function ViewLoading({ error }: { error?: Error | null } = {}) {
   const [refreshing, setRefreshing] = useState(false);
@@ -175,6 +183,7 @@ function ViewLoading({ error }: { error?: Error | null } = {}) {
 }
 
 type View =
+  | 'reservations'
   | 'sell'
   | 'entry'
   | 'stock'
@@ -225,6 +234,12 @@ const navigation: Array<{
   },
   { view: 'stock', label: 'Estoque', short: 'Estoque', icon: Warehouse },
   { view: 'sales', label: 'Vendas', short: 'Vendas', icon: History },
+  {
+    view: 'reservations',
+    label: 'Reservas',
+    short: 'Reservas',
+    icon: CalendarClock,
+  },
   {
     view: 'catalog',
     label: 'Cadastros',
@@ -952,6 +967,20 @@ function CloudPdv({
           />
           {can(data.user, 'backup') && <BackupStatusCard alertOnly />}
           <div className="app-workspace min-h-0 flex-1 overflow-hidden">
+            {displayedView === 'reservations' && (
+              <ReservationsView
+                data={data}
+                key={`reservations-${run}`}
+                onOpenSale={
+                  can(data.user, 'sales')
+                    ? (saleId) => {
+                        setSaleToOpen(saleId);
+                        changeView('sales');
+                      }
+                    : undefined
+                }
+              />
+            )}
             {displayedView === 'sell' && (
               <SellWizard
                 onOpenMenu={() => setMobileMenuOpen(true)}

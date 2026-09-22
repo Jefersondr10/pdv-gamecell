@@ -1,4 +1,8 @@
 import { requireSession } from '@/lib/server/auth';
+import {
+  activeReservationSql,
+  inventoryStatusSql,
+} from '@/lib/server/reservations';
 import { apiError, HttpError, json, utf8Prefix } from '@/lib/server/http';
 import type {
   AttachmentRecord,
@@ -63,7 +67,7 @@ export async function GET(request: Request) {
         FROM products p
         WHERE p.store_id = ?
           AND EXISTS (SELECT 1 FROM inventory_units iu
-            WHERE iu.store_id = p.store_id AND iu.product_id = p.id AND iu.status = 'available')
+            WHERE iu.store_id = p.store_id AND iu.product_id = p.id AND iu.status = 'available' AND NOT ${activeReservationSql()})
         ORDER BY p.model COLLATE NOCASE, p.memory, p.default_price_cents, p.color COLLATE NOCASE, p.id
       `)
         .bind(storeId)
@@ -81,9 +85,10 @@ export async function GET(request: Request) {
       const result = await db
         .prepare(
           `SELECT product_id AS productId, COUNT(*) AS received,
-                  SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS available,
+                  SUM(CASE WHEN iu.status = 'available' AND NOT ${activeReservationSql()} THEN 1 ELSE 0 END) AS available,
+                  SUM(CASE WHEN iu.status = 'available' AND ${activeReservationSql()} THEN 1 ELSE 0 END) AS reserved,
                   SUM(CASE WHEN status = 'sold' THEN 1 ELSE 0 END) AS sold
-           FROM inventory_units
+           FROM inventory_units iu
            WHERE store_id = ?
            GROUP BY product_id`,
         )
@@ -94,6 +99,7 @@ export async function GET(request: Request) {
         received: Number(row.received),
         available: Number(row.available),
         sold: Number(row.sold),
+        reserved: Number(row.reserved),
       }));
       return json({
         rows: summaryRows,
@@ -118,14 +124,14 @@ export async function GET(request: Request) {
       throw new HttpError(400, 'Aparelho inválido.', 'INVALID_UNIT');
     }
     const status = url.searchParams.get('status') ?? 'available';
-    if (!['available', 'sold', 'all'].includes(status)) {
+    if (!['available', 'sold', 'reserved', 'all'].includes(status)) {
       throw new HttpError(400, 'Situação inválida.', 'INVALID_STATUS');
     }
     const cursor = parseCursor(url.searchParams.get('cursor'));
     const where = ['iu.store_id = ?'];
     const bindings: Array<string | number> = [storeId];
     if (status !== 'all') {
-      where.push('iu.status = ?');
+      where.push(`${inventoryStatusSql()} = ?`);
       bindings.push(status);
     }
     if (productId) {
@@ -166,7 +172,7 @@ export async function GET(request: Request) {
           `SELECT iu.id, iu.product_id AS productId, iu.entry_id AS entryId,
                   p.model AS productName,
                   (p.color || ' · ' || p.memory) AS productDetail,
-                  iu.serial, iu.status, iu.sale_id AS saleId,
+                  iu.serial, ${inventoryStatusSql()} AS status, iu.sale_id AS saleId,
                   s.number AS saleNumber, iu.created_at AS createdAt
            FROM inventory_units iu
            JOIN products p ON p.id = iu.product_id AND p.store_id = iu.store_id

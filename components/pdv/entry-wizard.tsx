@@ -93,7 +93,9 @@ type EntryWizardProps = {
   storageMode?: 'browser' | 'session';
   lookupSerials?: (
     serials: string[],
-  ) => Promise<Array<{ serial: string; status: 'available' | 'sold' }>>;
+  ) => Promise<
+    Array<{ serial: string; status: 'available' | 'sold' | 'reserved' }>
+  >;
 };
 
 const ENTRY_STEPS = ['Produto', 'Seriais', 'Fotos', 'Revisão'] as const;

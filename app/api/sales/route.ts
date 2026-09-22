@@ -2,6 +2,11 @@ import { assertCsrf, requireSession } from '@/lib/server/auth';
 import { originalPriceSnapshot } from '@/lib/sale-prices';
 import { can, resolvePermissions } from '@/lib/permissions';
 import { assertPermission } from '@/lib/server/permissions';
+import {
+  activeReservationSql,
+  validateReservationSale,
+  convertReservationStatement,
+} from '@/lib/server/reservations';
 import { originalSalePayments } from '@/lib/server/original-sale-payments';
 import {
   assertFormDataKeys,
@@ -421,6 +426,11 @@ export async function POST(request: Request) {
     const payload = parseJsonObject(payloadValue, 'Dados da venda inválidos.');
     saleId = operationIdField(payload.operationId);
     const customerId = stringField(payload.customerId, 'Cliente', { max: 80 });
+    const stockReservationId =
+      payload.stockReservationId === undefined
+        ? null
+        : operationIdField(payload.stockReservationId);
+    if (stockReservationId) assertPermission(session, 'reservations.manage');
     const sellerUserId =
       payload.sellerUserId === undefined
         ? session.id
@@ -457,6 +467,7 @@ export async function POST(request: Request) {
       fingerprintReceiptValues,
       submittedItemFiles,
       submittedReceiptFiles,
+      stockReservationId,
     );
     operationFingerprint = fingerprints.full;
     operationPayloadFingerprint = fingerprints.payload;
@@ -574,6 +585,32 @@ export async function POST(request: Request) {
       );
     }
 
+    const stockReservationRevision = stockReservationId
+      ? await validateReservationSale(
+          db,
+          session.storeId!,
+          stockReservationId,
+          customerId,
+          [...unitBySerial.values()].map((unit) => unit.id),
+        )
+      : null;
+    if (!stockReservationId) {
+      const held = await db
+        .prepare(
+          `SELECT serial FROM inventory_units iu WHERE iu.store_id=? AND iu.id IN (${[...unitBySerial.values()].map(() => '?').join(',')}) AND ${activeReservationSql()} LIMIT 1`,
+        )
+        .bind(
+          session.storeId,
+          ...[...unitBySerial.values()].map((unit) => unit.id),
+        )
+        .first<{ serial: string }>();
+      if (held)
+        throw new HttpError(
+          409,
+          `O SN ${held.serial} está reservado. Conclua a venda pelo menu Reservas ou libere a reserva.`,
+          'RESERVATION_CONFLICT',
+        );
+    }
     const pixIds = Array.from(
       new Set(
         payments
@@ -811,6 +848,17 @@ export async function POST(request: Request) {
            WHERE id = ?`,
         )
         .bind(saleId, now, session.storeId),
+      ...(stockReservationId
+        ? [
+            convertReservationStatement(
+              db,
+              session.storeId!,
+              stockReservationId,
+              saleId,
+              stockReservationRevision!,
+            ),
+          ]
+        : []),
       db
         .prepare(
           `UPDATE inventory_units
@@ -892,6 +940,7 @@ export async function POST(request: Request) {
               receiptUploadResponse(pending),
             ),
             sellerUserId: seller.id,
+            ...(stockReservationId ? { stockReservationId } : {}),
           }),
           now,
         ),
@@ -1052,6 +1101,20 @@ export async function POST(request: Request) {
       }
     } else if (uploaded.length && !committed) {
       await cleanupFiles(uploaded);
+    }
+    if (
+      error instanceof Error &&
+      /RESERVATION_UNIT_UNAVAILABLE|stock_reservations\.status/.test(
+        error.message,
+      )
+    ) {
+      return apiError(
+        new HttpError(
+          409,
+          'A reserva venceu ou o aparelho está reservado. Atualize Reservas antes de continuar.',
+          'RESERVATION_CONFLICT',
+        ),
+      );
     }
     if (
       error instanceof Error &&
@@ -1268,10 +1331,12 @@ async function saleOperationFingerprints(
   receiptValues: ReturnType<typeof parseReceiptValues>,
   itemFiles: File[][],
   receiptFiles: File[],
+  stockReservationId: string | null,
 ) {
   const legacyCanonical = canonicalSaleOperation(customerId, items, payments);
   const payloadCanonical = JSON.stringify({
     sale: legacyCanonical,
+    ...(stockReservationId ? { stockReservationId } : {}),
     receiptValues: receiptValues.map((value) => [
       value.amountCents,
       value.source,

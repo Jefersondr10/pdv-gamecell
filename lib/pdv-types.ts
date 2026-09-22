@@ -65,6 +65,7 @@ export type StockSummaryRecord = {
   received: number;
   available: number;
   sold: number;
+  reserved?: number;
 };
 
 export type InventoryDetailRecord = {
@@ -74,7 +75,7 @@ export type InventoryDetailRecord = {
   productName: string;
   productDetail: string;
   serial: string;
-  status: 'available' | 'sold';
+  status: 'available' | 'sold' | 'reserved';
   saleId: string | null;
   saleNumber: number | null;
   createdAt: number;

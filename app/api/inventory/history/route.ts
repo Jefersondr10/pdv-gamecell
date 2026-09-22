@@ -1,4 +1,5 @@
 import { requireSession } from '@/lib/server/auth';
+import { inventoryStatusSql } from '@/lib/server/reservations';
 import { can } from '@/lib/permissions';
 import { apiError, HttpError, json } from '@/lib/server/http';
 import { consumeStoreReadBudget } from '@/lib/server/rate-limit';
@@ -20,7 +21,7 @@ export const dynamic = 'force-dynamic';
 type UnitRow = {
   id: string;
   serial: string;
-  status: 'available' | 'sold';
+  status: 'available' | 'sold' | 'reserved';
   entryId: string;
   productName: string;
   productDetail: string;
@@ -51,7 +52,7 @@ export async function GET(request: Request) {
     const aliases = serialAliases(serial);
     const unit = await db
       .prepare(
-        `SELECT iu.id,iu.serial,iu.status,iu.entry_id AS entryId,
+        `SELECT iu.id,iu.serial,${inventoryStatusSql()} AS status,iu.entry_id AS entryId,
           COALESCE(json_extract(entry_audit.details_json,'$.productName'),p.model) AS productName,
           (COALESCE(json_extract(entry_audit.details_json,'$.productColor'),p.color) || ' · ' ||
            COALESCE(json_extract(entry_audit.details_json,'$.productMemory'),p.memory)) AS productDetail,
@@ -120,8 +121,8 @@ export async function GET(request: Request) {
         referencePriceCents: Number(sale.referencePriceCents),
         photos: photos
           .filter((photo) => photo.saleItemId === sale.itemId)
-          .map(({ entryId: _entryId, saleItemId: _saleItemId, ...photo }) =>
-            photo,
+          .map(
+            ({ entryId: _entryId, saleItemId: _saleItemId, ...photo }) => photo,
           ),
       }),
     );
@@ -142,8 +143,8 @@ export async function GET(request: Request) {
         note: unit.entryNote,
         photos: photos
           .filter((photo) => photo.entryId === unit.entryId)
-          .map(({ entryId: _entryId, saleItemId: _saleItemId, ...photo }) =>
-            photo,
+          .map(
+            ({ entryId: _entryId, saleItemId: _saleItemId, ...photo }) => photo,
           ),
       },
       sales,

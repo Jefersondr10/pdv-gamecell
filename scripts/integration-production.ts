@@ -12,6 +12,11 @@ import {
 import { defaultPermissions, type Permission } from '../lib/permissions.ts';
 import { prepareUploadForm } from '../lib/client-upload.ts';
 import { productEditorPayload } from '../lib/product-editor.ts';
+import { normalizeCandidate } from '../lib/scanner.ts';
+import {
+  resolveReservationScan,
+  type ReservationSerialMatch,
+} from '../lib/reservation-scan.ts';
 import {
   SYSTEM_CATALOG_PRODUCTS,
   SYSTEM_CATALOG_VERSION,
@@ -4342,4 +4347,242 @@ if (
     process.env.PDV_TEST_ISOLATED_DATA_DIR,
   );
 }
+for (const suffix of ['history', 'receipt-conflicts']) {
+  const path = `/api/sales/${attributionId}/${suffix}`;
+  await call(path, { expected: 401 });
+  await call(path, { cookie: secondShopCookie, expected: 404 });
+  const result = await call(path, { cookie: ownerCookie });
+  assert.equal(result.response.headers.get('cache-control'), 'no-store');
+  assert.ok(Array.isArray(result.body.items));
+  assert.doesNotMatch(
+    JSON.stringify(result.body),
+    /operationFingerprint|operationPayloadFingerprint|r2_key|details_json/,
+  );
+  if (suffix === 'history') {
+    const events = result.body.items as Array<{
+      title: string;
+      changes: unknown[];
+    }>;
+    assert.ok(
+      events.some(
+        (event) =>
+          event.title === 'Preços da venda alterados' && event.changes.length,
+      ),
+    );
+    assert.ok(
+      events.some((event) => event.title === 'Cliente ou vendedor alterado'),
+    );
+    await call(`${path}?cursor=invalid`, {
+      cookie: ownerCookie,
+      expected: 400,
+    });
+  }
+}
+console.log(
+  'Sale history/conflicts HTTP: authenticated read-only access, tenant isolation, before/after and sanitized payloads passed.',
+);
+// Reservation lifecycle uses new synthetic stock in this isolated integration store.
+const reserveProduct = await call('/api/products', {
+  ...editingHeaders,
+  method: 'POST',
+  expected: 201,
+  body: JSON.stringify({
+    model: 'iPhone Reserva Teste',
+    color: 'Preto',
+    memory: '128 GB',
+    defaultPriceCents: 350000,
+    codes: ['2991234567897'],
+  }),
+});
+const reserveClient = await call('/api/clients', {
+  ...editingHeaders,
+  method: 'POST',
+  expected: 201,
+  body: JSON.stringify({ name: 'Cliente Reserva Teste' }),
+});
+const reserveEntry = new FormData();
+reserveEntry.set(
+  'payload',
+  JSON.stringify({
+    operationId: crypto.randomUUID(),
+    productId: reserveProduct.body.id,
+    gtin14: '02991234567897',
+    serials: ['RESERVA0001', 'RESERVA0002'],
+  }),
+);
+reserveEntry.append('photos', tinyPhoto(), 'entrada.png');
+await call('/api/entries', {
+  cookie: ownerCookie,
+  method: 'POST',
+  headers: { 'x-csrf-token': accessOwnerHeaders['x-csrf-token'] },
+  body: reserveEntry,
+  expected: 201,
+});
+const reserveStock = (
+  await call(`/api/inventory?productId=${String(reserveProduct.body.id)}`, {
+    cookie: ownerCookie,
+  })
+).body.items as { id: string; serial: string }[];
+const reservationId = crypto.randomUUID();
+const scannedReservationUnit = await resolveReservationScan(
+  normalizeCandidate('SRESERVA0001', 'code_128', 'apple_serial')!,
+  async (query) =>
+    (await call(`/api/inventory/lookup?${query}`, { cookie: ownerCookie }))
+      .body as { matches: ReservationSerialMatch[] },
+);
+assert.equal(
+  scannedReservationUnit.id,
+  reserveStock.find((row) => row.serial === 'RESERVA0001')!.id,
+);
+assert.equal(scannedReservationUnit.status, 'available');
+const reservationPayload = {
+  operationId: reservationId,
+  customerId: reserveClient.body.id,
+  unitIds: reserveStock.map((row) => row.id),
+  expiresAt: Date.now() + 86400000,
+};
+await call('/api/reservations', { expected: 401 });
+await call('/api/reservations', {
+  cookie: ownerCookie,
+  method: 'POST',
+  expected: 403,
+  ...jsonBody(reservationPayload),
+});
+await call('/api/reservations', {
+  ...editingHeaders,
+  method: 'POST',
+  expected: 201,
+  body: JSON.stringify(reservationPayload),
+});
+assert.equal(
+  (
+    await call('/api/reservations', {
+      ...editingHeaders,
+      method: 'POST',
+      expected: 201,
+      body: JSON.stringify(reservationPayload),
+    })
+  ).body.replayed,
+  true,
+);
+await call('/api/reservations', {
+  ...editingHeaders,
+  method: 'POST',
+  expected: 409,
+  body: JSON.stringify({
+    ...reservationPayload,
+    operationId: crypto.randomUUID(),
+  }),
+});
+await call(`/api/reservations/${reservationId}`, {
+  cookie: secondShopCookie,
+  method: 'PATCH',
+  headers: {
+    'content-type': 'application/json',
+    'x-csrf-token': String(
+      (await call('/api/auth/session', { cookie: secondShopCookie })).body
+        .csrfToken,
+    ),
+  },
+  body: JSON.stringify({ action: 'release', revision: 0 }),
+  expected: 404,
+});
+assert.equal(
+  (
+    (
+      await call(`/api/inventory?productId=${String(reserveProduct.body.id)}`, {
+        cookie: ownerCookie,
+      })
+    ).body.items as unknown[]
+  ).length,
+  0,
+);
+assert.equal(
+  (
+    (
+      await call(
+        `/api/inventory?productId=${String(reserveProduct.body.id)}&status=reserved`,
+        { cookie: ownerCookie },
+      )
+    ).body.items as unknown[]
+  ).length,
+  2,
+);
+const reservedLookup = (
+  await call('/api/inventory/lookup?serial=RESERVA0001', {
+    cookie: ownerCookie,
+  })
+).body.matches as { status: string }[];
+assert.equal(reservedLookup[0].status, 'reserved');
+const reservedSalePayload = {
+  operationId: reservationId,
+  customerId: reserveClient.body.id,
+  items: reserveStock.map((row) => ({
+    serial: row.serial,
+    priceCents: 350000,
+  })),
+  payments: [],
+  receiptValues: [],
+};
+const reserveSaleForm = (fromReservation = true) => {
+  const form = new FormData();
+  form.set(
+    'payload',
+    JSON.stringify({
+      ...reservedSalePayload,
+      ...(fromReservation ? { stockReservationId: reservationId } : {}),
+    }),
+  );
+  reserveStock.forEach((_, index) =>
+    form.append(
+      `itemPhotos:${index}`,
+      tinyPhoto(),
+      `reserva-aparelho-${index}.png`,
+    ),
+  );
+  return form;
+};
+const saleHeaders = {
+  cookie: ownerCookie,
+  method: 'POST',
+  headers: { 'x-csrf-token': accessOwnerHeaders['x-csrf-token'] },
+};
+await call('/api/sales', {
+  ...saleHeaders,
+  body: reserveSaleForm(false),
+  expected: 409,
+});
+const converted = await call('/api/sales', {
+  ...saleHeaders,
+  body: reserveSaleForm(),
+  expected: 201,
+});
+assert.equal(converted.body.productsTotalCents, 700000);
+assert.equal(converted.body.receivedTotalCents, 0);
+assert.equal(
+  (await call('/api/sales', { ...saleHeaders, body: reserveSaleForm() })).body
+    .replayed,
+  true,
+);
+const convertedList = (
+  await call('/api/reservations?status=converted', { cookie: ownerCookie })
+).body.items as { id: string; saleId: string }[];
+assert.equal(
+  convertedList.find((row) => row.id === reservationId)?.saleId,
+  reservationId,
+);
+assert.equal(
+  (
+    (
+      await call(
+        `/api/inventory?productId=${String(reserveProduct.body.id)}&status=sold`,
+        { cookie: ownerCookie },
+      )
+    ).body.items as unknown[]
+  ).length,
+  2,
+);
+console.log(
+  'Reservations HTTP passed: auth/CSRF, tenant scope, idempotency, reserved stock, blocked ordinary sale, atomic conversion, zero invented payment and replay.',
+);
 console.log('Production integration flow passed.');
