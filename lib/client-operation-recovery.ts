@@ -2,6 +2,19 @@
 
 import { entries, update } from 'idb-keyval';
 import { ApiError, messageOf, requestJson } from './client-api.ts';
+import {
+  readUploadFile,
+  UnreadableAttachmentError,
+  type AttachmentIssue,
+} from './client-upload.ts';
+
+type SavedFileCopy = {
+  index: number;
+  name: string;
+  type: string;
+  lastModified: number;
+  bytes: ArrayBuffer;
+};
 
 export type OperationKind = 'sale' | 'entry';
 export type RecoveryScope = { storeId: string; userId: string };
@@ -14,6 +27,10 @@ export type SavedOperation = RecoveryScope & {
   state: 'pending' | 'confirmed' | 'rejected';
   error?: string;
   form: Array<[string, FormDataEntryValue]>;
+  // Raw bytes survive loss of a browser-managed temporary File handle.
+  // Keep form compatible with older tabs while they finish updating.
+  fileCopies?: SavedFileCopy[];
+  attachmentIssue?: AttachmentIssue;
   fingerprint: string;
   result?: OperationResult;
   nextAttemptAt?: number;
@@ -84,15 +101,34 @@ export async function acknowledgeOperation(row: SavedOperation) {
   notify();
 }
 
-async function formFingerprint(form: FormData) {
+async function prepareSavedForm(form: FormData) {
   const parts: unknown[] = [];
-  for (const [name, value] of form.entries()) {
+  const savedForm: SavedOperation['form'] = [];
+  const fileCopies: SavedFileCopy[] = [];
+  for (const [index, [name, value]] of [...form.entries()].entries()) {
+    savedForm.push([name, value]);
     if (typeof value === 'string') parts.push([name, value]);
     else {
-      const digest = await crypto.subtle.digest(
-        'SHA-256',
-        await value.arrayBuffer(),
-      );
+      const bytes = await readUploadFile(value, {
+        index,
+        field: name,
+        name: value.name || 'anexo',
+      });
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      fileCopies.push({
+        index,
+        name: value.name,
+        type: value.type,
+        lastModified: value.lastModified,
+        bytes,
+      });
+      savedForm[index] = [
+        name,
+        new File([bytes], value.name, {
+          type: value.type,
+          lastModified: value.lastModified,
+        }),
+      ];
       parts.push([
         name,
         value.name,
@@ -102,7 +138,7 @@ async function formFingerprint(form: FormData) {
       ]);
     }
   }
-  return JSON.stringify(parts);
+  return { fingerprint: JSON.stringify(parts), form: savedForm, fileCopies };
 }
 
 export async function submitRecoverableOperation(
@@ -116,7 +152,7 @@ export async function submitRecoverableOperation(
   let saved: SavedOperation | undefined;
   // Never persist session credentials. IndexedDB's transaction resolves before sending.
   try {
-    const fingerprint = await formFingerprint(form);
+    const prepared = await prepareSavedForm(form);
     const candidate: SavedOperation = {
       storeId: context.storeId,
       userId: context.userId,
@@ -125,11 +161,10 @@ export async function submitRecoverableOperation(
       label,
       createdAt: Date.now(),
       state: 'pending',
-      form: [...form.entries()],
-      fingerprint,
+      ...prepared,
     };
     await update<SavedOperation>(key, (existing) => {
-      if (existing && existing.fingerprint !== fingerprint)
+      if (existing && existing.fingerprint !== prepared.fingerprint)
         throw new PendingOperationError(
           'Existe um envio anterior desta operação. Abra Envios para conferir o resultado antes de alterar os dados.',
         );
@@ -138,6 +173,8 @@ export async function submitRecoverableOperation(
     });
   } catch (error) {
     if (error instanceof PendingOperationError) throw error;
+    if (error instanceof UnreadableAttachmentError)
+      throw new Error(`${error.message} Nenhum envio foi iniciado.`);
     throw new Error(
       'Não foi possível guardar a operação neste aparelho. Libere espaço antes de confirmar; nenhum envio foi iniciado.',
     );
@@ -230,27 +267,14 @@ async function withLease(
   row: SavedOperation,
   checkWhileLeased = false,
 ) {
-  const key = keyFor(row, row.kind, row.id);
-  const owner = tabId();
-  let acquired = false;
-  let latest = row;
-  await update<SavedOperation | undefined>(key, (saved) => {
-    if (!saved) return saved;
-    latest = saved;
-    if (saved.state !== 'pending' || (saved.leaseUntil ?? 0) > Date.now())
-      return saved;
-    acquired = true;
-    return { ...saved, leaseOwner: owner, leaseUntil: Date.now() + 420_000 };
-  });
+  const { key, owner, acquired, latest } = await claimLease(row);
   if (latest.state === 'confirmed' && latest.result) return latest.result;
   if (latest.state === 'rejected')
     throw new RejectedOperationError(
       latest.error || 'Confira os dados antes de tentar novamente.',
     );
   if (!acquired) {
-    // Mobile reloads can leave a lease behind after the server has committed.
-    // A manual check can confirm it immediately, but must NEVER resend while
-    // another tab still owns the upload lease.
+    // A manual lookup can confirm a committed upload without stealing its lease.
     if (checkWhileLeased) {
       try {
         const result = await lookupOperation(context, latest);
@@ -270,15 +294,178 @@ async function withLease(
   try {
     return await recoverNow(context, latest);
   } finally {
-    await update<SavedOperation | undefined>(key, (saved) =>
-      saved?.leaseOwner === owner
-        ? { ...saved, leaseOwner: undefined, leaseUntil: undefined }
-        : saved,
-    ).catch(() => {});
+    await releaseLease(key, owner);
+  }
+}
+
+async function claimLease(row: SavedOperation) {
+  const key = keyFor(row, row.kind, row.id);
+  const owner = tabId();
+  let acquired = false;
+  let latest = row;
+  await update<SavedOperation | undefined>(key, (saved) => {
+    if (!saved) return saved;
+    latest = saved;
+    if (saved.state !== 'pending' || (saved.leaseUntil ?? 0) > Date.now())
+      return saved;
+    acquired = true;
+    return { ...saved, leaseOwner: owner, leaseUntil: Date.now() + 420_000 };
+  });
+  return { key, owner, acquired, latest };
+}
+
+async function releaseLease(key: string, owner: string) {
+  await update<SavedOperation | undefined>(key, (saved) =>
+    saved?.leaseOwner === owner
+      ? { ...saved, leaseOwner: undefined, leaseUntil: undefined }
+      : saved,
+  ).catch(() => {});
+}
+
+export async function replaceOperationAttachment(
+  context: RecoveryContext,
+  row: SavedOperation,
+  index: number,
+  replacement: File,
+): Promise<{ confirmed: boolean }> {
+  if (row.storeId !== context.storeId || row.userId !== context.userId)
+    throw new Error('Entre na mesma conta e loja para corrigir este anexo.');
+  const { key, owner, acquired, latest } = await claimLease(row);
+  try {
+    if (latest.state === 'confirmed') return { confirmed: true };
+    if (latest.state !== 'pending')
+      throw new Error('Este envio não está pendente. Reabra Envios.');
+    // Always check the server before touching the saved payload. Confirmation
+    // wins over a replacement, including a commit whose response was lost.
+    const found = await lookupOperation(context, latest);
+    if (found) {
+      await confirmOperation(context, latest, found);
+      return { confirmed: true };
+    }
+    if (!acquired)
+      throw new PendingOperationError(
+        'Há um envio em andamento. Aguarde antes de corrigir o anexo.',
+      );
+    if (latest.fingerprint !== row.fingerprint)
+      throw new Error(
+        'Os anexos mudaram em outra aba. Reabra Envios para conferir.',
+      );
+    const original = latest.form[index];
+    if (
+      !Number.isInteger(index) ||
+      !original ||
+      typeof original[1] === 'string'
+    )
+      throw new Error('Anexo não encontrado. Reabra Envios.');
+    const [field] = original;
+    const type = replacement.type.toLowerCase();
+    if (
+      !(
+        new Set([
+          'image/jpeg',
+          'image/png',
+          'image/webp',
+          'image/heic',
+          'image/heif',
+        ]).has(type) ||
+        (field === 'receipts' && type === 'application/pdf')
+      ) ||
+      replacement.size <= 0 ||
+      replacement.size > 10 * 1024 * 1024
+    )
+      throw new Error(
+        field === 'receipts'
+          ? 'Selecione uma imagem ou PDF de até 10 MB.'
+          : 'Selecione uma foto de até 10 MB.',
+      );
+    const total = latest.form.reduce(
+      (sum, [, value], position) =>
+        sum +
+        (position === index
+          ? replacement.size
+          : typeof value === 'string'
+            ? 0
+            : value.size),
+      0,
+    );
+    if (total > 45 * 1024 * 1024)
+      throw new Error(
+        'Os anexos ultrapassam 45 MB. Selecione um arquivo menor.',
+      );
+    const bytes = await readUploadFile(replacement, {
+      index,
+      field,
+      name: replacement.name || 'anexo',
+    });
+    const digest = Array.from(
+      new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+    );
+    const parts: unknown = JSON.parse(latest.fingerprint);
+    if (
+      !Array.isArray(parts) ||
+      parts.length !== latest.form.length ||
+      !Array.isArray(parts[index]) ||
+      parts[index][0] !== field
+    )
+      throw new Error(
+        'Não foi possível validar este anexo. Os dados originais foram preservados.',
+      );
+    parts[index] = [field, replacement.name, type, bytes.byteLength, digest];
+    const fingerprint = JSON.stringify(parts);
+    const materialized = new File([bytes], replacement.name, {
+      type,
+      lastModified: replacement.lastModified,
+    });
+    await update<SavedOperation | undefined>(key, (current) => {
+      if (
+        !current ||
+        current.state !== 'pending' ||
+        current.leaseOwner !== owner ||
+        current.fingerprint !== latest.fingerprint
+      )
+        throw new Error(
+          'O envio mudou durante a correção. Reabra Envios antes de tentar novamente.',
+        );
+      const form = [...current.form];
+      form[index] = [field, materialized];
+      return {
+        ...current,
+        form,
+        fingerprint,
+        fileCopies: [
+          ...(current.fileCopies ?? []).filter((copy) => copy.index !== index),
+          {
+            index,
+            name: replacement.name,
+            type,
+            lastModified: replacement.lastModified,
+            bytes,
+          },
+        ],
+        error: undefined,
+        attachmentIssue: undefined,
+        nextAttemptAt: 0,
+        attempts: 0,
+      };
+    });
+    notify();
+    return { confirmed: false };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'QuotaExceededError')
+      throw new Error(
+        'Não foi possível guardar o novo anexo. Libere espaço no aparelho sem limpar os dados deste aplicativo e tente novamente; o envio original foi preservado.',
+      );
+    if (error instanceof ApiError || error instanceof TypeError)
+      throw new PendingOperationError(recoveryFailureMessage(error));
+    throw error;
+  } finally {
+    if (acquired) await releaseLease(key, owner);
   }
 }
 
 function recoveryFailureMessage(error: unknown) {
+  if (error instanceof UnreadableAttachmentError)
+    return `${error.message} Use a opção Corrigir anexo abaixo; o envio continua guardado.`;
   if (error instanceof ApiError) {
     if (error.status === 401 || error.code === 'BAD_CSRF')
       return 'Sua sessão precisa ser renovada. Entre novamente na mesma conta e loja; o envio está guardado.';
@@ -311,7 +498,15 @@ async function confirmOperation(
     throw new Error('A confirmação não corresponde ao envio.');
   await update<SavedOperation | undefined>(key, (current) =>
     current
-      ? { ...current, state: 'confirmed', result, form: [], error: undefined }
+      ? {
+          ...current,
+          state: 'confirmed',
+          result,
+          form: [],
+          fileCopies: [],
+          attachmentIssue: undefined,
+          error: undefined,
+        }
       : current,
   ).catch(() => {});
   window.dispatchEvent(
@@ -336,7 +531,27 @@ async function recoverNow(context: RecoveryContext, row: SavedOperation) {
     const found = await lookupOperation(context, row);
     if (found) return await confirmOperation(context, row, found);
     const form = new FormData();
-    row.form.forEach(([name, value]) => form.append(name, value));
+    row.form.forEach(([name, value], index) => {
+      const copy = row.fileCopies?.find((file) => file.index === index);
+      if (typeof value !== 'string' && copy) {
+        if (
+          !(copy.bytes instanceof ArrayBuffer) ||
+          copy.bytes.byteLength !== value.size
+        )
+          throw new UnreadableAttachmentError({
+            index,
+            field: name,
+            name: copy.name,
+          });
+        form.append(
+          name,
+          new File([copy.bytes], copy.name, {
+            type: copy.type,
+            lastModified: copy.lastModified,
+          }),
+        );
+      } else form.append(name, value);
+    });
     try {
       const result = await requestJson<OperationResult>(
         row.kind === 'sale' ? '/api/sales' : '/api/entries',
@@ -359,7 +574,14 @@ async function recoverNow(context: RecoveryContext, row: SavedOperation) {
       ) {
         await update<SavedOperation | undefined>(key, (current) =>
           current
-            ? { ...current, state: 'rejected', error: error.message, form: [] }
+            ? {
+                ...current,
+                state: 'rejected',
+                error: error.message,
+                form: [],
+                fileCopies: [],
+                attachmentIssue: undefined,
+              }
             : current,
         );
         window.dispatchEvent(
@@ -386,6 +608,10 @@ async function recoverNow(context: RecoveryContext, row: SavedOperation) {
         ? {
             ...current,
             error: failure,
+            attachmentIssue:
+              error instanceof UnreadableAttachmentError
+                ? error.attachment
+                : current.attachmentIssue,
             attempts: (current.attempts ?? 0) + 1,
             nextAttemptAt:
               Date.now() +

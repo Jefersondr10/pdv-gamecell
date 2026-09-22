@@ -38,6 +38,7 @@ import {
   type RecoveryScope,
 } from '@/lib/client-operation-recovery';
 import { useRecoverableDraft } from '@/components/pdv/use-recoverable-draft';
+import { PendingOperationNotice } from '@/components/pdv/pending-operation-notice';
 import type { ScanCandidate } from '@/lib/scanner';
 
 type EntryStep =
@@ -82,6 +83,7 @@ export type EntryCommitResult = {
 };
 
 type EntryWizardProps = {
+  onOpenMenu?: () => void;
   recoveryScope?: RecoveryScope;
   existingTestSerials?: readonly string[];
   productsByCode?: Record<string, EntryProduct>;
@@ -114,6 +116,7 @@ export function EntryWizard({
   onConfirmEntry,
   lookupSerials,
   recoveryScope,
+  onOpenMenu,
 }: EntryWizardProps) {
   const [step, setStep] = useState<EntryStep>('product-scan');
   const [commercialCode, setCommercialCode] = useState<ScanCandidate | null>(
@@ -149,7 +152,6 @@ export function EntryWizard({
     setAnnouncement('Etapa anterior. Os dados preenchidos foram mantidos.');
     return true;
   };
-  useAppBackHandler(goBack, true, 10);
   const existingSerialSet = useMemo(
     () => new Set(existingTestSerials),
     [existingTestSerials],
@@ -182,6 +184,19 @@ export function EntryWizard({
       committedRef.current = true;
     },
   });
+
+  useAppBackHandler(
+    () => {
+      if (!draft.ready) return true;
+      if (draft.waiting || draft.blocked) {
+        onOpenMenu?.();
+        return Boolean(onOpenMenu);
+      }
+      return goBack();
+    },
+    true,
+    10,
+  );
 
   useEffect(
     () => () => {
@@ -354,22 +369,15 @@ export function EntryWizard({
         <Button className="mt-3" onClick={() => window.location.reload()}>
           Reabrir com segurança
         </Button>
+        {onOpenMenu && (
+          <Button className="mt-3 ml-2" variant="outline" onClick={onOpenMenu}>
+            Abrir menu da loja
+          </Button>
+        )}
       </div>
     );
   if (draft.waiting)
-    return (
-      <div className="m-4 rounded-2xl border bg-card p-5">
-        <h2 className="font-bold">Entrada aguardando confirmação</h2>
-        <p className="my-3 text-sm">
-          O envio está guardado neste aparelho. Não bipe os aparelhos novamente.
-        </p>
-        <Button
-          onClick={() => window.dispatchEvent(new Event('pdv:show-operations'))}
-        >
-          Acompanhar envio
-        </Button>
-      </div>
-    );
+    return <PendingOperationNotice kind="entry" onOpenMenu={onOpenMenu} />;
   return (
     <FlowFrame
       announcement={announcement}

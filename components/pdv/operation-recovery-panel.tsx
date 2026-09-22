@@ -14,14 +14,19 @@ import {
   acknowledgeOperation,
   listOperations,
   recoverPendingOperations,
+  replaceOperationAttachment,
   type RecoveryContext,
   type SavedOperation,
 } from '@/lib/client-operation-recovery';
+import { messageOf } from '@/lib/client-api';
+import { OperationAttachmentRepair } from './operation-attachment-repair';
 
 export function OperationRecoveryPanel({
   context,
   onChanged,
+  onOpenMenu,
 }: {
+  onOpenMenu?: () => void;
   context: RecoveryContext;
   onChanged: () => void;
 }) {
@@ -242,6 +247,54 @@ export function OperationRecoveryPanel({
                   Entendi
                 </Button>
               )}
+              {row.state === 'pending' && row.attachmentIssue && (
+                <OperationAttachmentRepair
+                  key={`${row.id}:${row.attachmentIssue.index}`}
+                  issue={row.attachmentIssue}
+                  busy={busy}
+                  onRepair={async (file) => {
+                    if (running.current) return false;
+                    running.current = true;
+                    setBusy(true);
+                    setError('');
+                    setActivity('Conferindo o envio e guardando o anexo…');
+                    let resume = false;
+                    let saved = false;
+                    try {
+                      const result = await replaceOperationAttachment(
+                        { storeId, userId, csrfToken },
+                        row,
+                        row.attachmentIssue!.index,
+                        file,
+                      );
+                      saved = true;
+                      if (alive.current) {
+                        setOutcomeErrors((previous) => ({
+                          ...previous,
+                          [`${row.kind}:${row.id}`]: '',
+                        }));
+                        if (result.confirmed) {
+                          setActivity(
+                            'O servidor já confirmou este envio. Nenhum anexo foi substituído.',
+                          );
+                          onChanged();
+                        } else resume = true;
+                      }
+                    } catch (caught) {
+                      if (alive.current) {
+                        setActivity('');
+                        setError(messageOf(caught));
+                      }
+                    } finally {
+                      await refresh();
+                      running.current = false;
+                      if (alive.current) setBusy(false);
+                    }
+                    if (resume && alive.current) await recover(true);
+                    return saved;
+                  }}
+                />
+              )}
             </article>
           ))}
           <Button
@@ -256,6 +309,15 @@ export function OperationRecoveryPanel({
             Os envios ainda pendentes dependem dos dados deste aparelho. Não
             desinstale o aplicativo nem limpe os dados antes da confirmação.
           </p>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setOpen(false);
+              onOpenMenu?.();
+            }}
+          >
+            {onOpenMenu ? 'Continuar no sistema' : 'Fechar e continuar'}
+          </Button>
         </DialogContent>
       </Dialog>
     </>

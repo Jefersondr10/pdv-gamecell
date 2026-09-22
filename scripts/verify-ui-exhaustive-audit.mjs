@@ -19,6 +19,35 @@ assert.match(
 assert.match(recoveryPanel, /role="alert"/);
 assert.match(recoveryPanel, /Sem conexão/);
 assert.doesNotMatch(recoveryPanel, /catch \{\s*\/\* Retain a visible/);
+assert.match(recoveryPanel, /setOpen\(false\);\s*onOpenMenu\?\.\(\);/);
+assert.match(recoveryPanel, /Continuar no sistema/);
+for (const wizard of ['sell', 'entry']) {
+  const source = readFileSync(`components/pdv/${wizard}-wizard.tsx`, 'utf8');
+  assert.match(
+    source,
+    /if \(draft\.waiting \|\| draft\.blocked\) \{\s*onOpenMenu\?\.\(\);\s*return Boolean\(onOpenMenu\);/,
+    'Back must leave the pending notice via navigation, not edit invisible wizard steps',
+  );
+  assert.match(
+    source,
+    /<PendingOperationNotice kind="(?:sale|entry)" onOpenMenu=\{onOpenMenu\}/,
+  );
+}
+const production = readFileSync('components/pdv/production-app.tsx', 'utf8');
+assert.equal(
+  (production.match(/onOpenMenu=\{\(\) => setMobileMenuOpen\(true\)\}/g) ?? [])
+    .length,
+  3,
+);
+const navigationSheet = production.slice(
+  production.indexOf('function MobileNavigation('),
+  production.indexOf('function Brand('),
+);
+assert.doesNotMatch(
+  navigationSheet,
+  /lg:hidden/,
+  'the explicit menu action must also work on desktop',
+);
 
 const sales = readFileSync(
   'components/pdv/views/sales-production-view.tsx',

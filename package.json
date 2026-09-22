@@ -22,6 +22,7 @@
     "test:sale-date": "node --experimental-transform-types scripts/verify-sale-date.ts",
     "test:permissions": "node --experimental-transform-types scripts/verify-permissions.ts",
     "test:operations": "node --experimental-transform-types scripts/verify-operation-recovery.mjs",
+    "test:operation-attachments": "node --experimental-transform-types scripts/verify-operation-attachments.mjs",
     "test:uploads": "node --experimental-transform-types scripts/verify-client-upload.mjs",
     "test:receipt-jobs": "node scripts/verify-receipt-jobs.mjs",
     "test:receipt-delete": "node --experimental-transform-types scripts/verify-receipt-delete.ts",

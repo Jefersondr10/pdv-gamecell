@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { prepareUploadForm } from '../lib/client-upload.ts';
+import {
+  prepareUploadForm,
+  UnreadableAttachmentError,
+} from '../lib/client-upload.ts';
 import { requestJson } from '../lib/client-api.ts';
 
 const bytes = Uint8Array.from([0, 255, 128, 13, 10, 34, 137, 80, 78, 71]);
@@ -82,7 +85,11 @@ assert.equal(calls, 1);
 sources[0].arrayBuffer = () => Promise.resolve(new ArrayBuffer(0));
 await assert.rejects(
   () => requestJson('/api/entries', { method: 'POST', body: form }),
-  /abrir um dos anexos/,
+  (error) =>
+    error instanceof UnreadableAttachmentError &&
+    error.attachment.index === 1 &&
+    error.attachment.field === 'photos' &&
+    error.attachment.name === 'Caixa — frente.jpg',
 );
 assert.equal(
   calls,
@@ -90,7 +97,7 @@ assert.equal(
   'No request may be sent with an unreadable or truncated file',
 );
 sources[0].arrayBuffer = () => Promise.reject(new Error('Disk unavailable'));
-await assert.rejects(() => prepareUploadForm(form), /abrir um dos anexos/);
+await assert.rejects(() => prepareUploadForm(form), UnreadableAttachmentError);
 const controller = new AbortController();
 controller.abort();
 await assert.rejects(() => prepareUploadForm(form, controller.signal), {

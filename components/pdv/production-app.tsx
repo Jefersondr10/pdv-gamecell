@@ -941,6 +941,7 @@ function CloudPdv({
           )}
 
           <OperationRecoveryPanel
+            onOpenMenu={() => setMobileMenuOpen(true)}
             key={`recovery-${data.store.id}-${data.user.id}`}
             context={{
               storeId: data.store.id,
@@ -953,6 +954,7 @@ function CloudPdv({
           <div className="app-workspace min-h-0 flex-1 overflow-hidden">
             {displayedView === 'sell' && (
               <SellWizard
+                onOpenMenu={() => setMobileMenuOpen(true)}
                 defaultSellerId={data.user.id}
                 sellers={
                   data.sellers ?? [
@@ -978,6 +980,7 @@ function CloudPdv({
             )}
             {displayedView === 'entry' && (
               <EntryWizard
+                onOpenMenu={() => setMobileMenuOpen(true)}
                 recoveryScope={{ storeId: data.store.id, userId: data.user.id }}
                 key={`entry-${data.store.id}-${data.user.id}-${run}`}
                 lookupSerials={lookupSerials}
@@ -2123,7 +2126,7 @@ function MobileNavigation({
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
       <SheetContent
-        className="gap-0 overflow-hidden rounded-r-[2rem] p-0 data-[side=left]:w-[min(88vw,23rem)] lg:hidden"
+        className="gap-0 overflow-hidden rounded-r-[2rem] p-0 data-[side=left]:w-[min(88vw,23rem)]"
         id="mobile-primary-navigation"
         side="left"
       >

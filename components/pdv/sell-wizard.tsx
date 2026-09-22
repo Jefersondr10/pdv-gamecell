@@ -64,6 +64,7 @@ import {
   type RecoveryScope,
 } from '@/lib/client-operation-recovery';
 import { useRecoverableDraft } from '@/components/pdv/use-recoverable-draft';
+import { PendingOperationNotice } from '@/components/pdv/pending-operation-notice';
 import { parseMoneyInput } from '@/lib/money';
 import { ReceiptReconciliationEditor } from '@/components/pdv/receipt-reconciliation-editor';
 import {
@@ -182,7 +183,9 @@ export function SellWizard({
   unavailableSerials,
   resolveSerials,
   recoveryScope,
+  onOpenMenu,
 }: {
+  onOpenMenu?: () => void;
   recoveryScope?: RecoveryScope;
   stagedSerial?: string;
   productsBySerial?: SaleProductLookup;
@@ -267,7 +270,6 @@ export function SellWizard({
     );
     return true;
   };
-  useAppBackHandler(goBack, true, 10);
   const draftValue = useMemo(
     () => ({
       step,
@@ -335,6 +337,19 @@ export function SellWizard({
       completionSentRef.current = true;
     },
   });
+
+  useAppBackHandler(
+    () => {
+      if (!draft.ready) return true;
+      if (draft.waiting || draft.blocked) {
+        onOpenMenu?.();
+        return Boolean(onOpenMenu);
+      }
+      return goBack();
+    },
+    true,
+    10,
+  );
 
   useEffect(
     () => () => {
@@ -745,23 +760,15 @@ export function SellWizard({
         <Button className="mt-3" onClick={() => window.location.reload()}>
           Reabrir com segurança
         </Button>
+        {onOpenMenu && (
+          <Button className="mt-3 ml-2" variant="outline" onClick={onOpenMenu}>
+            Abrir menu da loja
+          </Button>
+        )}
       </div>
     );
   if (draft.waiting)
-    return (
-      <div className="m-4 rounded-2xl border bg-card p-5">
-        <h2 className="font-bold">Venda aguardando confirmação</h2>
-        <p className="my-3 text-sm">
-          O envio está guardado neste aparelho. Não faça outra venda com os
-          mesmos aparelhos.
-        </p>
-        <Button
-          onClick={() => window.dispatchEvent(new Event('pdv:show-operations'))}
-        >
-          Acompanhar envio
-        </Button>
-      </div>
-    );
+    return <PendingOperationNotice kind="sale" onOpenMenu={onOpenMenu} />;
   return (
     <FlowFrame
       announcement={announcement}
